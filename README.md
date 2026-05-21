@@ -139,6 +139,8 @@ git clone https://github.com/votre-user/TradingBot.git
 cd TradingBot
 ```
 
+> **C'est quoi `cd` ?** `cd` signifie "change directory" — ça déplace le terminal dans le dossier du projet. Toutes les commandes qui suivent doivent être exécutées depuis ce dossier. Si vous fermez et rouvrez votre terminal, pensez à refaire `cd TradingBot` avant de lancer quoi que ce soit.
+
 Créez un environnement virtuel et installez les dépendances :
 
 ```bash
