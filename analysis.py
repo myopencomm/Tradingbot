@@ -12,6 +12,28 @@ TRADER_SYSTEM = """Tu es un expert trader spécialisé en small et mid caps comp
 Compte-titres ordinaire (CTO), horizon court à moyen terme (jours à quelques semaines).
 Règles strictes: stop-loss -10% sur PRU, objectif minimum +15%, pas de levier, univers prioritaire Euronext Paris / Euronext Growth."""
 
+FORMAT_TELEGRAM = """
+RÈGLES DE FORMAT STRICTES — message Telegram mobile :
+- Texte brut uniquement. Zéro Markdown : pas de #, ##, **, *, `, ```, pas de tableaux avec |
+- Séparateurs : une ligne vide entre les sections
+- Titres de section : en MAJUSCULES, pas d'emojis sauf 1 max par section
+- Listes : tirets simples (- item)
+- Chiffres : toujours avec unité (€, %, t)
+- Maximum 25 lignes au total — va à l'essentiel
+"""
+
+import re
+
+def _strip_markdown(text: str) -> str:
+    """Supprime les symboles Markdown résiduels pour un affichage propre sur Telegram."""
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)   # titres #
+    text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)         # gras/italique
+    text = re.sub(r'`{1,3}([^`]*)`{1,3}', r'\1', text)           # code inline/block
+    text = re.sub(r'^-{3,}\s*$', '---', text, flags=re.MULTILINE) # hr
+    text = re.sub(r'^\s*>\s*', '', text, flags=re.MULTILINE)       # blockquotes
+    text = re.sub(r'\n{3,}', '\n\n', text)                         # espaces excessifs
+    return text.strip()
+
 
 def _trading_context() -> str:
     """Charge le contexte personnel de trading si le fichier existe."""
@@ -76,22 +98,21 @@ def morning_briefing(send_fn) -> None:
         ctx_block = f"\n--- CONTEXTE PERSONNEL ---\n{ctx}\n" if ctx else ""
 
         prompt = f"""{TRADER_SYSTEM}
+{FORMAT_TELEGRAM}
 {ctx_block}
---- PORTEFEUILLE ---
+PORTEFEUILLE
 {snapshot}
 
---- CONTEXTE MARCHÉ ---
+CONTEXTE MARCHÉ
 {macro}
 
---- MISSION ---
-1. Pour chaque position: signal (conserver/alléger/vendre), tendance courte, commentaire bref.
-2. Top 3 nouvelles opportunités adaptées au cash disponible ({cash}€) :
-   TICKER | Prix entrée | SL | TP | Raison | Risque
-3. Risque global portefeuille: LOW / MEDIUM / HIGH
+MISSION
+1. Pour chaque position : signal (conserver/alléger/vendre), tendance courte, commentaire bref.
+2. Top 3 opportunités pour le cash disponible ({cash}€) :
+   TICKER — prix entrée — SL — TP — raison — risque
+3. Risque global : LOW / MEDIUM / HIGH"""
 
-Sois concis et actionnable."""
-
-        result = ai.complete(prompt, max_tokens=900)
+        result = _strip_markdown(ai.complete(prompt, max_tokens=900))
         date = datetime.now(PARIS).strftime("%d/%m/%Y")
         send_fn(f"🌅 BRIEFING — {date}\n\n{snapshot}\n\n{result}")
 
@@ -113,27 +134,35 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
         if ticker:
             web = research.research_stock(ticker)
             prompt = f"""{TRADER_SYSTEM}
+{FORMAT_TELEGRAM}
 {ctx_block}
 {snapshot}
 
-=== RECHERCHE WEB {ticker} ===
+RECHERCHE WEB {ticker}
 {web}
 
-Donne un avis actionnable : signal (achat/vente/neutre), prix d'entrée, SL (-10%), TP (+15%), raison, niveau de risque."""
+Donne un avis actionnable : signal (ACHAT/VENTE/NEUTRE), prix d'entrée, SL (-10%), TP (+15%), raison courte, niveau de risque."""
             header = f"🔍 ANALYSE {ticker}"
         else:
             macro = research.market_context()
             prompt = f"""{TRADER_SYSTEM}
+{FORMAT_TELEGRAM}
 {ctx_block}
 {snapshot}
 
-Contexte: {macro}
+CONTEXTE MARCHÉ
+{macro}
 
-Cash disponible: {cash}€
-Propose 3 opportunités Euronext adaptées. Format: TICKER | Prix | SL | TP | Raison | Risque"""
+Cash disponible : {cash}€
+Propose 3 opportunités Euronext adaptées.
+Pour chaque opportunité :
+TICKER
+- Entrée : Xé  SL : X€  TP : X€
+- Raison : ...
+- Risque : LOW / MEDIUM / HIGH"""
             header = "🔍 SCAN OPPORTUNITÉS"
 
-        result = ai.complete(prompt, max_tokens=700)
+        result = _strip_markdown(ai.complete(prompt, max_tokens=700))
         send_fn(f"{header}\n\n{result}\n\n💰 Cash: {cash}€")
 
     except Exception as e:

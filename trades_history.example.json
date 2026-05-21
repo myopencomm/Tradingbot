@@ -1,0 +1,15 @@
+{
+  "closed_trades": [
+    {
+      "name": "EXEMPLE",
+      "ticker": "EX.PA",
+      "qty": 10,
+      "entry_price": 20.00,
+      "exit_price": 23.00,
+      "fees": 1.50,
+      "pnl": 28.50,
+      "result": "win",
+      "date": "2026-01-15"
+    }
+  ]
+}

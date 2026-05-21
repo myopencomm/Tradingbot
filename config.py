@@ -22,6 +22,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Paths
 POSITIONS_PATH = BASE_DIR / "positions.json"
 TRADING_CONTEXT_PATH = BASE_DIR / "CLAUDE_TRADING_CONTEXT.md"
+HISTORY_PATH = BASE_DIR / "trades_history.json"
 
 # Trading rules (overridable via .env)
 DEFAULT_SL_PCT = float(os.getenv("DEFAULT_SL_PCT", "10"))

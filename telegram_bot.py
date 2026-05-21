@@ -10,6 +10,7 @@ import portfolio
 import prices
 import analysis
 import orders
+import stats
 
 # ─── Buffer multi-screenshots ────────────────────────────────────────────────
 # Collecte toutes les photos envoyées dans les N secondes qui suivent la 1ère,
@@ -83,6 +84,10 @@ def cmd_help(args, cid):
         "  apres un achat (instructions copiables BD)\n"
         "/order buy TICKER QTE PRIX — Ordre achat BD\n"
         "/order sell TICKER QTE PRIX — Ordre vente BD\n"
+        "\n"
+        "PERFORMANCES\n"
+        "/stats — Win Rate, P&L realise/latent, Profit Factor\n"
+        "/close TICKER QTY PRIX [FRAIS] — Cloturer un trade\n"
         "\n"
         "ANALYSE IA\n"
         "/morning — Briefing complet (macro + positions + opps)\n"
@@ -251,6 +256,86 @@ def cmd_setup(args, cid):
         send("Format invalide.", cid)
         return
     send(orders.full_setup(ticker, qty, pru), cid)
+
+
+def cmd_stats(args, cid):
+    send("Calcul des performances...", cid)
+    s = stats.get_stats()
+    lines = [
+        "PERFORMANCES — TradingBot",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    if s["nb_closed"] == 0:
+        lines.append("\nAucun trade cloture enregistre.")
+        lines.append("Utilise /close TICKER QTY PRIX pour enregistrer une vente.")
+    else:
+        lines.append(f"\nTRADES CLOTURES — {s['nb_closed']} trades")
+        lines.append(f"Win Rate      : {s['win_rate']}%  ({s['nb_wins']}W / {s['nb_losses']}L)")
+        lines.append(f"P&L realise   : {s['realized_pnl']:+.0f}€")
+        lines.append(f"Gain moyen    : {s['avg_win']:+.0f}€")
+        lines.append(f"Perte moyenne : {s['avg_loss']:+.0f}€")
+        if s["profit_factor"] is not None:
+            pf = s["profit_factor"]
+            pf_comment = "bon" if pf >= 1.5 else ("negatif" if pf < 1 else "limite")
+            lines.append(f"Profit Factor : {pf} ({pf_comment})")
+        if s["best_trade"]:
+            b = s["best_trade"]
+            lines.append(f"Meilleur trade: {b['name']} {b['pnl']:+.0f}€")
+        if s["worst_trade"]:
+            w = s["worst_trade"]
+            lines.append(f"Pire trade    : {w['name']} {w['pnl']:+.0f}€")
+
+    lines.append(f"\nPOSITIONS OUVERTES")
+    lines.append(f"P&L latent    : {s['unrealized_pnl']:+.0f}€")
+    lines.append(f"\nTOTAL P&L     : {s['total_pnl']:+.0f}€")
+    lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    send("\n".join(lines), cid)
+
+
+def cmd_close(args, cid):
+    # /close TICKER QTY PRIX_VENTE [FRAIS]
+    if len(args) < 3:
+        send(
+            "Usage: /close TICKER QTY PRIX [FRAIS]\n"
+            "Ex: /close LBIRD 48 28.13 2.90\n\n"
+            "Enregistre la vente, met a jour le cash et l'historique.",
+            cid,
+        )
+        return
+    name = args[0].upper().split(".")[0]
+    try:
+        qty        = int(args[1])
+        exit_price = float(args[2].replace(",", "."))
+        fees       = float(args[3].replace(",", ".")) if len(args) > 3 else 0.0
+    except ValueError:
+        send("Format invalide.", cid)
+        return
+
+    data = portfolio.load()
+    positions = data.get("positions", {})
+    if name not in positions:
+        send(f"Position {name} introuvable. Positions actuelles: {list(positions.keys())}", cid)
+        return
+
+    cfg = positions[name]
+    pnl = stats.record_close(name, cfg["ticker"], qty, cfg["entry_price"], exit_price, fees)
+
+    portfolio.remove_position(name)
+    proceeds = round(exit_price * qty - fees, 2)
+    portfolio.update_cash(round(portfolio.get_cash() + proceeds, 2))
+
+    pct = ((exit_price - cfg["entry_price"]) / cfg["entry_price"]) * 100
+    result = "WIN" if pnl > 0 else "LOSS"
+    send(
+        f"Trade cloture — {name}  {result}\n"
+        f"  {qty}t @ {exit_price}€  (PRU {cfg['entry_price']}€)\n"
+        f"  P&L : {pnl:+.0f}€  ({pct:+.1f}%)\n"
+        f"  Frais : {fees}€\n"
+        f"  Cash mis a jour : {portfolio.get_cash():.2f}€\n\n"
+        "/stats pour voir l'historique complet.",
+        cid,
+    )
 
 
 def cmd_morning(args, cid):
@@ -432,6 +517,8 @@ COMMANDS = {
     "/tp": cmd_tp,
     "/order": cmd_order,
     "/setup": cmd_setup,
+    "/stats": cmd_stats,
+    "/close": cmd_close,
     "/morning": cmd_morning,
     "/scan": cmd_scan,
     "/research": cmd_research,

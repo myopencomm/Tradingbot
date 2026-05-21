@@ -13,8 +13,8 @@ groq>=0.9.0                      # optionnel — tier GRATUIT disponible
 google-generativeai>=0.8.0       # optionnel — tier GRATUIT disponible
 Pillow>=10.0.0                   # requis pour Gemini vision
 
-# Recherche web gratuite (pas de clé API)
-duckduckgo-search>=6.0.0
+# Recherche web gratuite (pas de clé API — requests pur, pas de lib externe)
+# duckduckgo-search obsolète, remplacé par scraping HTML direct
 
 # Import CSV portefeuille
 pandas>=2.0.0

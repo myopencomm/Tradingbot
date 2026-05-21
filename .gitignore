@@ -8,7 +8,9 @@
 
 # Portfolio personnel (utilisez positions.example.json comme template)
 positions.json
+trades_history.json
 CLAUDE_TRADING_CONTEXT.md
+CLAUDE.md
 
 # Python
 __pycache__/
