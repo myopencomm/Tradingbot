@@ -125,20 +125,15 @@ def cmd_status(args, cid):
             chg = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
             pnl = (price - cfg["entry_price"]) * cfg["qty"]
             total_pnl += pnl
-            arrow = "+" if chg >= 0 else ""
+            arrow  = "+" if chg >= 0 else ""
             sl_tag = " ⚠️ SL DÉPASSÉ" if price < cfg["target_low"] else ""
             tp_tag = " ⚠️ TP DÉPASSÉ" if price > cfg["entry_price"] * 1.25 else ""
-            currency = q.get("currency", "EUR")
-            native   = q.get("price_native")
-            prix_str = (
-                f"{price}€ (${native})" if currency == "USD" and native
-                else f"{price}€"
-            )
+            sym    = prices.currency_symbol(q.get("currency", "EUR"))
             lines.append(
                 f"{name} ({cfg['ticker']})\n"
-                f"  Prix: {prix_str} ({arrow}{chg:.2f}%) | P&L: {pnl:+.0f}€{sl_tag}{tp_tag}\n"
-                f"  PRU: {cfg['entry_price']}€ | {cfg['qty']} titres\n"
-                f"  SL: {cfg['target_low']}€  TP: {cfg['target_high']}€"
+                f"  Prix: {sym}{price} ({arrow}{chg:.2f}%) | P&L: {sym}{pnl:+.0f}{sl_tag}{tp_tag}\n"
+                f"  PRU: {sym}{cfg['entry_price']} | {cfg['qty']} titres\n"
+                f"  SL: {sym}{cfg['target_low']}  TP: {sym}{cfg['target_high']}"
             )
         elif q.get("status") in ("suspended", "error"):
             lines.append(
