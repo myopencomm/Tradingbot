@@ -54,10 +54,16 @@ def _portfolio_snapshot() -> str:
         quote = prices.get_quote(cfg["ticker"])
         price = quote.get("price")
         if price:
-            chg = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
-            pnl = (price - cfg["entry_price"]) * cfg["qty"]
+            chg     = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
+            pnl     = (price - cfg["entry_price"]) * cfg["qty"]
+            currency = quote.get("currency", "EUR")
+            native   = quote.get("price_native")
+            prix_str = (
+                f"{price}€ (${native})" if currency != "EUR" and native
+                else f"{price}€"
+            )
             lines.append(
-                f"  {name} ({cfg['ticker']}): {price}€ ({chg:+.2f}%) | "
+                f"  {name} ({cfg['ticker']}): {prix_str} ({chg:+.2f}%) | "
                 f"PRU {cfg['entry_price']}€ | {cfg['qty']}t | P&L {pnl:+.0f}€ | "
                 f"SL {cfg['target_low']}€ | TP {cfg['target_high']}€"
             )
