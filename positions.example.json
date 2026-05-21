@@ -1,0 +1,13 @@
+{
+  "cash_available": 1000.00,
+  "positions": {
+    "EXAMPLE": {
+      "ticker": "GNFT.PA",
+      "qty": 100,
+      "entry_price": 8.51,
+      "target_high": 9.79,
+      "target_low": 7.66
+    }
+  },
+  "pending_orders": {}
+}

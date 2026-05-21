@@ -1,0 +1,32 @@
+# Secrets & données personnelles — NE JAMAIS COMMITTER
+.env
+*.log
+*.log.*
+
+# Portfolio personnel (utiliser positions.example.json comme template)
+# Ce fichier contient vos positions et données financières
+
+# Portfolio personnel (utilisez positions.example.json comme template)
+positions.json
+CLAUDE_TRADING_CONTEXT.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environnement virtuel
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Claude Code local settings (permissions, etc.)
+.claude/

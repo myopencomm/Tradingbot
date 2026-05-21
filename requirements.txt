@@ -1,0 +1,20 @@
+# Core
+requests>=2.31.0
+python-dotenv>=1.0.0
+schedule>=1.2.0
+pytz>=2024.1
+yfinance>=0.2.40
+
+# AI providers — installez seulement celui que vous utilisez
+anthropic>=0.40.0
+openai>=1.0.0                    # optionnel
+mistralai>=1.0.0                 # optionnel
+groq>=0.9.0                      # optionnel — tier GRATUIT disponible
+google-generativeai>=0.8.0       # optionnel — tier GRATUIT disponible
+Pillow>=10.0.0                   # requis pour Gemini vision
+
+# Recherche web gratuite (pas de clé API)
+duckduckgo-search>=6.0.0
+
+# Import CSV portefeuille
+pandas>=2.0.0
