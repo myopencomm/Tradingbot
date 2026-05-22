@@ -80,10 +80,12 @@ def cmd_help(args, cid):
         "/tp TICKER PRIX — Change le take-profit\n"
         "\n"
         "ORDRES BOURSE DIRECT\n"
-        "/setup TICKER QTE PRU — Genere les ordres SL+TP\n"
-        "  apres un achat (instructions copiables BD)\n"
-        "/order buy TICKER QTE PRIX — Ordre achat BD\n"
-        "/order sell TICKER QTE PRIX — Ordre vente BD\n"
+        "/buy TICKER QTE PRU — Ordre Expert Take Profit\n"
+        "  (achat + SL + TP automatiques en 1 seul ordre)\n"
+        "/setup TICKER QTE PRU — 2 ordres de protection\n"
+        "  apres un achat deja effectue\n"
+        "/order buy TICKER QTE PRIX — Ordre achat simple\n"
+        "/order sell TICKER QTE PRIX — Ordre vente simple\n"
         "\n"
         "PERFORMANCES\n"
         "/stats — Win Rate, P&L realise/latent, Profit Factor\n"
@@ -244,8 +246,23 @@ def cmd_order(args, cid):
     send(fn(ticker, qty, price), cid)
 
 
+def cmd_buy(args, cid):
+    # /buy TICKER QTY PRU — Ordre Expert Take Profit (achat + SL + TP en 1 ordre)
+    if len(args) < 3:
+        send("Usage: /buy TICKER QTY PRU\nEx: /buy MC 10 750.00", cid)
+        return
+    ticker = args[0].upper()
+    try:
+        qty = int(args[1])
+        pru = float(args[2].replace(",", "."))
+    except ValueError:
+        send("Format invalide.", cid)
+        return
+    send(orders.expert_take_profit_buy(ticker, qty, pru), cid)
+
+
 def cmd_setup(args, cid):
-    # /setup TICKER QTY PRU — génère SL + TP automatiquement
+    # /setup TICKER QTY PRU — génère 2 ordres de protection après un achat déjà fait
     if len(args) < 3:
         send("Usage: /setup TICKER QTY PRU\nEx: /setup LBIRD 48 24.46", cid)
         return
@@ -543,6 +560,7 @@ COMMANDS = {
     "/remove": cmd_remove,
     "/sl": cmd_sl,
     "/tp": cmd_tp,
+    "/buy": cmd_buy,
     "/order": cmd_order,
     "/setup": cmd_setup,
     "/stats": cmd_stats,

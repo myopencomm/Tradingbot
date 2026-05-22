@@ -103,15 +103,67 @@ def tp_from_pru(ticker: str, qty: int, pru: float, pct: float = None) -> str:
 
 
 def full_setup(ticker: str, qty: int, pru: float, sl_pct: float = None, tp_pct: float = None) -> str:
-    """Retourne les 2 ordres à passer après un achat (SL + TP)."""
+    """Retourne les 2 ordres de protection à saisir après un achat (SL + TP)."""
     sl_pct = sl_pct or DEFAULT_SL_PCT
     tp_pct = tp_pct or DEFAULT_TP_PCT
     sl_price = round(pru * (1 - sl_pct / 100), 2)
     tp_price = round(pru * (1 + tp_pct / 100), 2)
+    sep = "━" * 34
+    sl_block = (
+        f"— ORDRE 1 : STOP-LOSS —\n"
+        f"🔴 Vente à seuil de déclenchement\n"
+        f"Valeur : {ticker}  |  Quantité : {qty} titres\n"
+        f"Seuil  : {sl_price}€  |  Validité : Durée max\n"
+        f"App  → Bourse → Passer un ordre → Seuil\n"
+        f"Site → Passer un ordre → À seuil de déclenchement"
+    )
+    tp_block = (
+        f"— ORDRE 2 : TAKE-PROFIT —\n"
+        f"🔴 Vente à cours limité\n"
+        f"Valeur : {ticker}  |  Quantité : {qty} titres\n"
+        f"Limite : {tp_price}€  |  Validité : Durée max\n"
+        f"App  → Bourse → Passer un ordre → Limité\n"
+        f"Site → Passer un ordre → À cours limité"
+    )
     return (
-        f"📋 ORDRES À PASSER APRÈS ACHAT {ticker}\n"
-        f"PRU: {pru}€ | SL: {sl_price}€ (-{sl_pct}%) | TP: {tp_price}€ (+{tp_pct}%)\n\n"
-        + stop_loss(ticker, qty, sl_price)
-        + "\n\n"
-        + take_profit(ticker, qty, tp_price)
+        f"📋 PROTECTION — {ticker}\n"
+        f"PRU {pru}€  |  SL {sl_price}€ (-{sl_pct}%)  |  TP {tp_price}€ (+{tp_pct}%)\n"
+        f"{sep}\n"
+        f"Saisis ces 2 ordres maintenant → ils s'exécutent\n"
+        f"automatiquement sans surveillance.\n\n"
+        f"{sl_block}\n\n"
+        f"{tp_block}\n"
+        f"{sep}\n"
+        f"💡 Quand l'un s'exécute → annuler l'autre sur Bourse Direct\n"
+        f"   puis /close {ticker} PRIX_VENTE pour mettre à jour le bot."
+    )
+
+
+def expert_take_profit_buy(ticker: str, qty: int, buy_price: float, sl_pct: float = None, tp_pct: float = None, account: str = "CTO") -> str:
+    """Ordre Expert Take Profit : achat + SL + TP en une seule opération (OCO natif Bourse Direct)."""
+    sl_pct = sl_pct or DEFAULT_SL_PCT
+    tp_pct = tp_pct or DEFAULT_TP_PCT
+    sl_price = round(buy_price * (1 - sl_pct / 100), 2)
+    tp_price = round(buy_price * (1 + tp_pct / 100), 2)
+    sep = "━" * 34
+    return (
+        f"🟢 ORDRE EXPERT — ACHAT + PROTECTION AUTOMATIQUE\n"
+        f"{ticker}  |  {qty} titres  |  PRU {buy_price}€\n"
+        f"{sep}\n"
+        f"App  → Bourse → Passer un ordre → EXPERTS → Take Profit\n"
+        f"Site → Ordres → Passer un ordre → Ordres Experts → Take Profit\n"
+        f"{sep}\n"
+        f"📌 Valeur      : {ticker}\n"
+        f"💼 Compte      : {account}\n"
+        f"📊 Sens        : Achat\n"
+        f"🔢 Quantité    : {qty} titres\n"
+        f"💰 Achat       : {buy_price}€  (cours limité)\n"
+        f"🛡 Protection  : {sl_price}€  (seuil SL -{sl_pct}%)\n"
+        f"🎯 Objectif    : {tp_price}€  (limite TP +{tp_pct}%)\n"
+        f"📅 Validité    : Durée max\n"
+        f"{sep}\n"
+        f"⚡ Si l'achat s'exécute → SL et TP actifs automatiquement.\n"
+        f"   Bourse Direct annule l'un quand l'autre s'exécute.\n\n"
+        f"⚠️ Ordres Experts = SBF 120 et certains ETFs uniquement.\n"
+        f"   Si non disponible pour ce titre → /setup {ticker} {qty} {buy_price}"
     )
