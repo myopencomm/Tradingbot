@@ -14,7 +14,10 @@ def run_scheduler():
     schedule.every().day.at(ANALYSIS_TIME).do(
         lambda: analysis.morning_briefing(telegram_bot.send)
     )
-    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} (heure Paris)")
+    schedule.every().monday.at("09:10").do(
+        lambda: analysis.weekly_swap_analysis(telegram_bot.send)
+    )
+    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap hebdo: lundi 09:10 (heure Paris)")
     while True:
         schedule.run_pending()
         time.sleep(30)

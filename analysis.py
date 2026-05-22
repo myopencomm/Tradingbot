@@ -98,6 +98,18 @@ def morning_briefing(send_fn) -> None:
         ctx = _trading_context()
         ctx_block = f"\n--- CONTEXTE PERSONNEL ---\n{ctx}\n" if ctx else ""
 
+        if cash >= 1000:
+            mission = f"""MISSION
+1. Pour chaque position : signal (conserver/alléger/vendre), tendance courte, commentaire bref.
+2. Top 3 opportunités pour le cash disponible ({cash}€) :
+   TICKER — prix entrée — SL — TP — raison — risque
+3. Risque global : LOW / MEDIUM / HIGH"""
+        else:
+            mission = f"""MISSION
+1. Pour chaque position : signal (conserver/alléger/vendre), tendance courte, commentaire bref.
+2. Risque global : LOW / MEDIUM / HIGH
+(Cash insuffisant pour nouvelles positions : {cash}€ < 1000€)"""
+
         prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {ctx_block}
@@ -107,11 +119,7 @@ PORTEFEUILLE
 CONTEXTE MARCHÉ
 {macro}
 
-MISSION
-1. Pour chaque position : signal (conserver/alléger/vendre), tendance courte, commentaire bref.
-2. Top 3 opportunités pour le cash disponible ({cash}€) :
-   TICKER — prix entrée — SL — TP — raison — risque
-3. Risque global : LOW / MEDIUM / HIGH"""
+{mission}"""
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=900))
         date = datetime.now(PARIS).strftime("%d/%m/%Y")
@@ -120,6 +128,46 @@ MISSION
     except Exception as e:
         print(f"Erreur briefing: {e}")
         send_fn(f"⚠️ Erreur briefing matinal: {e}")
+
+
+def weekly_swap_analysis(send_fn) -> None:
+    """Analyse hebdomadaire : vaut-il mieux vendre une position pour en acheter une autre ?"""
+    print(f"[{datetime.now(PARIS).strftime('%Y-%m-%d %H:%M:%S')}] Analyse swap hebdo...")
+    try:
+        ai = get_provider()
+        snapshot = _portfolio_snapshot()
+        macro = research.market_context()
+        cash = portfolio.get_cash()
+
+        ctx = _trading_context()
+        ctx_block = f"\n--- CONTEXTE PERSONNEL ---\n{ctx}\n" if ctx else ""
+
+        prompt = f"""{TRADER_SYSTEM}
+{FORMAT_TELEGRAM}
+{ctx_block}
+PORTEFEUILLE
+{snapshot}
+
+CONTEXTE MARCHÉ
+{macro}
+
+MISSION — ANALYSE DE ROTATION HEBDOMADAIRE
+Cash disponible : {cash}€ (insuffisant pour nouvelle position directe)
+
+1. Identifie la ou les positions les moins prometteuses à court terme (momentum faible, proche SL, thesis invalidée).
+2. Propose 1-2 alternatives Euronext avec meilleur potentiel court terme.
+3. Pour chaque swap envisagé :
+   - Vendre : TICKER_A — raison en 1 ligne
+   - Acheter : TICKER_B — entrée / SL / TP — raison
+4. Conclusion : vaut-il mieux attendre ou swapper ?"""
+
+        result = _strip_markdown(ai.complete(prompt, max_tokens=800))
+        date = datetime.now(PARIS).strftime("%d/%m/%Y")
+        send_fn(f"🔄 ANALYSE SWAP — {date}\n\n{result}")
+
+    except Exception as e:
+        print(f"Erreur weekly swap: {e}")
+        send_fn(f"⚠️ Erreur analyse swap: {e}")
 
 
 def scan_opportunities(send_fn, ticker: str = None) -> None:
