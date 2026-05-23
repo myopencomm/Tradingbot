@@ -59,6 +59,14 @@ def update_sl(name: str, price: float):
     return False
 
 
+def mark_sl_breach(name: str):
+    """Marque qu'une alerte SL dépassé a déjà été envoyée — empêche le spam."""
+    data = load()
+    if name.upper() in data.get("positions", {}):
+        data["positions"][name.upper()]["sl_breach_notified"] = True
+        save(data)
+
+
 def update_tp(name: str, price: float):
     data = load()
     if name.upper() in data.get("positions", {}):

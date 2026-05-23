@@ -1,5 +1,6 @@
 import schedule
 import time
+from datetime import datetime
 from config import CHECK_TIMES, ANALYSIS_TIME, TELEGRAM_TOKEN, AI_PROVIDER
 import monitor
 import analysis
@@ -17,7 +18,10 @@ def run_scheduler():
     schedule.every().monday.at("09:10").do(
         lambda: analysis.weekly_swap_analysis(telegram_bot.send)
     )
-    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap hebdo: lundi 09:10 (heure Paris)")
+    schedule.every().day.at("09:15").do(
+        lambda: analysis.monthly_breach_review(telegram_bot.send) if datetime.now().day == 1 else None
+    )
+    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 (heure Paris)")
     while True:
         schedule.run_pending()
         time.sleep(30)

@@ -130,6 +130,60 @@ CONTEXTE MARCHÉ
         send_fn(f"⚠️ Erreur briefing matinal: {e}")
 
 
+def monthly_breach_review(send_fn) -> None:
+    """Revue mensuelle (1er du mois) des positions dont le SL est dépassé."""
+    data = portfolio.load()
+    positions = data.get("positions", {})
+    breach = {k: v for k, v in positions.items() if v.get("sl_breach_notified")}
+
+    if not breach:
+        return
+
+    print(f"[{datetime.now(PARIS).strftime('%Y-%m-%d %H:%M:%S')}] Revue mensuelle SL dépassés...")
+    try:
+        ai = get_provider()
+        ctx = _trading_context()
+        ctx_block = f"\n{ctx}\n" if ctx else ""
+
+        lines = []
+        for name, cfg in breach.items():
+            quote = prices.get_quote(cfg["ticker"])
+            price = quote.get("price")
+            sym = prices.currency_symbol(quote.get("currency", "EUR"))
+            if price:
+                chg = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
+                pnl = (price - cfg["entry_price"]) * cfg["qty"]
+                lines.append(
+                    f"  {name} ({cfg['ticker']}): {sym}{price} ({chg:+.2f}%) | "
+                    f"PRU {sym}{cfg['entry_price']} | {cfg['qty']}t | P&L {sym}{pnl:+.0f} | "
+                    f"SL initial {sym}{cfg['target_low']}"
+                )
+            else:
+                lines.append(f"  {name} ({cfg['ticker']}): cours indisponible | PRU {sym}{cfg['entry_price']}")
+
+        snapshot = "\n".join(lines)
+        prompt = f"""{TRADER_SYSTEM}
+{FORMAT_TELEGRAM}
+{ctx_block}
+POSITIONS EN SL DÉPASSÉ — REVUE MENSUELLE
+{snapshot}
+
+MISSION
+Pour chaque position :
+1. La thesis de départ est-elle encore valide ?
+2. Signal : CONSERVER / COUPER / ATTENDRE CATALYSEUR
+3. Raison courte (1-2 lignes)
+4. Horizon de rétablissement estimé si on conserve"""
+
+        result = _strip_markdown(ai.complete(prompt, max_tokens=600))
+        date = datetime.now(PARIS).strftime("%d/%m/%Y")
+        send_fn(f"📋 REVUE MENSUELLE — SL DÉPASSÉS\n{date}\n\n{snapshot}\n\n{result}")
+
+    except Exception as e:
+        print(f"Erreur revue mensuelle: {e}")
+        send_fn(f"⚠️ Erreur revue mensuelle: {e}")
+
+
 def weekly_swap_analysis(send_fn) -> None:
     """Analyse hebdomadaire : vaut-il mieux vendre une position pour en acheter une autre ?"""
     print(f"[{datetime.now(PARIS).strftime('%Y-%m-%d %H:%M:%S')}] Analyse swap hebdo...")

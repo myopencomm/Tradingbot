@@ -45,12 +45,14 @@ def check_positions(send_fn) -> None:
         if price >= cfg["target_high"]:
             alerts.append({"type": "TP", "name": name, "cfg": cfg, "price": price, "change": change_pct, "pnl": pnl, "sym": sym})
         elif price <= cfg["target_low"]:
-            # SL already breached — no order instructions, just flag it
-            alerts.append({"type": "SL_BREACH", "name": name, "cfg": cfg, "price": price, "change": change_pct, "pnl": pnl, "sym": sym})
+            if not cfg.get("sl_breach_notified", False):
+                # First detection only — send once, then silence
+                alerts.append({"type": "SL_BREACH", "name": name, "cfg": cfg, "price": price, "change": change_pct, "pnl": pnl, "sym": sym})
         elif price <= cfg["target_low"] * 1.05:
             # Approaching SL (within 5%) — send instructions
             alerts.append({"type": "SL_PROCHE", "name": name, "cfg": cfg, "price": price, "change": change_pct, "pnl": pnl, "sym": sym})
 
+    sent_any = False
     for a in alerts:
         cfg = a["cfg"]
         sym = a["sym"]
@@ -68,8 +70,13 @@ def check_positions(send_fn) -> None:
                 f"Prix: {sym}{a['price']} ({a['change']:+.2f}%)\n"
                 f"P&L: {sym}{a['pnl']:+.0f}\n"
                 f"SL: {sym}{cfg['target_low']}\n\n"
-                f"Analyse nécessaire pour décision — /research {cfg['ticker']}"
+                f"Analyse nécessaire pour décision — /research {cfg['ticker']}\n\n"
+                f"Cette alerte ne sera plus répétée. Revue mensuelle le 1er du mois."
             )
+            send_fn(msg)
+            portfolio.mark_sl_breach(a["name"])
+            sent_any = True
+            continue
         else:
             msg = (
                 f"⚠️ STOP-LOSS PROCHE — {a['name']}\n\n"
@@ -80,7 +87,8 @@ def check_positions(send_fn) -> None:
                 + orders.stop_loss(cfg["ticker"], cfg["qty"], cfg["target_low"])
             )
         send_fn(msg)
+        sent_any = True
 
-    if not alerts:
+    if not sent_any:
         send_fn("\n".join(status_lines))
         print("✅ Status envoyé — pas d'alerte")
