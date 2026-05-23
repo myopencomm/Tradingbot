@@ -2,6 +2,12 @@
 
 **Assistant de trading personnel pour Bourse Direct, piloté par Telegram.**
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Platform](https://img.shields.io/badge/Platform-Telegram-26A5E4?logo=telegram&logoColor=white)
+![AI](https://img.shields.io/badge/IA-Groq%20%7C%20Gemini%20%7C%20Anthropic%20%7C%20OpenAI%20%7C%20Mistral-orange)
+![Broker](https://img.shields.io/badge/Courtier-Bourse%20Direct-navy)
+
 Bourse Direct ne dispose pas d'API publique. TradingBot comble ce manque : il analyse votre portefeuille chaque matin, surveille vos positions, génère les instructions d'ordres précises à saisir sur l'app iPhone ou web, et vous alerte en temps réel — le tout depuis Telegram.
 
 ---
@@ -363,20 +369,23 @@ pkill -f "main.py"
 
 ## Contribuer
 
-Projet open-source, conçu pour être étendu.
+Projet open-source, conçu pour être étendu. Voir [CONTRIBUTING.md](CONTRIBUTING.md) pour le guide complet.
 
-**Pistes :**
+**Idées de contributions :**
 - Support d'autres courtiers français (Boursorama, Fortuneo, Trade Republic...)
 - Mode "trade rapide" : surveillance toutes les 30min sur actions volatiles
 - Dashboard web léger (Flask)
 - Backtest simple sur données historiques Yahoo Finance
+- Suite de tests automatisés (pytest)
 - Gestion automatique des redémarrages (supervisor, systemd)
 
 ```bash
 git checkout -b feature/ma-feature
 # ... commits ...
-# ouvrez une Pull Request
+# ouvrez une Pull Request — template fourni
 ```
+
+**Questions ?** Ouvrez une [Discussion](../../discussions) plutôt qu'une Issue.
 
 ---
 
