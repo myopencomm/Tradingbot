@@ -398,7 +398,7 @@ def cmd_import(args, cid):
 
 def cmd_tuto(args, cid):
     send(
-        "TradingBot — Guide d'installation (1/5)\n"
+        "TradingBot — Guide d'installation (1/6)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 1 — Creer ton bot Telegram\n"
@@ -414,7 +414,7 @@ def cmd_tuto(args, cid):
     )
     time.sleep(0.5)
     send(
-        "TradingBot — Guide d'installation (2/5)\n"
+        "TradingBot — Guide d'installation (2/6)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 2 — Obtenir ton Chat ID\n"
@@ -433,7 +433,7 @@ def cmd_tuto(args, cid):
     )
     time.sleep(0.5)
     send(
-        "TradingBot — Guide d'installation (3/5)\n"
+        "TradingBot — Guide d'installation (3/6)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 3 — Choisir et configurer ton IA\n"
@@ -486,6 +486,14 @@ def cmd_tuto(args, cid):
         "\n"
         "Si tu fermes et rouvres ton terminal,\n"
         "refais cd Tradingbot avant tout.\n"
+        "\n"
+        "IMPORTANT — Verifie ta version Python AVANT\n"
+        "de continuer :\n"
+        "  python3 --version\n"
+        "→ Doit afficher 3.10 ou +\n"
+        "→ Sur Mac : si c'est 3.9, installe d'abord\n"
+        "  Homebrew + brew install python\n"
+        "  (voir README sur GitHub pour le detail)\n"
         "\n"
         "Ensuite installe les dependances :\n"
         "  python3 -m venv venv\n"

@@ -59,16 +59,28 @@ Sur Mac, la façon la plus simple est d'utiliser **Homebrew** — le gestionnair
 
 > Homebrew permet d'installer et mettre à jour des outils en ligne de commande en une seule commande `brew install ...`. C'est l'équivalent de `apt` sur Ubuntu ou `pip` pour Python — indispensable sur Mac pour tout développement.
 
+**⚠️ Étape critique — À la fin de l'installation, Homebrew affiche 3 commandes à exécuter pour s'ajouter au PATH.** Exécutez-les avant de continuer, sinon `brew` restera introuvable :
+
+```bash
+echo >> ~/.zprofile
+echo 'eval "$(/opt/homebrew/bin/brew shellenv zsh)"' >> ~/.zprofile
+eval "$(/opt/homebrew/bin/brew shellenv zsh)"
+```
+
+> Ces commandes sont affichées à la fin du script d'installation sous `==> Next steps:`. Copiez-les depuis votre terminal — elles peuvent légèrement varier selon votre machine.
+
 **2. Installer Python et Git via Homebrew :**
 
 ```bash
 brew install python git
 ```
 
+> **Note :** macOS inclut Python 3.9 par défaut — trop ancien pour ce bot (3.10 minimum requis). `brew install python` installe la version récente (3.12+). Si après l'installation `python3 --version` affiche encore 3.9, ouvrez un **nouveau terminal** avant de continuer.
+
 Vérifiez l'installation :
 
 ```bash
-python3 --version   # doit afficher Python 3.10 ou +
+python3 --version   # doit afficher Python 3.10 ou + (ex: 3.13.x)
 git --version       # doit afficher git version 2.x
 ```
 
