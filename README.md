@@ -153,11 +153,13 @@ Votre Chat ID limite le bot à vous seul — il refuse tous les autres utilisate
 ### Étape 4 — Clonez et configurez
 
 ```bash
-git clone https://github.com/votre-user/TradingBot.git
-cd TradingBot
+git clone https://github.com/myopencomm/Tradingbot.git
+cd Tradingbot
 ```
 
-> **C'est quoi `cd` ?** `cd` signifie "change directory" — ça déplace le terminal dans le dossier du projet. Toutes les commandes qui suivent doivent être exécutées depuis ce dossier. Si vous fermez et rouvrez votre terminal, pensez à refaire `cd TradingBot` avant de lancer quoi que ce soit.
+> **C'est quoi `cd` ?** `cd` signifie "change directory" — ça déplace le terminal dans le dossier du projet. Toutes les commandes qui suivent doivent être exécutées depuis ce dossier. Si vous fermez et rouvrez votre terminal, pensez à refaire `cd Tradingbot` avant de lancer quoi que ce soit.
+
+> **Git vous demande un mot de passe ?** C'est un repo public — aucun mot de passe nécessaire. Si la question apparaît quand même, appuyez sur **Entrée** sans rien taper. Si ça bloque toujours, GitHub n'accepte plus les mots de passe depuis 2021 — utilisez `gh` (GitHub CLI) : `brew install gh && gh auth login`, puis relancez le clone.
 
 Créez un environnement virtuel et installez les dépendances :
 
