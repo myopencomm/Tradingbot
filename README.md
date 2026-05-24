@@ -165,10 +165,12 @@ Créez un environnement virtuel et installez les dépendances :
 
 ```bash
 python3 -m venv venv
-pip install -r requirements.txt
+venv/bin/pip install -r requirements.txt
 ```
 
 > **C'est quoi un venv ?** Un environnement virtuel isole les packages Python de ce projet du reste de votre système. Sans ça, les librairies s'installent globalement et peuvent entrer en conflit avec d'autres projets. Bonne pratique systématique.
+
+> **Pourquoi `venv/bin/pip` et pas `pip` ?** Sur macOS la commande `pip` n'existe pas — c'est `pip3`, et encore, elle installe les packages globalement. `venv/bin/pip` utilise directement le pip du venv créé juste avant, sans ambiguïté sur aucun OS.
 
 ```bash
 cp .env.example .env

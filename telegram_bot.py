@@ -497,7 +497,7 @@ def cmd_tuto(args, cid):
         "\n"
         "Ensuite installe les dependances :\n"
         "  python3 -m venv venv\n"
-        "  pip install -r requirements.txt\n"
+        "  venv/bin/pip install -r requirements.txt\n"
         "\n"
         "Et copie les fichiers de config :\n"
         "  cp .env.example .env\n"
