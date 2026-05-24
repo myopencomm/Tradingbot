@@ -7,19 +7,25 @@ import analysis
 import telegram_bot
 
 
+def _market_day() -> bool:
+    """Vrai si aujourd'hui est un jour de semaine (lundi–vendredi)."""
+    return datetime.now().weekday() < 5  # 0=lundi … 4=vendredi
+
+
 def run_scheduler():
     for t in CHECK_TIMES:
         schedule.every().day.at(t).do(
-            lambda: monitor.check_positions(telegram_bot.send)
+            lambda: monitor.check_positions(telegram_bot.send) if _market_day() else None
         )
     schedule.every().day.at(ANALYSIS_TIME).do(
-        lambda: analysis.morning_briefing(telegram_bot.send)
+        lambda: analysis.morning_briefing(telegram_bot.send) if _market_day() else None
     )
     schedule.every().monday.at("09:10").do(
         lambda: analysis.weekly_swap_analysis(telegram_bot.send)
     )
     schedule.every().day.at("09:15").do(
-        lambda: analysis.monthly_breach_review(telegram_bot.send) if datetime.now().day == 1 else None
+        lambda: analysis.monthly_breach_review(telegram_bot.send)
+        if _market_day() and datetime.now().day == 1 else None
     )
     print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 (heure Paris)")
     while True:
