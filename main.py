@@ -58,4 +58,12 @@ if __name__ == "__main__":
     print("=" * 40)
 
     telegram_bot.start_polling()
+
+    nb = len(positions)
+    cash = data.get("cash_available", 0)
+    telegram_bot.send(
+        f"TradingBot en ligne 🤖\n"
+        f"{nb} position{'s' if nb > 1 else ''} | {cash}€ cash"
+    )
+
     run_scheduler()
