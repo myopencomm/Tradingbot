@@ -12,6 +12,22 @@ TRADER_SYSTEM = """Tu es un expert trader spécialisé en small et mid caps comp
 Compte-titres ordinaire (CTO), horizon court à moyen terme (jours à quelques semaines).
 Règles strictes: stop-loss -10% sur PRU, objectif minimum +15%, pas de levier, univers prioritaire Euronext Paris / Euronext Growth."""
 
+TICKER_RULES = """
+RÈGLES ABSOLUES — TICKERS :
+- Utilise UNIQUEMENT des tickers Euronext réels et vérifiables sur Yahoo Finance
+- Euronext Paris / Growth Paris : suffixe .PA obligatoire (ex: AIR.PA, GNFT.PA, ALINS.PA)
+- Euronext Amsterdam : suffixe .AS (ex: INPST.AS, ASML.AS)
+- Si tu n'es pas certain du ticker exact, écris NOM_SOCIÉTÉ (TICKER?) et signale l'incertitude
+- Ne JAMAIS inventer ou approximer un ticker — une erreur de ticker rend l'ordre impossible
+
+CRITÈRES DE RISQUE — définitions strictes :
+- LOW : valeur liquide et établie, tendance haussière confirmée, pas d'événement binaire
+- MEDIUM : catalyseur identifié mais résultat incertain, volatilité normale, liquidité correcte
+- HIGH : événement binaire (OPA seuil non atteint, résultats pivots), small cap illiquide, forte volatilité
+- OPA en cours : TOUJOURS MEDIUM minimum, HIGH si le seuil de participation n'est pas encore atteint
+- Arbitrage OPA : préciser toujours le seuil requis, le % déjà atteint, et le risque de chute si échec
+"""
+
 FORMAT_TELEGRAM = """
 RÈGLES DE FORMAT STRICTES — message Telegram mobile :
 - Texte brut uniquement. Zéro Markdown : pas de #, ##, **, *, `, ```, pas de tableaux avec |
@@ -224,6 +240,26 @@ Cash disponible : {cash}€ (insuffisant pour nouvelle position directe)
         send_fn(f"⚠️ Erreur analyse swap: {e}")
 
 
+def _validate_tickers(text: str) -> str:
+    """Extrait les tickers du texte IA et avertit pour ceux non reconnus par yfinance."""
+    import yfinance as yf
+    found = re.findall(r'\(([A-Z0-9]{2,8}(?:\.[A-Z]{1,3})?)\)', text)
+    bad = []
+    for t in set(found):
+        try:
+            hist = yf.Ticker(t).history(period="5d")
+            if hist.empty:
+                bad.append(t)
+        except Exception:
+            bad.append(t)
+    if bad:
+        text += (
+            f"\n\n⚠️ TICKER(S) NON VERIFIE(S) : {', '.join(bad)}\n"
+            "Ces tickers n'ont pas de cours sur Yahoo Finance — verifie le symbole exact avant de passer un ordre."
+        )
+    return text
+
+
 def scan_opportunities(send_fn, ticker: str = None) -> None:
     """Scan général ou analyse d'un ticker spécifique."""
     try:
@@ -251,6 +287,7 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
             else:
                 tech_block = ""
             prompt = f"""{TRADER_SYSTEM}
+{TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_block}
 {snapshot}
@@ -261,12 +298,13 @@ RECHERCHE WEB {ticker}
 CATALYSEURS IMMINENTS
 {catalysts}
 
-Donne un avis actionnable : signal (ACHAT/VENTE/NEUTRE), prix d'entrée, SL (-10%), TP (+15%), catalyseur principal, niveau de risque."""
+Donne un avis actionnable : signal (ACHAT/VENTE/NEUTRE), ticker exact vérifié, prix d'entrée, SL (-10%), TP (+15%), catalyseur principal, niveau de risque selon les critères ci-dessus."""
             header = f"🔍 ANALYSE {ticker}"
         else:
             macro      = research.market_context()
             catalysts  = research.market_catalysts()
             prompt = f"""{TRADER_SYSTEM}
+{TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_block}
 {snapshot}
@@ -280,15 +318,16 @@ CATALYSEURS IMMINENTS EURONEXT
 Cash disponible : {cash}€
 Propose 3 opportunités Euronext avec un catalyseur imminent identifié (résultats, contrat, OPA, rachat).
 Priorise les valeurs avec momentum positif et volume en hausse.
-Pour chaque opportunité :
-TICKER
+Pour chaque opportunité, format exact :
+NOM SOCIETE (TICKER.PA)
 - Entrée : X€  SL : X€  TP : X€
 - Catalyseur : ...
 - Raison : ...
-- Risque : LOW / MEDIUM / HIGH"""
+- Risque : LOW / MEDIUM / HIGH  (applique les critères stricts ci-dessus)"""
             header = "🔍 SCAN OPPORTUNITÉS"
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=700))
+        result = _validate_tickers(result)
         send_fn(f"{header}\n\n{result}\n\n💰 Cash: {cash}€")
 
     except Exception as e:
