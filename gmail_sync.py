@@ -126,12 +126,12 @@ def check_and_notify(gmail_user: str, gmail_password: str) -> list[dict]:
                 # Marque toujours comme lu pour ne pas retraiter
                 mail.store(msg_id, "+FLAGS", "\\Seen")
 
-                # "Finalisation" = doublon de confirmation → ignorer
-                if "finalisation" in subject.lower():
+                # "Déclenchement" = ordre en cours (pas encore exécuté) → ignorer
+                if "d" in subject.lower() and "clenchement" in subject.lower():
                     continue
 
-                # "Déclenchement" = ordre activé → notifier
-                if "d" not in subject.lower() or "clenchement" not in subject.lower():
+                # "Finalisation" = ordre exécuté → notifier
+                if "finalisation" not in subject.lower():
                     continue
 
                 body   = _get_text_body(msg)
@@ -182,9 +182,9 @@ def format_notifications(notifications: list[dict]) -> list[str]:
         if n["status"] == "notify":
             label = "Take Profit" if n["strategy"] == "take_profit" else "Stop Loss"
             messages.append(
-                f"📧 Ordre BD declenche — {n['position']} ({label})\n\n"
-                f"Bourse Direct indique que votre stratégie {n['strategy']} "
-                f"sur {n['company']} a ete activee.\n\n"
+                f"📧 Ordre BD execute — {n['position']} ({label})\n\n"
+                f"Bourse Direct confirme que votre stratégie {n['strategy']} "
+                f"sur {n['company']} a ete finalisee.\n\n"
                 f"A quel prix avez-vous vendu ?\n"
                 f"→ /vendu {n['position']} PRIX"
             )
