@@ -375,6 +375,32 @@ Ce fichier est injecté automatiquement dans chaque prompt IA (`/morning`, `/sca
 
 ---
 
+## Mettre à jour le bot
+
+```bash
+git pull origin main
+pkill -f "main.py"
+PYTHONUNBUFFERED=1 venv/bin/python3 main.py > tradingbot.log 2>&1 &
+```
+
+Vérifiez les nouveautés dans le [CHANGELOG](#changelog) ou via `/version` dans Telegram.
+
+> **Tip :** `git log --oneline -10` affiche les 10 derniers commits pour voir ce qui a changé.
+
+---
+
+## Changelog
+
+### 2026-06-01
+- **Gmail sync** : détection automatique des emails "Finalisation de votre stratégie" de Bourse Direct — le bot envoie une notification Telegram et demande le prix de vente (`/syncmail`, check auto 4×/jour)
+- **`/vendu NOM [PRIX]`** : nouvelle commande pour clôturer rapidement une position (prix TP automatique si omis)
+- **Indicateurs techniques** : RSI 14j, momentum 1 mois, ratio volume injectés dans `/scan` et `/research`
+- **Catalyseurs imminents** : recherche DuckDuckGo dédiée (résultats, contrats, OPA, rachats) dans chaque analyse
+- **Validation tickers** : post-vérification yfinance des tickers proposés par l'IA + critères de risque LOW/MEDIUM/HIGH explicites
+- **`/version`** : affiche le commit en cours et la date de mise à jour
+
+---
+
 ## Limitations
 
 **Pas d'API Bourse Direct**

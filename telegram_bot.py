@@ -92,6 +92,7 @@ def cmd_help(args, cid):
         "/vendu NOM [PRIX] — Cloturer (prix TP auto si omis)\n"
         "/close TICKER QTY PRIX [FRAIS] — Cloturer avec frais\n"
         "/syncmail — Sync Gmail : detecte les ordres BD executes\n"
+        "/version — Commit actuel + commande de mise a jour\n"
         "\n"
         "ANALYSE IA\n"
         "/morning — Briefing complet (macro + positions + opps)\n"
@@ -356,6 +357,26 @@ def cmd_close(args, cid):
         "/stats pour voir l'historique complet.",
         cid,
     )
+
+
+def cmd_version(args, cid):
+    import subprocess
+    try:
+        commit = subprocess.check_output(
+            ["git", "log", "-1", "--format=%h %ad %s", "--date=format:%d/%m/%Y"],
+            cwd="/Users/yoksquare/TradingBot", text=True
+        ).strip()
+        send(
+            f"TradingBot — version actuelle\n\n"
+            f"Commit : {commit}\n\n"
+            f"Pour mettre a jour :\n"
+            f"git pull origin main\n"
+            f"pkill -f main.py\n"
+            f"venv/bin/python3 main.py > tradingbot.log 2>&1 &",
+            cid,
+        )
+    except Exception as e:
+        send(f"Impossible de lire la version git : {e}", cid)
 
 
 def cmd_vendu(args, cid):
@@ -671,6 +692,7 @@ COMMANDS = {
     "/close": cmd_close,
     "/vendu": cmd_vendu,
     "/syncmail": cmd_syncmail,
+    "/version": cmd_version,
     "/morning": cmd_morning,
     "/scan": cmd_scan,
     "/research": cmd_research,
