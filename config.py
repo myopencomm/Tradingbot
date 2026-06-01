@@ -24,6 +24,10 @@ POSITIONS_PATH = BASE_DIR / "positions.json"
 TRADING_CONTEXT_PATH = BASE_DIR / "CLAUDE_TRADING_CONTEXT.md"
 HISTORY_PATH = BASE_DIR / "trades_history.json"
 
+# Gmail IMAP — sync automatique ordres Bourse Direct (optionnel)
+GMAIL_USER         = os.getenv("GMAIL_USER", "")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
+
 # Trading rules (overridable via .env)
 DEFAULT_SL_PCT = float(os.getenv("DEFAULT_SL_PCT", "10"))
 DEFAULT_TP_PCT = float(os.getenv("DEFAULT_TP_PCT", "15"))

@@ -5,7 +5,7 @@ Toutes les commandes sont disponibles depuis l'app iPhone/web.
 import requests
 import time
 import threading
-from config import TELEGRAM_TOKEN, CHAT_ID
+from config import TELEGRAM_TOKEN, CHAT_ID, GMAIL_USER, GMAIL_APP_PASSWORD
 import portfolio
 import prices
 import analysis
@@ -89,7 +89,9 @@ def cmd_help(args, cid):
         "\n"
         "PERFORMANCES\n"
         "/stats — Win Rate, P&L realise/latent, Profit Factor\n"
-        "/close TICKER QTY PRIX [FRAIS] — Cloturer un trade\n"
+        "/vendu NOM [PRIX] — Cloturer (prix TP auto si omis)\n"
+        "/close TICKER QTY PRIX [FRAIS] — Cloturer avec frais\n"
+        "/syncmail — Sync Gmail : detecte les ordres BD executes\n"
         "\n"
         "ANALYSE IA\n"
         "/morning — Briefing complet (macro + positions + opps)\n"
@@ -356,6 +358,95 @@ def cmd_close(args, cid):
     )
 
 
+def cmd_vendu(args, cid):
+    # /vendu NOM [PRIX] — clôture intelligente avec prix auto ou manuel
+    if not args:
+        send(
+            "Usage: /vendu NOM [PRIX]\n"
+            "Ex: /vendu VU         (prix = TP pose sur BD)\n"
+            "Ex: /vendu VU 18.50   (prix manuel)",
+            cid,
+        )
+        return
+
+    name_input = args[0].upper().split(".")[0]
+    data = portfolio.load()
+    positions = data.get("positions", {})
+
+    # Recherche de la position : nom exact, puis ticker, puis préfixe
+    name = None
+    if name_input in positions:
+        name = name_input
+    else:
+        for n, cfg in positions.items():
+            ticker_base = cfg["ticker"].split(".")[0].upper()
+            if ticker_base == name_input or n.startswith(name_input):
+                name = n
+                break
+
+    if not name:
+        send(f"Position '{name_input}' introuvable.\nPositions: {list(positions.keys())}", cid)
+        return
+
+    cfg = positions[name]
+
+    if len(args) >= 2:
+        try:
+            exit_price = float(args[1].replace(",", "."))
+            price_source = "manuel"
+        except ValueError:
+            send("Prix invalide.", cid)
+            return
+    else:
+        # Prix par défaut = TP posé (ordre limite take_profit exécuté au prix exact)
+        exit_price = cfg.get("target_high")
+        price_source = "TP Bourse Direct"
+        if not exit_price:
+            quote = prices.get_quote(cfg["ticker"])
+            exit_price = quote.get("price")
+            price_source = "cours live"
+        if not exit_price:
+            send(f"Prix indisponible pour {cfg['ticker']}. Utilise /vendu {name} PRIX", cid)
+            return
+
+    pnl      = stats.record_close(name, cfg["ticker"], cfg["qty"], cfg["entry_price"], exit_price)
+    proceeds = round(exit_price * cfg["qty"], 2)
+    portfolio.remove_position(name)
+    portfolio.update_cash(round(portfolio.get_cash() + proceeds, 2))
+
+    pct = ((exit_price - cfg["entry_price"]) / cfg["entry_price"]) * 100
+    tag = "WIN" if pnl > 0 else "LOSS"
+    send(
+        f"Trade cloture — {name}  {tag}\n"
+        f"  {cfg['qty']}t @ {exit_price}€  (PRU {cfg['entry_price']}€)\n"
+        f"  P&L : {pnl:+.0f}€  ({pct:+.1f}%)\n"
+        f"  Prix : {price_source}\n"
+        f"  Cash : {portfolio.get_cash():.2f}€\n\n"
+        "/stats pour voir l'historique complet.",
+        cid,
+    )
+
+
+def cmd_syncmail(args, cid):
+    # /syncmail — vérifie Gmail pour les ordres Bourse Direct finalisés
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        send(
+            "Gmail non configure.\n"
+            "Ajoute dans .env :\n"
+            "GMAIL_USER=ton@gmail.com\n"
+            "GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx\n\n"
+            "Cree un mot de passe d'application :\n"
+            "myaccount.google.com > Securite > Mots de passe des applications",
+            cid,
+        )
+        return
+    send("Verification Gmail Bourse Direct...", cid)
+    import gmail_sync
+    results = gmail_sync.check_and_sync(GMAIL_USER, GMAIL_APP_PASSWORD)
+    msg = gmail_sync.format_results(results)
+    send(f"EMAIL SYNC\n\n{msg}\n\nCash: {portfolio.get_cash():.2f}€", cid)
+
+
 def cmd_morning(args, cid):
     send("Briefing en cours de generation...", cid)
     threading.Thread(target=analysis.morning_briefing, args=(lambda m: send(m, cid),), daemon=True).start()
@@ -573,6 +664,8 @@ COMMANDS = {
     "/setup": cmd_setup,
     "/stats": cmd_stats,
     "/close": cmd_close,
+    "/vendu": cmd_vendu,
+    "/syncmail": cmd_syncmail,
     "/morning": cmd_morning,
     "/scan": cmd_scan,
     "/research": cmd_research,

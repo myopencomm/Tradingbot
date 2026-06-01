@@ -31,6 +31,28 @@ def get_price(ticker: str) -> float | None:
     return None
 
 
+def get_technicals(ticker: str) -> dict:
+    """RSI 14j, momentum 1 mois, ratio volume vs moyenne 20 séances."""
+    try:
+        hist = yf.Ticker(ticker).history(period="3mo")
+        if len(hist) < 22:
+            return {}
+        closes  = hist["Close"]
+        volumes = hist["Volume"]
+        delta   = closes.diff()
+        gain    = delta.clip(lower=0).rolling(14).mean()
+        loss    = (-delta.clip(upper=0)).rolling(14).mean()
+        rs      = gain / loss
+        rsi     = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
+        mom_1m  = round(float((closes.iloc[-1] / closes.iloc[-22] - 1) * 100), 1)
+        vol_avg = float(volumes.iloc[-20:].mean())
+        vol_r   = round(float(volumes.iloc[-1]) / vol_avg, 2) if vol_avg else None
+        return {"rsi": rsi, "momentum_1m": mom_1m, "vol_ratio": vol_r}
+    except Exception as e:
+        print(f"⚠️ Technicals error {ticker}: {e}")
+        return {}
+
+
 def get_quote(ticker: str) -> dict:
     """Retourne prix dans la devise native du ticker, avec devise détectée.
 

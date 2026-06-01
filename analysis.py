@@ -235,19 +235,37 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
         ctx_block = f"\n{ctx}\n" if ctx else ""
 
         if ticker:
-            web = research.research_stock(ticker)
+            web        = research.research_stock(ticker)
+            catalysts  = research.search_catalysts(ticker)
+            tech       = prices.get_technicals(ticker)
+            if tech:
+                rsi    = tech.get("rsi", "N/A")
+                mom    = tech.get("momentum_1m", "N/A")
+                vol    = tech.get("vol_ratio", "N/A")
+                tech_block = (
+                    f"\nINDICATEURS TECHNIQUES\n"
+                    f"- RSI 14j : {rsi}\n"
+                    f"- Momentum 1 mois : {mom:+}%\n"
+                    f"- Volume ratio : {vol}x moyenne 20j\n"
+                )
+            else:
+                tech_block = ""
             prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {ctx_block}
 {snapshot}
-
+{tech_block}
 RECHERCHE WEB {ticker}
 {web}
 
-Donne un avis actionnable : signal (ACHAT/VENTE/NEUTRE), prix d'entrée, SL (-10%), TP (+15%), raison courte, niveau de risque."""
+CATALYSEURS IMMINENTS
+{catalysts}
+
+Donne un avis actionnable : signal (ACHAT/VENTE/NEUTRE), prix d'entrée, SL (-10%), TP (+15%), catalyseur principal, niveau de risque."""
             header = f"🔍 ANALYSE {ticker}"
         else:
-            macro = research.market_context()
+            macro      = research.market_context()
+            catalysts  = research.market_catalysts()
             prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {ctx_block}
@@ -256,11 +274,16 @@ Donne un avis actionnable : signal (ACHAT/VENTE/NEUTRE), prix d'entrée, SL (-10
 CONTEXTE MARCHÉ
 {macro}
 
+CATALYSEURS IMMINENTS EURONEXT
+{catalysts}
+
 Cash disponible : {cash}€
-Propose 3 opportunités Euronext adaptées.
+Propose 3 opportunités Euronext avec un catalyseur imminent identifié (résultats, contrat, OPA, rachat).
+Priorise les valeurs avec momentum positif et volume en hausse.
 Pour chaque opportunité :
 TICKER
-- Entrée : Xé  SL : X€  TP : X€
+- Entrée : X€  SL : X€  TP : X€
+- Catalyseur : ...
 - Raison : ...
 - Risque : LOW / MEDIUM / HIGH"""
             header = "🔍 SCAN OPPORTUNITÉS"

@@ -74,6 +74,35 @@ def research_stock(ticker: str, company_name: str = "") -> str:
     return "\n".join(snippets[:10]) or "Aucune donnée web trouvée."
 
 
+def search_catalysts(ticker: str, company_name: str = "") -> str:
+    """Catalyseurs imminents pour un titre : résultats, contrats, OPA, rachats."""
+    name = company_name or ticker
+    queries = [
+        f"{name} résultats financiers publication date juin juillet 2026",
+        f"{name} contrat partenariat accord annonce 2026",
+        f"{name} OPA rachat actions dividende exceptionnel fusion 2026",
+        f"{ticker} hausse fort catalyseur analyste objectif cours 2026",
+    ]
+    snippets = []
+    for q in queries:
+        snippets += _snippets(_search(q, max_results=2))
+    return "\n".join(snippets[:8]) or "Aucun catalyseur imminent identifié."
+
+
+def market_catalysts() -> str:
+    """Scrute Euronext pour des actions avec catalyseurs imminents à fort potentiel."""
+    queries = [
+        "Euronext Paris small cap résultats publication prochaines semaines juin 2026",
+        "action France catalyseur fort hausse rapide contrat OPA annonce 2026",
+        "small cap Euronext Growth achat recommandation analyste objectif hausse 2026",
+        "bourse Paris valeur momentum fort volume achat signal technique 2026",
+    ]
+    snippets = []
+    for q in queries:
+        snippets += _snippets(_search(q, max_results=3))
+    return "\n".join(snippets[:12]) or "Aucune donnée catalyseurs disponible."
+
+
 def scan_sector(sector: str) -> str:
     """Recherche les meilleures opportunités dans un secteur."""
     queries = [

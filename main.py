@@ -1,10 +1,11 @@
 import schedule
 import time
 from datetime import datetime
-from config import CHECK_TIMES, ANALYSIS_TIME, TELEGRAM_TOKEN, AI_PROVIDER
+from config import CHECK_TIMES, ANALYSIS_TIME, TELEGRAM_TOKEN, AI_PROVIDER, GMAIL_USER, GMAIL_APP_PASSWORD
 import monitor
 import analysis
 import telegram_bot
+import gmail_sync
 
 
 def _market_day() -> bool:
@@ -12,10 +13,20 @@ def _market_day() -> bool:
     return datetime.now().weekday() < 5  # 0=lundi … 4=vendredi
 
 
+def _auto_gmail_check():
+    if not _market_day() or not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        return
+    results = gmail_sync.check_and_sync(GMAIL_USER, GMAIL_APP_PASSWORD)
+    closed = [r for r in results if r["status"] == "closed"]
+    if closed:
+        msg = gmail_sync.format_results(closed)
+        telegram_bot.send(f"EMAIL SYNC\n\n{msg}\n\nCash: {__import__('portfolio').get_cash():.2f}€")
+
+
 def run_scheduler():
     for t in CHECK_TIMES:
         schedule.every().day.at(t).do(
-            lambda: monitor.check_positions(telegram_bot.send) if _market_day() else None
+            lambda: (_auto_gmail_check(), monitor.check_positions(telegram_bot.send)) if _market_day() else None
         )
     schedule.every().day.at(ANALYSIS_TIME).do(
         lambda: analysis.morning_briefing(telegram_bot.send) if _market_day() else None
@@ -38,6 +49,7 @@ if __name__ == "__main__":
     print("  TradingBot")
     print("=" * 40)
     print(f"  Telegram : {'OK' if TELEGRAM_TOKEN else 'MANQUANT (.env)'}")
+    print(f"  Gmail    : {'OK' if GMAIL_USER else 'non configure (optionnel)'}")
     print(f"  AI       : {AI_PROVIDER}")
 
     import portfolio

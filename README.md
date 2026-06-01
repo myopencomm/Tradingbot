@@ -223,6 +223,9 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Import screenshot** | Envoyez vos captures d'écran — le bot lit et importe automatiquement |
 | **Import CSV** | Envoyez l'export Bourse Direct — importe avec SL/TP par défaut |
 | **IA pluggable** | 5 providers : Groq, Gemini (gratuits), Anthropic, OpenAI, Mistral |
+| **Indicateurs techniques** | RSI 14j, momentum 1 mois, ratio volume — filtre avant analyse IA |
+| **Catalyseurs imminents** | Recherche résultats, contrats, OPA, rachats — signaux +15% rapides |
+| **Sync Gmail Bourse Direct** | Détecte auto les emails "Finalisation de votre stratégie" et clôture les positions (IMAP, sans OAuth) |
 | **Recherche web gratuite** | DuckDuckGo + yfinance — aucune clé payante requise |
 | **Contexte personnel** | Fichier de contexte IA pour des conseils adaptés à votre situation |
 
@@ -235,13 +238,15 @@ TradingBot/
 ├── main.py           Point d'entrée : lance le scheduler + le polling Telegram
 ├── config.py         Variables d'env centralisées (lues depuis .env)
 ├── telegram_bot.py   Polling Telegram, routing des commandes, buffer photo
-├── analysis.py       Prompts IA : briefing, scan, import screenshots
+├── analysis.py       Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py        Vérification SL/TP 4×/jour, envoi des alertes
 ├── orders.py         Génère les instructions texte format Bourse Direct
 ├── portfolio.py      CRUD positions.json + import CSV
-├── prices.py         Prix temps réel via yfinance (Yahoo Finance)
+├── prices.py         Prix temps réel + indicateurs techniques (RSI, momentum, volume)
 ├── ai_provider.py    Abstraction multi-providers avec vision (5 providers)
-├── research.py       Recherche web via DuckDuckGo (sans clé API)
+├── research.py       Recherche web DuckDuckGo : marché, actions, catalyseurs imminents
+├── gmail_sync.py     Sync IMAP Gmail : détecte les ordres BD finalisés et clôture auto
+├── stats.py          Historique des trades, P&L, win rate, profit factor
 │
 ├── .env.example                      Template de configuration
 ├── positions.example.json            Exemple de portefeuille
@@ -297,8 +302,18 @@ TradingBot/
 | Commande | Description |
 |---|---|
 | `/morning` | Déclencher manuellement le briefing matinal |
-| `/scan` | Scanner des opportunités avec le cash disponible |
-| `/research TICKER` | Analyse approfondie d'une action |
+| `/scan` | Scanner des opportunités — catalyseurs + indicateurs techniques |
+| `/research TICKER` | Analyse approfondie : RSI, momentum, catalyseurs imminents |
+
+### Clôture de trades
+
+| Commande | Description |
+|---|---|
+| `/vendu NOM [PRIX]` | Clôturer une position — prix TP automatique si omis |
+| `/close TICKER QTY PRIX [FRAIS]` | Clôturer avec frais de courtage |
+| `/syncmail` | Vérifier Gmail pour les ordres Bourse Direct finalisés |
+
+> **`/vendu`** est la commande recommandée au quotidien. Elle accepte le nom court ou le ticker, récupère automatiquement le prix du TP posé sur Bourse Direct, et met à jour le cash.
 
 ### Import & Aide
 
@@ -308,6 +323,42 @@ TradingBot/
 | `/import` | Guide import CSV Bourse Direct |
 | `/help` | Liste complète des commandes |
 | `/tuto` | Rappel des étapes de configuration |
+
+---
+
+## Sync automatique des ordres Bourse Direct
+
+Bourse Direct envoie un email "Finalisation de votre stratégie" dès qu'un ordre expert (`take_profit` ou `stop_loss`) est exécuté. Le bot peut détecter ces emails via IMAP et clôturer automatiquement les positions concernées.
+
+### Configuration (une seule fois)
+
+**1. Activez l'accès IMAP dans Gmail :**
+> Paramètres Gmail → Voir tous les paramètres → Transfert et POP/IMAP → Activer IMAP
+
+**2. Créez un mot de passe d'application :**
+> [myaccount.google.com](https://myaccount.google.com) → Sécurité → Mots de passe des applications
+> (Nécessite la validation en 2 étapes — recommandée de toute façon)
+
+**3. Ajoutez dans votre `.env` :**
+```env
+GMAIL_USER=votre@gmail.com
+GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+```
+
+### Utilisation
+
+| | |
+|---|---|
+| **Automatique** | Le bot vérifie Gmail à chaque check (9h, 12h, 15h, 17h) et notifie via Telegram si un ordre est clôturé |
+| **À la demande** | `/syncmail` — vérifie immédiatement et affiche le résultat |
+| **Manuel** | `/vendu NOM [PRIX]` — si Gmail n'est pas configuré ou pour corriger un prix |
+
+### Logique des prix
+
+Le bot utilise le prix de l'ordre posé sur Bourse Direct (pas le cours live) :
+- **`take_profit` finalisé** → prix = TP enregistré dans le bot (exact pour un ordre limite)
+- **`stop_loss` finalisé** → prix = SL enregistré dans le bot
+- Si le prix réel diffère, utilisez `/vendu NOM PRIX_REEL` pour corriger
 
 ---
 
