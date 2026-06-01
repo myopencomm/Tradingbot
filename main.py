@@ -16,11 +16,9 @@ def _market_day() -> bool:
 def _auto_gmail_check():
     if not _market_day() or not GMAIL_USER or not GMAIL_APP_PASSWORD:
         return
-    results = gmail_sync.check_and_sync(GMAIL_USER, GMAIL_APP_PASSWORD)
-    closed = [r for r in results if r["status"] == "closed"]
-    if closed:
-        msg = gmail_sync.format_results(closed)
-        telegram_bot.send(f"EMAIL SYNC\n\n{msg}\n\nCash: {__import__('portfolio').get_cash():.2f}€")
+    notifications = gmail_sync.check_and_notify(GMAIL_USER, GMAIL_APP_PASSWORD)
+    for msg in gmail_sync.format_notifications(notifications):
+        telegram_bot.send(msg)
 
 
 def run_scheduler():

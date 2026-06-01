@@ -411,6 +411,7 @@ def cmd_vendu(args, cid):
 
     pnl      = stats.record_close(name, cfg["ticker"], cfg["qty"], cfg["entry_price"], exit_price)
     proceeds = round(exit_price * cfg["qty"], 2)
+    portfolio.clear_gmail_triggered(name)
     portfolio.remove_position(name)
     portfolio.update_cash(round(portfolio.get_cash() + proceeds, 2))
 
@@ -428,7 +429,7 @@ def cmd_vendu(args, cid):
 
 
 def cmd_syncmail(args, cid):
-    # /syncmail — vérifie Gmail pour les ordres Bourse Direct finalisés
+    # /syncmail — vérifie Gmail pour les déclenchements d'ordres Bourse Direct
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         send(
             "Gmail non configure.\n"
@@ -442,9 +443,13 @@ def cmd_syncmail(args, cid):
         return
     send("Verification Gmail Bourse Direct...", cid)
     import gmail_sync
-    results = gmail_sync.check_and_sync(GMAIL_USER, GMAIL_APP_PASSWORD)
-    msg = gmail_sync.format_results(results)
-    send(f"EMAIL SYNC\n\n{msg}\n\nCash: {portfolio.get_cash():.2f}€", cid)
+    notifications = gmail_sync.check_and_notify(GMAIL_USER, GMAIL_APP_PASSWORD)
+    messages = gmail_sync.format_notifications(notifications)
+    if messages:
+        for msg in messages:
+            send(msg, cid)
+    else:
+        send("Aucun nouvel ordre Bourse Direct detecte.", cid)
 
 
 def cmd_morning(args, cid):

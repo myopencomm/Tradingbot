@@ -59,6 +59,25 @@ def update_sl(name: str, price: float):
     return False
 
 
+def mark_gmail_triggered(name: str, strategy: str):
+    """Marque qu'une notif Gmail 'Déclenchement' a été envoyée — évite le doublon."""
+    data = load()
+    if name.upper() in data.get("positions", {}):
+        data["positions"][name.upper()]["gmail_triggered"] = strategy
+        save(data)
+
+
+def clear_gmail_triggered(name: str):
+    data = load()
+    pos = data.get("positions", {}).get(name.upper(), {})
+    pos.pop("gmail_triggered", None)
+    save(data)
+
+
+def is_gmail_triggered(name: str) -> bool:
+    return bool(load().get("positions", {}).get(name.upper(), {}).get("gmail_triggered"))
+
+
 def mark_sl_breach(name: str):
     """Marque qu'une alerte SL dépassé a déjà été envoyée — empêche le spam."""
     data = load()
