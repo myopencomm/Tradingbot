@@ -362,21 +362,48 @@ def cmd_close(args, cid):
 def cmd_version(args, cid):
     import subprocess
     try:
-        commit = subprocess.check_output(
-            ["git", "log", "-1", "--format=%h %ad %s", "--date=format:%d/%m/%Y"],
+        local_hash = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
             cwd="/Users/yoksquare/TradingBot", text=True
         ).strip()
-        send(
-            f"TradingBot — version actuelle\n\n"
-            f"Commit : {commit}\n\n"
-            f"Pour mettre a jour :\n"
-            f"git pull origin main\n"
-            f"pkill -f main.py\n"
-            f"venv/bin/python3 main.py > tradingbot.log 2>&1 &",
-            cid,
-        )
+        local_short = local_hash[:7]
+        local_info = subprocess.check_output(
+            ["git", "log", "-1", "--format=%ad %s", "--date=format:%d/%m/%Y"],
+            cwd="/Users/yoksquare/TradingBot", text=True
+        ).strip()
+
+        # Vérifie le dernier commit sur GitHub
+        try:
+            resp = requests.get(
+                "https://api.github.com/repos/myopencomm/Tradingbot/commits/main",
+                headers={"Accept": "application/vnd.github.v3+json"},
+                timeout=5,
+            )
+            remote_hash = resp.json().get("sha", "") if resp.status_code == 200 else ""
+        except Exception:
+            remote_hash = ""
+
+        if remote_hash and remote_hash != local_hash:
+            remote_short = remote_hash[:7]
+            status = (
+                f"MISE A JOUR DISPONIBLE\n"
+                f"Version locale  : {local_short} ({local_info})\n"
+                f"Version distante: {remote_short}\n\n"
+                f"Pour mettre a jour :\n"
+                f"git pull origin main\n"
+                f"pkill -f main.py\n"
+                f"venv/bin/python3 main.py > tradingbot.log 2>&1 &"
+            )
+        else:
+            status = (
+                f"Bot a jour\n"
+                f"Commit : {local_short} — {local_info}"
+            )
+
+        send(f"TradingBot — version\n\n{status}", cid)
+
     except Exception as e:
-        send(f"Impossible de lire la version git : {e}", cid)
+        send(f"Impossible de lire la version : {e}", cid)
 
 
 def cmd_vendu(args, cid):
