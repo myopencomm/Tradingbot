@@ -92,7 +92,7 @@ def cmd_help(args, cid):
         "/vendu NOM [PRIX] — Cloturer (prix TP auto si omis)\n"
         "/close TICKER QTY PRIX [FRAIS] — Cloturer avec frais\n"
         "/syncmail — Sync Gmail : detecte les ordres BD executes\n"
-        "/version — Commit actuel + commande de mise a jour\n"
+        "/update — Version actuelle + alerte si mise a jour dispo\n"
         "\n"
         "ANALYSE IA\n"
         "/morning — Briefing complet (macro + positions + opps)\n"
@@ -359,7 +359,7 @@ def cmd_close(args, cid):
     )
 
 
-def cmd_version(args, cid):
+def cmd_update(args, cid):
     import subprocess
     try:
         local_hash = subprocess.check_output(
@@ -719,7 +719,7 @@ COMMANDS = {
     "/close": cmd_close,
     "/vendu": cmd_vendu,
     "/syncmail": cmd_syncmail,
-    "/version": cmd_version,
+    "/update": cmd_update,
     "/morning": cmd_morning,
     "/scan": cmd_scan,
     "/research": cmd_research,
