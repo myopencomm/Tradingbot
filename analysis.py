@@ -8,24 +8,29 @@ from config import TRADING_CONTEXT_PATH
 
 PARIS = pytz.timezone("Europe/Paris")
 
-TRADER_SYSTEM = """Tu es un expert trader spécialisé en small et mid caps compatibles avec Bourse Direct (France).
+TRADER_SYSTEM = """Tu es un expert trader actif sur tous les marchés accessibles via Bourse Direct (France).
 Compte-titres ordinaire (CTO), horizon court à moyen terme (jours à quelques semaines).
-Règles strictes: stop-loss -10% sur PRU, objectif minimum +15%, pas de levier, univers prioritaire Euronext Paris / Euronext Growth."""
+Règles strictes: stop-loss -10% sur PRU, objectif minimum +15%, pas de levier.
+Univers : Euronext Paris/Growth, Euronext Amsterdam/Bruxelles, NYSE, NASDAQ, LSE, Xetra — tout ce qu'on peut acheter sur Bourse Direct.
+Priorité au meilleur rapport risque/rendement, peu importe le marché."""
 
 TICKER_RULES = """
-RÈGLES ABSOLUES — TICKERS :
-- Utilise UNIQUEMENT des tickers Euronext réels et vérifiables sur Yahoo Finance
-- Euronext Paris / Growth Paris : suffixe .PA obligatoire (ex: AIR.PA, GNFT.PA, ALINS.PA)
-- Euronext Amsterdam : suffixe .AS (ex: INPST.AS, ASML.AS)
-- Si tu n'es pas certain du ticker exact, écris NOM_SOCIÉTÉ (TICKER?) et signale l'incertitude
-- Ne JAMAIS inventer ou approximer un ticker — une erreur de ticker rend l'ordre impossible
+RÈGLES ABSOLUES — TICKERS (format Yahoo Finance) :
+- Euronext Paris / Growth : suffixe .PA (ex: AIR.PA, GNFT.PA)
+- Euronext Amsterdam     : suffixe .AS (ex: ASML.AS, INPST.AS)
+- Euronext Bruxelles     : suffixe .BR (ex: UCB.BR)
+- NYSE / NASDAQ (US)     : pas de suffixe (ex: NVDA, AAPL, TSLA)
+- London Stock Exchange  : suffixe .L (ex: GSK.L, BP.L)
+- Xetra / Frankfurt      : suffixe .DE (ex: SAP.DE, SIE.DE)
+- Si incertain du ticker exact : écris NOM_SOCIÉTÉ (TICKER?) et signale l'incertitude
+- Ne JAMAIS inventer ou approximer un ticker
 
 CRITÈRES DE RISQUE — définitions strictes :
-- LOW : valeur liquide et établie, tendance haussière confirmée, pas d'événement binaire
-- MEDIUM : catalyseur identifié mais résultat incertain, volatilité normale, liquidité correcte
-- HIGH : événement binaire (OPA seuil non atteint, résultats pivots), small cap illiquide, forte volatilité
-- OPA en cours : TOUJOURS MEDIUM minimum, HIGH si le seuil de participation n'est pas encore atteint
-- Arbitrage OPA : préciser toujours le seuil requis, le % déjà atteint, et le risque de chute si échec
+- LOW : valeur liquide, tendance haussière confirmée, pas d'événement binaire
+- MEDIUM : catalyseur identifié mais résultat incertain, volatilité normale
+- HIGH : événement binaire (résultats pivots, OPA seuil non atteint), small cap illiquide
+- OPA en cours : TOUJOURS MEDIUM minimum, HIGH si seuil non atteint
+- Arbitrage OPA : préciser le seuil requis, le % atteint, et le risque de chute si échec
 """
 
 FORMAT_TELEGRAM = """
@@ -337,9 +342,11 @@ Si des ordres en attente sont listés ci-dessus, commence par les évaluer :
 ORDRE EN ATTENTE NOM — MAINTENIR ou ANNULER ?
 - Justification courte (conditions changées ? thèse toujours valide ?)
 
-Ensuite propose jusqu'à 3 nouvelles opportunités Euronext avec catalyseur imminent.
+Ensuite propose jusqu'à 3 opportunités avec catalyseur imminent identifié.
+Tous les marchés accessibles via Bourse Direct sont valides (Euronext, NYSE, NASDAQ, LSE, Xetra).
 Pour chaque opportunité, format exact :
-NOM SOCIETE (TICKER.PA)
+NOM SOCIETE (TICKER)
+- Marché : ex Euronext Paris / NASDAQ / LSE
 - Entrée : X€  SL : X€  TP : X€
 - Catalyseur : ...
 - Raison : ...

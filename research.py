@@ -48,16 +48,17 @@ def _snippets(results: list[dict], max_chars: int = 200) -> list[str]:
 
 
 def market_context() -> str:
-    """Contexte macro + marché du jour pour le briefing IA."""
+    """Contexte macro + marchés mondiaux pour le briefing IA."""
     queries = [
-        "CAC 40 bourse Paris actualité aujourd'hui",
-        "marchés européens taux macro économie semaine",
-        "small cap France Euronext opportunités hausse",
+        "CAC 40 S&P 500 marchés actions actualité aujourd'hui 2026",
+        "Federal Reserve BCE taux directeurs macro économie semaine 2026",
+        "Wall Street NYSE NASDAQ tendance hausse baisse 2026",
+        "marchés européens Euronext opportunités actions 2026",
     ]
     snippets = []
     for q in queries:
         snippets += _snippets(_search(q, max_results=2))
-    return "\n".join(snippets[:9]) or "Données web indisponibles."
+    return "\n".join(snippets[:12]) or "Données web indisponibles."
 
 
 def research_stock(ticker: str, company_name: str = "") -> str:
@@ -90,24 +91,25 @@ def search_catalysts(ticker: str, company_name: str = "") -> str:
 
 
 def market_catalysts() -> str:
-    """Scrute Euronext pour des actions avec catalyseurs imminents à fort potentiel."""
+    """Scrute les marchés mondiaux pour des actions avec catalyseurs imminents à fort potentiel."""
     queries = [
-        "Euronext Paris small cap résultats publication prochaines semaines juin 2026",
-        "action France catalyseur fort hausse rapide contrat OPA annonce 2026",
-        "small cap Euronext Growth achat recommandation analyste objectif hausse 2026",
-        "bourse Paris valeur momentum fort volume achat signal technique 2026",
+        "Euronext Paris small cap résultats publication prochaines semaines 2026 hausse",
+        "action Europe catalyseur fort OPA contrat partenariat annonce hausse 2026",
+        "NYSE NASDAQ stock earnings catalyst buy recommendation analyst target 2026",
+        "biotech pharma FDA approval catalyst stock surge 2026",
+        "tech stock momentum breakout analyst upgrade 2026",
     ]
     snippets = []
     for q in queries:
         snippets += _snippets(_search(q, max_results=3))
-    return "\n".join(snippets[:12]) or "Aucune donnée catalyseurs disponible."
+    return "\n".join(snippets[:15]) or "Aucune donnée catalyseurs disponible."
 
 
 def scan_sector(sector: str) -> str:
-    """Recherche les meilleures opportunités dans un secteur."""
+    """Recherche les meilleures opportunités dans un secteur, tous marchés."""
     queries = [
-        f"meilleures actions {sector} Euronext 2026 hausse",
-        f"{sector} small cap France achat recommandation analyste",
+        f"best {sector} stocks buy recommendation analyst target 2026",
+        f"{sector} actions Euronext NYSE catalyseur hausse 2026",
     ]
     snippets = []
     for q in queries:
