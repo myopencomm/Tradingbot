@@ -85,6 +85,22 @@ def _portfolio_snapshot() -> str:
             )
         else:
             lines.append(f"  {name}: prix indisponible | PRU {cfg['entry_price']}€ | {cfg['qty']}t")
+
+    pending = data.get("pending_orders", {})
+    if pending:
+        lines.append("⏳ Ordres en attente (cash réservé) :")
+        for name, cfg in pending.items():
+            quote = prices.get_quote(cfg["ticker"])
+            price = quote.get("price") or "?"
+            drift = ""
+            if isinstance(price, float):
+                d = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
+                drift = f" | cours actuel {price}€ ({d:+.1f}% vs entrée)"
+            lines.append(
+                f"  {name} ({cfg['ticker']}): achat limite {cfg['entry_price']}€ "
+                f"x {cfg['qty']}t — {cfg['reserved_cash']:.0f}€ réservés{drift}"
+            )
+
     return "\n".join(lines)
 
 
@@ -316,8 +332,12 @@ CATALYSEURS IMMINENTS EURONEXT
 {catalysts}
 
 Cash disponible : {cash}€
-Propose 3 opportunités Euronext avec un catalyseur imminent identifié (résultats, contrat, OPA, rachat).
-Priorise les valeurs avec momentum positif et volume en hausse.
+
+Si des ordres en attente sont listés ci-dessus, commence par les évaluer :
+ORDRE EN ATTENTE NOM — MAINTENIR ou ANNULER ?
+- Justification courte (conditions changées ? thèse toujours valide ?)
+
+Ensuite propose jusqu'à 3 nouvelles opportunités Euronext avec catalyseur imminent.
 Pour chaque opportunité, format exact :
 NOM SOCIETE (TICKER.PA)
 - Entrée : X€  SL : X€  TP : X€

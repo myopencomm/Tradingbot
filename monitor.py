@@ -7,6 +7,40 @@ import orders
 PARIS = pytz.timezone("Europe/Paris")
 
 
+def check_pending_orders(send_fn) -> None:
+    """Vérifie les ordres en attente : alerte si déclenché ou si le cours s'éloigne trop."""
+    pending = portfolio.get_pending_orders()
+    if not pending:
+        return
+
+    for name, cfg in pending.items():
+        quote = prices.get_quote(cfg["ticker"])
+        price = quote.get("price")
+        if not price:
+            continue
+
+        entry     = cfg["entry_price"]
+        drift_pct = ((price - entry) / entry) * 100
+
+        if price <= entry:
+            send_fn(
+                f"🟢 ORDRE DÉCLENCHÉ — {name}\n\n"
+                f"Cours: {price}€ ≤ entrée cible: {entry}€\n"
+                f"Ton ordre sur Bourse Direct devrait s'être activé.\n\n"
+                f"Une fois l'achat confirmé sur BD, enregistre ici :\n"
+                f"/add {name} {cfg['ticker']} {cfg['qty']} {entry} "
+                f"{cfg['target_low']} {cfg['target_high']}"
+            )
+        elif drift_pct > 15:
+            send_fn(
+                f"⚠️ ORDRE EXPIRANT — {name}\n\n"
+                f"Cours: {price}€ (+{drift_pct:.1f}% au-dessus de ton entrée {entry}€)\n"
+                f"Le cours s'éloigne. La stratégie est peut-être dépassée.\n\n"
+                f"→ /annuler {name}  (libère {cfg['reserved_cash']:.0f}€)\n"
+                f"→ /research {cfg['ticker']}  (réévaluer)"
+            )
+
+
 def check_positions(send_fn) -> None:
     """Scan des positions 4x/jour. Alerte si SL ou TP atteint."""
     data = portfolio.load()

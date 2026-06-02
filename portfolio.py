@@ -44,6 +44,42 @@ def remove_position(name: str):
     save(data)
 
 
+def add_pending_order(name: str, ticker: str, qty: int, entry_price: float,
+                      sl: float, tp: float) -> float:
+    """Enregistre un ordre en attente et réserve le cash. Retourne le cash réservé."""
+    from datetime import datetime
+    data = load()
+    reserved = round(entry_price * qty, 2)
+    data.setdefault("pending_orders", {})[name.upper()] = {
+        "ticker":        ticker,
+        "qty":           qty,
+        "entry_price":   round(entry_price, 4),
+        "target_low":    round(sl, 4),
+        "target_high":   round(tp, 4),
+        "reserved_cash": reserved,
+        "created_at":    datetime.now().strftime("%Y-%m-%d"),
+    }
+    data["cash_available"] = round(data.get("cash_available", 0) - reserved, 2)
+    save(data)
+    return reserved
+
+
+def cancel_pending_order(name: str) -> float:
+    """Annule un ordre en attente et libère le cash réservé. Retourne le cash libéré."""
+    data = load()
+    order = data.get("pending_orders", {}).pop(name.upper(), None)
+    if order:
+        released = order.get("reserved_cash", 0)
+        data["cash_available"] = round(data.get("cash_available", 0) + released, 2)
+        save(data)
+        return released
+    return 0.0
+
+
+def get_pending_orders() -> dict:
+    return load().get("pending_orders", {})
+
+
 def update_cash(amount: float):
     data = load()
     data["cash_available"] = round(amount, 2)

@@ -88,6 +88,11 @@ def cmd_help(args, cid):
         "/order sell TICKER QTE PRIX — Ordre vente simple\n"
         "\n"
         "PERFORMANCES\n"
+        "ORDRES EN ATTENTE\n"
+        "/attente NOM TICKER QTE PRIX [SL TP] — Enregistre un ordre limite\n"
+        "  ex: /attente EXOSENS EXENS.PA 17 63\n"
+        "/annuler NOM — Annule et libere le cash reserve\n"
+        "\n"
         "/stats — Win Rate, P&L realise/latent, Profit Factor\n"
         "/vendu NOM [PRIX] — Cloturer (prix TP auto si omis)\n"
         "/close TICKER QTY PRIX [FRAIS] — Cloturer avec frais\n"
@@ -150,6 +155,29 @@ def cmd_status(args, cid):
             lines.append(f"{name}: prix indisponible | PRU {cfg['entry_price']}€")
 
     lines.append(f"\nP&L total positions: {total_pnl:+.0f}€")
+
+    pending = data.get("pending_orders", {})
+    if pending:
+        lines.append("\nORDRES EN ATTENTE")
+        for name, cfg in pending.items():
+            q = prices.get_quote(cfg["ticker"])
+            price = q.get("price")
+            if price:
+                drift = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
+                lines.append(
+                    f"{name} ({cfg['ticker']})\n"
+                    f"  Achat limite: {cfg['entry_price']}€ x {cfg['qty']}t "
+                    f"({cfg['reserved_cash']:.0f}€ réservés)\n"
+                    f"  Cours actuel: {price}€ ({drift:+.1f}%) | "
+                    f"SL: {cfg['target_low']}€  TP: {cfg['target_high']}€\n"
+                    f"  → /annuler {name} pour libérer le cash"
+                )
+            else:
+                lines.append(
+                    f"{name}: {cfg['entry_price']}€ x {cfg['qty']}t "
+                    f"({cfg['reserved_cash']:.0f}€ réservés)"
+                )
+
     send("\n".join(lines), cid)
 
 
@@ -172,13 +200,23 @@ def cmd_add(args, cid):
         return
     try:
         ticker = args[0].upper()
-        qty = int(args[1])
-        pru = float(args[2].replace(",", "."))
-        sl = float(args[3].replace(",", "."))
-        tp = float(args[4].replace(",", "."))
-        name = ticker.split(".")[0]
+        qty    = int(args[1])
+        pru    = float(args[2].replace(",", "."))
+        sl     = float(args[3].replace(",", "."))
+        tp     = float(args[4].replace(",", "."))
+        name   = ticker.split(".")[0]
+
+        # Si un ordre en attente existait pour cette valeur, l'annuler sans rendre le cash
+        # (le cash était déjà réservé = déjà déduit du disponible)
+        data = portfolio.load()
+        had_pending = name in data.get("pending_orders", {})
+        if had_pending:
+            data.get("pending_orders", {}).pop(name, None)
+            portfolio.save(data)
+
         portfolio.add_position(name, ticker, qty, pru, sl, tp)
-        send(f"Position ajoutee: {name}\n{qty}t @ PRU {pru}€ | SL {sl}€ | TP {tp}€", cid)
+        note = " (ordre en attente cloture)" if had_pending else ""
+        send(f"Position ajoutee: {name}{note}\n{qty}t @ PRU {pru}€ | SL {sl}€ | TP {tp}€", cid)
     except (ValueError, IndexError):
         send("Format invalide.\nEx: /add GNFT.PA 100 8.51 7.66 9.79", cid)
 
@@ -357,6 +395,75 @@ def cmd_close(args, cid):
         "/stats pour voir l'historique complet.",
         cid,
     )
+
+
+def cmd_attente(args, cid):
+    # /attente NOM TICKER QTE PRIX [SL TP]
+    if len(args) < 4:
+        send(
+            "Usage: /attente NOM TICKER QTE PRIX [SL TP]\n"
+            "Ex: /attente EXOSENS EXENS.PA 17 63\n"
+            "Ex: /attente EXOSENS EXENS.PA 17 63 56.70 72.45\n\n"
+            "Reserve le cash et surveille le declenchement.",
+            cid,
+        )
+        return
+    try:
+        name   = args[0].upper()
+        ticker = args[1].upper()
+        qty    = int(args[2])
+        entry  = float(args[3].replace(",", "."))
+        sl     = float(args[4].replace(",", ".")) if len(args) > 4 else round(entry * 0.90, 4)
+        tp     = float(args[5].replace(",", ".")) if len(args) > 5 else round(entry * 1.15, 4)
+    except (ValueError, IndexError):
+        send("Format invalide.", cid)
+        return
+
+    cash     = portfolio.get_cash()
+    reserved = round(entry * qty, 2)
+    if reserved > cash:
+        send(f"Cash insuffisant : {reserved}€ requis, {cash}€ disponible.", cid)
+        return
+
+    portfolio.add_pending_order(name, ticker, qty, entry, sl, tp)
+    send(
+        f"Ordre en attente enregistre — {name}\n"
+        f"  {qty}t @ {entry}€  SL: {sl}€  TP: {tp}€\n"
+        f"  {reserved:.0f}€ reserves\n"
+        f"  Cash restant: {portfolio.get_cash():.2f}€\n\n"
+        f"Alerte quand le cours atteint {entry}€.\n"
+        f"→ /annuler {name} pour liberer le cash",
+        cid,
+    )
+
+
+def cmd_annuler(args, cid):
+    # /annuler NOM — annule un ordre en attente et libère le cash
+    if not args:
+        pending = portfolio.get_pending_orders()
+        if not pending:
+            send("Aucun ordre en attente.", cid)
+        else:
+            send(
+                "Ordres en attente :\n" +
+                "\n".join(f"- {n} ({cfg['entry_price']}€ x {cfg['qty']}t)"
+                          for n, cfg in pending.items()) +
+                "\n\nUsage: /annuler NOM",
+                cid,
+            )
+        return
+
+    name     = args[0].upper()
+    released = portfolio.cancel_pending_order(name)
+    if released:
+        send(
+            f"Ordre {name} annule.\n"
+            f"  {released:.0f}€ liberes\n"
+            f"  Cash disponible: {portfolio.get_cash():.2f}€",
+            cid,
+        )
+    else:
+        send(f"Aucun ordre en attente pour {name}.", cid)
 
 
 def cmd_update(args, cid):
@@ -717,6 +824,8 @@ COMMANDS = {
     "/setup": cmd_setup,
     "/stats": cmd_stats,
     "/close": cmd_close,
+    "/attente": cmd_attente,
+    "/annuler": cmd_annuler,
     "/vendu": cmd_vendu,
     "/syncmail": cmd_syncmail,
     "/update": cmd_update,

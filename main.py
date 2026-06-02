@@ -24,7 +24,11 @@ def _auto_gmail_check():
 def run_scheduler():
     for t in CHECK_TIMES:
         schedule.every().day.at(t).do(
-            lambda: (_auto_gmail_check(), monitor.check_positions(telegram_bot.send)) if _market_day() else None
+            lambda: (
+                _auto_gmail_check(),
+                monitor.check_pending_orders(telegram_bot.send),
+                monitor.check_positions(telegram_bot.send),
+            ) if _market_day() else None
         )
     schedule.every().day.at(ANALYSIS_TIME).do(
         lambda: analysis.morning_briefing(telegram_bot.send) if _market_day() else None
