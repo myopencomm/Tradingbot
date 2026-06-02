@@ -1,5 +1,9 @@
 import time
+from datetime import datetime, timedelta
+import pytz
 import yfinance as yf
+
+_PARIS = pytz.timezone("Europe/Paris")
 
 # Cache devise par ticker (USD, EUR, GBP…)
 _currency_cache: dict[str, str] = {}
@@ -50,6 +54,31 @@ def get_technicals(ticker: str) -> dict:
         return {"rsi": rsi, "momentum_1m": mom_1m, "vol_ratio": vol_r}
     except Exception as e:
         print(f"⚠️ Technicals error {ticker}: {e}")
+        return {}
+
+
+def get_intraday_range(ticker: str, hours: int = 4) -> dict:
+    """High et Low des N dernières heures en bougies horaires.
+
+    Retourne {"high": float, "low": float, "current": float}
+    ou {} si données indisponibles.
+    Permet de détecter un franchissement de seuil entre deux checks.
+    """
+    try:
+        hist = yf.Ticker(ticker).history(period="1d", interval="1h")
+        if hist.empty:
+            return {}
+        cutoff = datetime.now(pytz.UTC) - timedelta(hours=hours)
+        recent = hist[hist.index >= cutoff]
+        if recent.empty:
+            return {}
+        return {
+            "high":    round(float(recent["High"].max()), 4),
+            "low":     round(float(recent["Low"].min()), 4),
+            "current": round(float(recent["Close"].iloc[-1]), 4),
+        }
+    except Exception as e:
+        print(f"⚠️ Intraday range error {ticker}: {e}")
         return {}
 
 
