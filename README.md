@@ -336,8 +336,8 @@ Bourse Direct envoie un email "Finalisation de votre stratégie" dès qu'un ordr
 > Paramètres Gmail → Voir tous les paramètres → Transfert et POP/IMAP → Activer IMAP
 
 **2. Créez un mot de passe d'application :**
-> [myaccount.google.com](https://myaccount.google.com) → Sécurité → Mots de passe des applications
-> (Nécessite la validation en 2 étapes — recommandée de toute façon)
+> Lien direct : [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+> (Nécessite la validation en 2 étapes — si le lien ne fonctionne pas, active d'abord la validation en 2 étapes dans Sécurité)
 
 **3. Ajoutez dans votre `.env` :**
 ```env

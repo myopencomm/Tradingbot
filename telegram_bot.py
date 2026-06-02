@@ -758,9 +758,9 @@ def cmd_tuto(args, cid):
         "OPTIONNEL — Sync Gmail Bourse Direct\n"
         "  GMAIL_USER=ton@gmail.com\n"
         "  GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx\n"
-        "  (cree un mot de passe d application :\n"
-        "   myaccount.google.com > Securite\n"
-        "   > Mots de passe des applications)\n"
+        "  Lien direct pour creer le mot de passe :\n"
+        "  myaccount.google.com/apppasswords\n"
+        "  (necessite la validation en 2 etapes)\n"
         "\n"
         "Ne partage JAMAIS ce fichier .env.\n"
         "Il est dans .gitignore — jamais envoye sur GitHub.",
