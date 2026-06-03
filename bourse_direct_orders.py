@@ -41,8 +41,38 @@ TICKER_MAP: dict[str, dict] = {
 
 
 def get_ticker_info(yf_ticker: str) -> dict | None:
-    """Retourne les données BD pour un ticker yfinance, ou None si inconnu."""
-    return TICKER_MAP.get(yf_ticker.upper())
+    """
+    Retourne les données BD pour un ticker yfinance.
+    Cherche d'abord dans TICKER_MAP (override manuel),
+    puis applique les règles de conversion automatique.
+
+    Règles de conversion yfinance → BD :
+      .PA  → E:<base>  MIC=XPAR  EUR   (Euronext Paris)
+      .BR  → E:<base>  MIC=XBRU  EUR   (Euronext Bruxelles)
+      .AS  → E:<base>  MIC=XAMS  EUR   (Euronext Amsterdam)
+      .L   → <base>    MIC=XLON  GBP   (London Stock Exchange)
+      .DE  → <base>    MIC=XETR  EUR   (Xetra Frankfurt)
+      (rien) → <base>  MIC=XNAS  USD   (NASDAQ — défaut US)
+    """
+    t = yf_ticker.upper()
+    if t in TICKER_MAP:
+        return TICKER_MAP[t]
+
+    # Conversion automatique par suffixe
+    for suffix, bd_prefix, mic, currency in [
+        (".PA", "E:", "XPAR", "EUR"),
+        (".BR", "E:", "XBRU", "EUR"),
+        (".AS", "E:", "XAMS", "EUR"),
+        (".L",  "",   "XLON", "GBP"),
+        (".DE", "",   "XETR", "EUR"),
+    ]:
+        if t.endswith(suffix):
+            base = t[: -len(suffix)]
+            return {"bd_ticker": f"{bd_prefix}{base}", "mic": mic, "currency": currency}
+
+    # US stock sans suffixe — NASDAQ par défaut
+    # Si c'est un NYSE, ajouter manuellement dans TICKER_MAP avec "mic": "XNYS"
+    return {"bd_ticker": t, "mic": "XNAS", "currency": "USD"}
 
 
 def register_ticker(yf_ticker: str, bd_ticker: str, mic: str, currency: str):

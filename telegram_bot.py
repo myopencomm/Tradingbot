@@ -102,6 +102,12 @@ def cmd_help(args, cid):
         "/syncmail — Sync Gmail : detecte les ordres BD executes\n"
         "/update — Version actuelle + alerte si mise a jour dispo\n"
         "\n"
+        "ORDRES PLAYWRIGHT (mode Playwright requis)\n"
+        "/ordre vendre TICKER QTE marche|limite PRIX|expert SL TP\n"
+        "/ordre acheter TICKER QTE marche|limite PRIX\n"
+        "/oui — Confirmer l'ordre en attente\n"
+        "/non — Annuler l'ordre en attente\n"
+        "\n"
         "ANALYSE IA\n"
         "/morning — Briefing complet (macro + positions + opps)\n"
         "/scan — Top 3 opportunites avec le cash dispo\n"
@@ -1000,6 +1006,194 @@ def cmd_sync(args, cid):
     ).start()
 
 
+# ─── Ordres Playwright ──────────────────────────────────────────────────────
+
+_pending_order: dict | None = None  # {"order_id", "is_expert", "ticker", "summary", "expires"}
+_pending_lock = threading.Lock()
+
+
+def _check_playwright_ready(cid) -> bool:
+    if not bot_mode.is_playwright():
+        send("Mode Playwright requis. /connect pour l'activer.", cid)
+        return False
+    if not playwright_session.is_connected():
+        send("Session BD non connectee. /connect pour relancer.", cid)
+        return False
+    return True
+
+
+def cmd_ordre(args, cid):
+    """
+    /ordre vendre TICKER QTE marche
+    /ordre vendre TICKER QTE limite PRIX
+    /ordre vendre TICKER QTE expert SL TP
+    /ordre acheter TICKER QTE marche
+    /ordre acheter TICKER QTE limite PRIX
+    """
+    global _pending_order
+    if not _check_playwright_ready(cid):
+        return
+    if len(args) < 4:
+        send(
+            "Usage :\n"
+            "/ordre vendre TICKER QTE marche\n"
+            "/ordre vendre TICKER QTE limite PRIX\n"
+            "/ordre vendre TICKER QTE expert SL TP\n"
+            "/ordre acheter TICKER QTE marche\n"
+            "/ordre acheter TICKER QTE limite PRIX\n"
+            "Ex: /ordre vendre EXENS.PA 17 expert 56.7 72.45",
+            cid,
+        )
+        return
+
+    sens      = args[0].lower()
+    ticker    = args[1].upper()
+    try:
+        qty   = int(args[2])
+    except ValueError:
+        send("Quantite invalide.", cid)
+        return
+    type_arg  = args[3].lower()
+
+    if sens not in ("vendre", "acheter"):
+        send("Sens invalide : vendre ou acheter.", cid)
+        return
+
+    side = "sell" if sens == "vendre" else "buy"
+
+    import bourse_direct_orders as bd_orders
+
+    # Vérifie que le ticker est résolvable
+    info = bd_orders.get_ticker_info(ticker)
+    if not info:
+        send(f"Ticker {ticker} non reconnu.", cid)
+        return
+
+    send(f"Preparation de l'ordre {sens} {qty}x {ticker}...", cid)
+
+    def _do_order():
+        global _pending_order
+        page = playwright_session.get_page()
+
+        try:
+            if type_arg == "expert":
+                if len(args) < 6:
+                    send("Expert requiert SL et TP : /ordre vendre TICKER QTE expert SL TP", cid)
+                    return
+                sl = float(args[4].replace(",", "."))
+                tp = float(args[5].replace(",", "."))
+                order_data = bd_orders.create_expert_order(page, ticker, qty, sl, tp)
+                is_expert  = True
+                summary    = bd_orders.format_order_summary(
+                    order_data or {}, ticker, side, qty, "meta",
+                    limit_price=tp, stop_price=sl
+                )
+            elif type_arg == "limite":
+                if len(args) < 5:
+                    send("Limite requiert un prix : /ordre vendre TICKER QTE limite PRIX", cid)
+                    return
+                prix = float(args[4].replace(",", "."))
+                order_data = bd_orders.create_order(
+                    page, ticker, side, qty,
+                    order_type="limit", limit_price=prix
+                )
+                is_expert  = False
+                summary    = bd_orders.format_order_summary(
+                    order_data or {}, ticker, side, qty, "limit", limit_price=prix
+                )
+            else:  # marche
+                order_data = bd_orders.create_order(
+                    page, ticker, side, qty, order_type="market"
+                )
+                is_expert  = False
+                summary    = bd_orders.format_order_summary(
+                    order_data or {}, ticker, side, qty, "market"
+                )
+
+            if not order_data:
+                send(f"Echec creation ordre {ticker}. Verifier session BD (/sync).", cid)
+                return
+
+            order_id = order_data.get("id") or order_data.get("order_id")
+            with _pending_lock:
+                _pending_order = {
+                    "order_id":  order_id,
+                    "is_expert": is_expert,
+                    "ticker":    ticker,
+                    "summary":   summary,
+                    "expires":   time.time() + 120,
+                }
+
+            send(
+                f"RECAPITULATIF ORDRE\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"{summary}\n\n"
+                f"/oui — Envoyer au marche (irreversible)\n"
+                f"/non — Annuler (120s timeout)",
+                cid,
+            )
+
+        except Exception as e:
+            send(f"Erreur ordre : {e}", cid)
+
+    threading.Thread(target=_do_order, daemon=True).start()
+
+
+def cmd_oui(args, cid):
+    """Confirme et envoie l'ordre en attente de confirmation."""
+    global _pending_order
+    if not _check_playwright_ready(cid):
+        return
+
+    with _pending_lock:
+        pending = _pending_order
+
+    if not pending:
+        send("Aucun ordre en attente de confirmation.", cid)
+        return
+    if time.time() > pending["expires"]:
+        with _pending_lock:
+            _pending_order = None
+        send("Ordre expire (> 120s). Relance /ordre pour recommencer.", cid)
+        return
+
+    send("Envoi de l'ordre au marche...", cid)
+
+    def _do_send():
+        global _pending_order
+        import bourse_direct_orders as bd_orders
+        page = playwright_session.get_page()
+        try:
+            if pending["is_expert"]:
+                result = bd_orders.execute_strategy(page, pending["order_id"])
+            else:
+                result = bd_orders.send_order(page, pending["order_id"])
+
+            with _pending_lock:
+                _pending_order = None
+
+            if result:
+                send(f"Ordre envoye\n{pending['summary']}", cid)
+            else:
+                send("Envoi echoue — verifier sur BD directement.", cid)
+        except Exception as e:
+            send(f"Erreur envoi : {e}", cid)
+
+    threading.Thread(target=_do_send, daemon=True).start()
+
+
+def cmd_non(args, cid):
+    """Annule l'ordre en attente de confirmation."""
+    global _pending_order
+    with _pending_lock:
+        if _pending_order:
+            ticker = _pending_order.get("ticker", "")
+            _pending_order = None
+            send(f"Ordre {ticker} annule.", cid)
+        else:
+            send("Aucun ordre en attente.", cid)
+
+
 # ─── Routeur ────────────────────────────────────────────────────────────────
 
 COMMANDS = {
@@ -1010,6 +1204,9 @@ COMMANDS = {
     "/connect": cmd_connect,
     "/disconnect": cmd_disconnect,
     "/sync": cmd_sync,
+    "/ordre": cmd_ordre,
+    "/oui": cmd_oui,
+    "/non": cmd_non,
     "/cash": cmd_cash,
     "/add": cmd_add,
     "/remove": cmd_remove,
