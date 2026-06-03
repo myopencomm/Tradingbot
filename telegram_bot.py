@@ -657,7 +657,7 @@ def cmd_import(args, cid):
 
 def cmd_tuto(args, cid):
     send(
-        "TradingBot — Guide complet (1/7)\n"
+        "TradingBot — Guide complet (1/8)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 1 — Creer ton bot Telegram\n"
@@ -673,7 +673,7 @@ def cmd_tuto(args, cid):
     )
     time.sleep(0.5)
     send(
-        "TradingBot — Guide complet (2/7)\n"
+        "TradingBot — Guide complet (2/8)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 2 — Obtenir ton Chat ID\n"
@@ -692,7 +692,7 @@ def cmd_tuto(args, cid):
     )
     time.sleep(0.5)
     send(
-        "TradingBot — Guide complet (3/7)\n"
+        "TradingBot — Guide complet (3/8)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 3 — Choisir et configurer ton IA\n"
@@ -725,7 +725,7 @@ def cmd_tuto(args, cid):
     )
     time.sleep(0.5)
     send(
-        "TradingBot — Guide complet (4/7)\n"
+        "TradingBot — Guide complet (4/8)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 4 — Telecharger et installer\n"
@@ -749,7 +749,7 @@ def cmd_tuto(args, cid):
     )
     time.sleep(0.5)
     send(
-        "TradingBot — Guide complet (5/7)\n"
+        "TradingBot — Guide complet (5/8)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 5 — Configurer le fichier .env\n"
@@ -776,7 +776,7 @@ def cmd_tuto(args, cid):
     )
     time.sleep(0.5)
     send(
-        "TradingBot — Guide complet (6/7)\n"
+        "TradingBot — Guide complet (6/8)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "ETAPE 6 — Lancer et utiliser le bot\n"
@@ -808,7 +808,7 @@ def cmd_tuto(args, cid):
     )
     time.sleep(0.5)
     send(
-        "TradingBot — Guide complet (7/7)\n"
+        "TradingBot — Guide complet (7/8)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
         "FONCTIONNALITES AVANCEES\n"
@@ -838,6 +838,40 @@ def cmd_tuto(args, cid):
         "  git pull origin main + relancer le bot\n"
         "\n"
         "Code source : github.com/myopencomm/Tradingbot\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Suite : /tuto 8 — Mode Playwright (connexion BD)",
+        cid,
+    )
+    time.sleep(0.5)
+    send(
+        "TradingBot — Guide complet (8/8)\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "\n"
+        "MODE PLAYWRIGHT — OPTIONNEL\n"
+        "\n"
+        "Connexion directe a Bourse Direct via navigateur\n"
+        "headless. Lecture live du portefeuille et du cash.\n"
+        "Les screenshots restent disponibles en parallele.\n"
+        "\n"
+        "INSTALLATION (une seule fois)\n"
+        "  venv/bin/pip install playwright\n"
+        "  venv/bin/playwright install chromium\n"
+        "\n"
+        "CONFIGURATION (.env)\n"
+        "  BD_LOGIN=ton_identifiant_bourse_direct\n"
+        "  BD_PASSWORD=ton_mot_de_passe\n"
+        "\n"
+        "UTILISATION\n"
+        "  /connect  → connexion a BD\n"
+        "    Si 2FA : le bot attend ton code SMS\n"
+        "    Envoie le code directement dans Telegram\n"
+        "  /mode     → etat de la connexion\n"
+        "  /sync     → synchronise portefeuille depuis BD\n"
+        "  /disconnect → revenir en mode Classic\n"
+        "\n"
+        "Le bot demarre toujours en mode Classic.\n"
+        "/connect est requis apres chaque redemarrage.\n"
+        "\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Tape /help pour la liste complete des commandes",
         cid,

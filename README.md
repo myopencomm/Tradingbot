@@ -7,8 +7,13 @@
 ![Platform](https://img.shields.io/badge/Platform-Telegram-26A5E4?logo=telegram&logoColor=white)
 ![AI](https://img.shields.io/badge/IA-Groq%20%7C%20Gemini%20%7C%20Anthropic%20%7C%20OpenAI%20%7C%20Mistral-orange)
 ![Broker](https://img.shields.io/badge/Courtier-Bourse%20Direct-navy)
+![Mode](https://img.shields.io/badge/Mode-Classic%20%7C%20Playwright-purple)
 
 Bourse Direct ne dispose pas d'API publique. TradingBot comble ce manque : il analyse votre portefeuille chaque matin, surveille vos positions, génère les instructions d'ordres précises à saisir sur l'app iPhone ou web, et vous alerte en temps réel — le tout depuis Telegram.
+
+**Deux modes de fonctionnement :**
+- **Mode Classic** (défaut) : données via Yahoo Finance + import par captures d'écran — aucun accès à votre compte BD requis.
+- **Mode Playwright** (optionnel) : le bot se connecte à Bourse Direct via un navigateur headless, lit vos données en temps réel et prépare les ordres directement dans l'interface web.
 
 ---
 
@@ -228,6 +233,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Sync Gmail Bourse Direct** | Détecte auto les emails "Finalisation de votre stratégie" et clôture les positions (IMAP, sans OAuth) |
 | **Recherche web gratuite** | DuckDuckGo + yfinance — aucune clé payante requise |
 | **Contexte personnel** | Fichier de contexte IA pour des conseils adaptés à votre situation |
+| **Mode Playwright** *(optionnel)* | Connexion Bourse Direct via navigateur headless — lecture live du portefeuille, cash et cours réels |
 
 ---
 
@@ -235,30 +241,36 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 
 ```
 TradingBot/
-├── main.py           Point d'entrée : lance le scheduler + le polling Telegram
-├── config.py         Variables d'env centralisées (lues depuis .env)
-├── telegram_bot.py   Polling Telegram, routing des commandes, buffer photo
-├── analysis.py       Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
-├── monitor.py        Vérification SL/TP 4×/jour, envoi des alertes
-├── orders.py         Génère les instructions texte format Bourse Direct
-├── portfolio.py      CRUD positions.json + import CSV
-├── prices.py         Prix temps réel + indicateurs techniques (RSI, momentum, volume)
-├── ai_provider.py    Abstraction multi-providers avec vision (5 providers)
-├── research.py       Recherche web DuckDuckGo : marché, actions, catalyseurs imminents
-├── gmail_sync.py     Sync IMAP Gmail : détecte les ordres BD finalisés et clôture auto
-├── stats.py          Historique des trades, P&L, win rate, profit factor
+├── main.py                  Point d'entrée : lance le scheduler + le polling Telegram
+├── config.py                Variables d'env centralisées (lues depuis .env)
+├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
+├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
+├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes
+├── orders.py                Génère les instructions texte format Bourse Direct
+├── portfolio.py             CRUD positions.json + import CSV
+├── prices.py                Prix temps réel + indicateurs techniques (RSI, momentum, volume)
+├── ai_provider.py           Abstraction multi-providers avec vision (5 providers)
+├── research.py              Recherche web DuckDuckGo : marché, actions, catalyseurs imminents
+├── gmail_sync.py            Sync IMAP Gmail : détecte les ordres BD finalisés et clôture auto
+├── stats.py                 Historique des trades, P&L, win rate, profit factor
+│
+├── bot_mode.py              [Playwright] Gestion Classic/Playwright + persistance bot_state.json
+├── playwright_session.py    [Playwright] Singleton Chromium headless — lifecycle start/stop
+├── bourse_direct_auth.py    [Playwright] Login BD + relay code 2FA via Telegram
+├── bourse_direct_reader.py  [Playwright] Lecture portefeuille, cash, cours depuis BD
 │
 ├── .env.example                      Template de configuration
 ├── positions.example.json            Exemple de portefeuille
 ├── CLAUDE_TRADING_CONTEXT.example.md Template de contexte IA personnel
 │
 ├── positions.json             Votre portefeuille — ignoré par git ✅
+├── bot_state.json             Mode actif (classic/playwright) — ignoré par git ✅
 ├── CLAUDE_TRADING_CONTEXT.md  Votre contexte personnel — ignoré par git ✅
 └── .env                       Vos secrets — ignoré par git ✅
 ```
 
 **Flux de données :**
-`positions.json` est la source de vérité, lue dynamiquement à chaque cycle — pas besoin de redémarrer le bot après une modification.
+`positions.json` est la source de vérité en mode Classic. En mode Playwright, `bourse_direct_reader.py` synchronise les données réelles de BD dans ce même fichier — les deux modes sont compatibles et le fichier reste toujours à jour.
 
 **Scheduler :** `schedule` (Python) — 4 checks SL/TP/jour + briefing 9h05. Tourne dans le thread principal, le polling Telegram dans un thread daemon.
 
@@ -269,6 +281,7 @@ TradingBot/
 - `duckduckgo-search` — recherche web (gratuit, sans clé)
 - `python-telegram-bot` non utilisé — polling HTTP direct via `requests` pour garder le contrôle
 - `schedule` — scheduler léger (cron-like en Python pur)
+- `playwright` *(optionnel)* — navigateur Chromium headless pour le mode Playwright
 
 ---
 
@@ -315,14 +328,95 @@ TradingBot/
 
 > **`/vendu`** est la commande recommandée au quotidien. Elle accepte le nom court ou le ticker, récupère automatiquement le prix du TP posé sur Bourse Direct, et met à jour le cash.
 
+### Mode Playwright *(optionnel)*
+
+| Commande | Description |
+|---|---|
+| `/mode` | Afficher le mode actuel (Classic ou Playwright) et l'état de la session |
+| `/connect` | Activer le mode Playwright — connexion à Bourse Direct avec relay 2FA |
+| `/disconnect` | Fermer la session Playwright et revenir en mode Classic |
+| `/sync` | Synchroniser le portefeuille depuis Bourse Direct (mode Playwright uniquement) |
+
 ### Import & Aide
 
 | Commande | Description |
 |---|---|
-| 📸 Photo | Captures d'écran du portefeuille Bourse Direct — import automatique |
+| 📸 Photo | Captures d'écran du portefeuille Bourse Direct — import automatique (Classic et Playwright) |
 | `/import` | Guide import CSV Bourse Direct |
 | `/help` | Liste complète des commandes |
 | `/tuto` | Rappel des étapes de configuration |
+
+---
+
+## Mode Playwright — Connexion Bourse Direct
+
+Le mode Playwright est **entièrement optionnel**. Le mode Classic (défaut) reste pleinement fonctionnel sans rien configurer.
+
+### Ce que ça apporte
+
+| | Mode Classic | Mode Playwright |
+|---|---|---|
+| Source des données marché | Yahoo Finance (différé 15 min) | Yahoo Finance + cours BD live |
+| Source du portefeuille | Captures d'écran + saisie manuelle | Lecture automatique depuis BD |
+| Cash disponible | Mis à jour manuellement | Synchronisé depuis BD |
+| Passage d'ordres | Instructions texte à saisir | Pré-remplissage dans BD + confirmation |
+| Import de positions | Photo ou CSV | Sync automatique |
+
+### Prérequis
+
+```bash
+# Installer playwright dans le venv
+venv/bin/pip install playwright
+venv/bin/playwright install chromium
+```
+
+### Configuration
+
+Ajoutez dans votre `.env` :
+
+```env
+BD_LOGIN=votre_identifiant_bourse_direct
+BD_PASSWORD=votre_mot_de_passe
+```
+
+> ⚠️ Ces credentials ne quittent jamais votre machine. Ils sont dans `.gitignore` et ne sont jamais loggés ni transmis.
+
+### Utilisation
+
+**Activer le mode Playwright :**
+```
+/connect
+```
+Le bot lance Chromium en arrière-plan, se connecte à Bourse Direct, et vous demande votre code 2FA via Telegram si nécessaire (90 secondes pour répondre).
+
+```
+Bot : "Code 2FA Bourse Direct reçu par SMS ? Envoie-le ici (tu as 90 secondes) :"
+Vous : 847291
+Bot : "Mode Playwright actif ✅ Connecté à Bourse Direct"
+```
+
+**Voir l'état du mode :**
+```
+/mode
+```
+
+**Synchroniser le portefeuille :**
+```
+/sync
+```
+
+**Revenir en mode Classic :**
+```
+/disconnect
+```
+
+### Comportement au redémarrage
+
+Le bot démarre **toujours en mode Classic**, même si le mode Playwright était actif avant. La session Playwright ne survit pas à un redémarrage — vous devez relancer `/connect` manuellement.
+
+### Note sur les CGU
+
+L'automatisation d'un site web via navigateur headless est techniquement en zone grise dans les CGU de la plupart des courtiers. Ce mode est conçu pour un usage personnel, sur votre propre compte, sans impact sur les systèmes de BD. Utilisez-le en connaissance de cause.
 
 ---
 
@@ -391,6 +485,14 @@ Vérifiez les nouveautés dans le [CHANGELOG](#changelog) ou via `/version` dans
 
 ## Changelog
 
+### 2026-06-03
+- **Mode Playwright** : connexion Bourse Direct via navigateur headless (Chromium) — lecture live du portefeuille, cash et cours directement depuis votre compte
+- **Relay 2FA** : lors de `/connect`, le bot pause et vous demande votre code SMS directement dans Telegram (90s timeout)
+- **`/mode`** : bascule entre mode Classic et Playwright, affiche l'état de la session
+- **`/connect` / `/disconnect`** : activation/désactivation du mode Playwright depuis Telegram
+- **`/sync`** : synchronisation manuelle du portefeuille depuis Bourse Direct (à la demande)
+- **Fix** : annulation automatique d'un ordre en attente lors de `/add` — recherche désormais par ticker si le nom diffère légèrement (ex: EXOSENS vs EXENS)
+
 ### 2026-06-01
 - **Gmail sync** : détection automatique des emails "Finalisation de votre stratégie" de Bourse Direct — le bot envoie une notification Telegram et demande le prix de vente (`/syncmail`, check auto 4×/jour)
 - **`/vendu NOM [PRIX]`** : nouvelle commande pour clôturer rapidement une position (prix TP automatique si omis)
@@ -412,8 +514,8 @@ L'extraction de positions depuis des captures d'écran dépend de la lisibilité
 **Données marché**
 Les prix proviennent de Yahoo Finance via `yfinance` (données différées de 15 min en journée) et les analyses de DuckDuckGo. Ni l'un ni l'autre ne garantit une disponibilité ou une exactitude permanente. Les actions suspendues ou en liquidation judiciaire peuvent ne plus avoir de cotation.
 
-**Pas de passage d'ordre automatique**
-Ce bot est un assistant de décision, pas un système d'exécution. Chaque ordre reste sous votre contrôle direct.
+**Passage d'ordre semi-automatique (mode Playwright)**
+En mode Playwright, le bot navigue dans l'interface Bourse Direct mais vous demande toujours une double confirmation avant d'envoyer un ordre. Aucun ordre n'est jamais envoyé sans votre validation explicite.
 
 **Stabilité**
 Pas de gestion de crash automatique. Pour un usage continu, configurez un superviseur de processus (`systemd`, `launchd`, `supervisor`).

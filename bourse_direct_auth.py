@@ -6,7 +6,7 @@ import os
 import threading
 import time
 
-BD_URL      = "https://www.boursedirect.fr/fr/identification"
+BD_URL      = "https://www.boursedirect.fr/fr/login"
 BD_LOGIN    = os.getenv("BD_LOGIN", "")
 BD_PASSWORD = os.getenv("BD_PASSWORD", "")
 
@@ -47,11 +47,11 @@ def login(send_fn) -> bool:
     try:
         page.goto(BD_URL, wait_until="domcontentloaded", timeout=15000)
 
-        # Remplissage login
-        page.fill('input[name="login"]', BD_LOGIN)
-        page.fill('input[name="password"]', BD_PASSWORD)
-        page.click('button[type="submit"]')
-        time.sleep(2)
+        # Remplissage login (sélecteurs inspectés sur boursedirect.fr/fr/login)
+        page.fill('input[placeholder="Identifiant"]', BD_LOGIN)
+        page.fill('input[placeholder="Mot de passe"]', BD_PASSWORD)
+        page.click('button:has-text("Se connecter")')
+        time.sleep(3)
 
         # Détection 2FA
         if _needs_otp(page):
@@ -107,7 +107,4 @@ def _fill_otp(page, code: str):
 
 
 def _is_logged_in(page) -> bool:
-    return (
-        "identification" not in page.url
-        and "login" not in page.url.lower()
-    )
+    return "login" not in page.url.lower()
