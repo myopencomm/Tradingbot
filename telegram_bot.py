@@ -656,202 +656,165 @@ def cmd_import(args, cid):
 
 
 def cmd_tuto(args, cid):
+    sections = {
+        "install":    _tuto_install,
+        "classic":    _tuto_classic,
+        "playwright": _tuto_playwright,
+        "avance":     _tuto_avance,
+        "update":     _tuto_update,
+    }
+    if args and args[0].lower() in sections:
+        sections[args[0].lower()](cid)
+    else:
+        send(
+            "TradingBot — Guide interactif\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "Choisis ce que tu veux apprendre :\n"
+            "\n"
+            "/tuto install\n"
+            "  Installation complete depuis zero\n"
+            "  (Telegram, Python, .env, lancement)\n"
+            "\n"
+            "/tuto classic\n"
+            "  Mode Classic : screenshots, workflow\n"
+            "  quotidien, ajouter/suivre ses positions\n"
+            "\n"
+            "/tuto playwright\n"
+            "  Mode Playwright : connexion automatique\n"
+            "  a Bourse Direct, 2FA, sync portefeuille\n"
+            "\n"
+            "/tuto avance\n"
+            "  Fonctions avancees : ordres en attente,\n"
+            "  Gmail sync, cloture de positions, stats\n"
+            "\n"
+            "/tuto update\n"
+            "  Mettre a jour le bot",
+            cid,
+        )
+
+
+def _tuto_install(cid):
     send(
-        "TradingBot — Guide complet (1/8)\n"
+        "Installation — Etape 1 : Bot Telegram\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "1. Ouvre Telegram → cherche @BotFather\n"
+        "2. Envoie /newbot\n"
+        "3. Choisis un nom puis un username (_bot)\n"
+        "4. Copie le TOKEN recu : ***REMOVED***\n"
         "\n"
-        "ETAPE 1 — Creer ton bot Telegram\n"
-        "\n"
-        "1. Ouvre Telegram, cherche @BotFather\n"
-        "2. Envoie : /newbot\n"
-        "3. Choisis un nom (ex: MonTraderBot)\n"
-        "4. Choisis un username (ex: montrader_bot)\n"
-        "5. BotFather te donne un TOKEN\n"
-        "   Ex: ***REMOVED***:ABCDefgh...\n"
-        "   → Copie-le, c'est ton TELEGRAM_TOKEN",
+        "Ton Chat ID (pour limiter le bot a toi seul) :\n"
+        "→ @userinfobot sur Telegram → envoie /start\n"
+        "→ Il te repond avec ton Id numerique",
         cid,
     )
-    time.sleep(0.5)
+    time.sleep(0.4)
     send(
-        "TradingBot — Guide complet (2/8)\n"
+        "Installation — Etape 2 : Telecharger\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "ETAPE 2 — Obtenir ton Chat ID\n"
-        "\n"
-        "1. Cherche @userinfobot sur Telegram\n"
-        "2. Envoie /start\n"
-        "3. Il te repond avec ton ID numerique\n"
-        "   Ex: ***REMOVED***\n"
-        "   → C'est ton CHAT_ID\n"
-        "\n"
-        "Alternative : demarre ton bot, envoie /start\n"
-        "puis ouvre dans un navigateur :\n"
-        "api.telegram.org/bot<TOKEN>/getUpdates\n"
-        "Cherche \"id\" dans le JSON",
-        cid,
-    )
-    time.sleep(0.5)
-    send(
-        "TradingBot — Guide complet (3/8)\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "ETAPE 3 — Choisir et configurer ton IA\n"
-        "\n"
-        "GRATUIT — Groq (recommande pour commencer)\n"
-        "  console.groq.com → API Keys → Create\n"
-        "  .env : AI_PROVIDER=groq\n"
-        "         GROQ_API_KEY=gsk_...\n"
-        "\n"
-        "GRATUIT — Google Gemini\n"
-        "  aistudio.google.com → Get API Key\n"
-        "  .env : AI_PROVIDER=gemini\n"
-        "         GEMINI_API_KEY=AIza...\n"
-        "\n"
-        "PAYANT — Anthropic Claude\n"
-        "  console.anthropic.com\n"
-        "  .env : AI_PROVIDER=anthropic\n"
-        "         ANTHROPIC_API_KEY=***REMOVED***\n"
-        "\n"
-        "PAYANT — OpenAI\n"
-        "  platform.openai.com\n"
-        "  .env : AI_PROVIDER=openai\n"
-        "         OPENAI_API_KEY=sk-proj-...\n"
-        "\n"
-        "PAYANT — Mistral\n"
-        "  console.mistral.ai\n"
-        "  .env : AI_PROVIDER=mistral\n"
-        "         MISTRAL_API_KEY=...",
-        cid,
-    )
-    time.sleep(0.5)
-    send(
-        "TradingBot — Guide complet (4/8)\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "ETAPE 4 — Telecharger et installer\n"
-        "\n"
-        "Dans le terminal (Mac/Linux) :\n"
+        "Dans ton terminal :\n"
         "  git clone https://github.com/myopencomm/Tradingbot.git\n"
         "  cd Tradingbot\n"
-        "\n"
-        "Verifie Python (3.10 minimum) :\n"
-        "  python3 --version\n"
-        "Sur Mac si c'est 3.9 : brew install python\n"
-        "\n"
-        "Installe les dependances :\n"
         "  python3 -m venv venv\n"
         "  venv/bin/pip install -r requirements.txt\n"
-        "\n"
-        "Copie les fichiers de config :\n"
         "  cp .env.example .env\n"
-        "  cp positions.example.json positions.json",
+        "  cp positions.example.json positions.json\n"
+        "\n"
+        "Python 3.10 minimum requis.\n"
+        "Sur Mac si python3 --version affiche 3.9 :\n"
+        "  brew install python",
         cid,
     )
-    time.sleep(0.5)
+    time.sleep(0.4)
     send(
-        "TradingBot — Guide complet (5/8)\n"
+        "Installation — Etape 3 : Configurer .env\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "ETAPE 5 — Configurer le fichier .env\n"
-        "\n"
-        "  nano .env  (Mac/Linux)\n"
-        "  notepad .env  (Windows)\n"
-        "\n"
-        "OBLIGATOIRE\n"
+        "Edite le fichier .env :\n"
         "  TELEGRAM_TOKEN=***REMOVED***\n"
         "  CHAT_ID=***REMOVED***\n"
-        "  AI_PROVIDER=groq\n"
+        "  AI_PROVIDER=groq          ← gratuit\n"
         "  GROQ_API_KEY=gsk_...\n"
         "\n"
-        "OPTIONNEL — Sync Gmail Bourse Direct\n"
-        "  GMAIL_USER=ton@gmail.com\n"
-        "  GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx\n"
-        "  Lien direct pour creer le mot de passe :\n"
-        "  myaccount.google.com/apppasswords\n"
-        "  (necessite la validation en 2 etapes)\n"
+        "Providers IA disponibles :\n"
+        "  groq    → console.groq.com (gratuit)\n"
+        "  gemini  → aistudio.google.com (gratuit)\n"
+        "  anthropic / openai / mistral (payants)\n"
         "\n"
-        "Ne partage JAMAIS ce fichier .env.\n"
-        "Il est dans .gitignore — jamais envoye sur GitHub.",
+        "Ne partage JAMAIS ton .env — jamais commit.",
         cid,
     )
-    time.sleep(0.5)
+    time.sleep(0.4)
     send(
-        "TradingBot — Guide complet (6/8)\n"
+        "Installation — Etape 4 : Lancer\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "ETAPE 6 — Lancer et utiliser le bot\n"
-        "\n"
         "  venv/bin/python3 main.py\n"
         "\n"
-        "Le bot envoie 'TradingBot en ligne' sur Telegram.\n"
+        "Le bot envoie un message de confirmation.\n"
+        "Envoie /start pour verifier.\n"
         "\n"
-        "DEMARRAGE RAPIDE\n"
-        "  /cash 1000 — definir ton cash disponible\n"
-        "  Envoie une photo de l'app Bourse Direct\n"
-        "    → le bot lit et importe tes positions\n"
-        "  /add TICKER QTE PRU SL TP — ajout manuel\n"
-        "  /morning — premier briefing IA\n"
-        "  /scan — 3 opportunites avec ton cash\n"
+        "En arriere-plan (reste actif apres fermeture\n"
+        "du terminal) :\n"
+        "  venv/bin/python3 main.py > tradingbot.log 2>&1 &\n"
         "\n"
-        "WORKFLOW QUOTIDIEN\n"
-        "  Matin : briefing auto a 9h05\n"
-        "  4 checks/jour (9h 12h 15h 17h) :\n"
-        "    alertes SL/TP + ordres en attente\n"
-        "  Emails BD detectes auto si Gmail configure\n"
-        "\n"
-        "MAINTENIR LE BOT ACTIF\n"
-        "  Mac : LaunchAgent (voir README)\n"
-        "  Linux : systemd ou screen\n"
-        "  Relancer : pkill -f main.py &&\n"
-        "    venv/bin/python3 main.py > tradingbot.log 2>&1 &",
+        "Voir les logs :\n"
+        "  tail -f tradingbot.log",
         cid,
     )
-    time.sleep(0.5)
+
+
+def _tuto_classic(cid):
     send(
-        "TradingBot — Guide complet (7/8)\n"
+        "Mode Classic — Importer ton portefeuille\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "3 facons d'entrer tes positions :\n"
         "\n"
-        "FONCTIONNALITES AVANCEES\n"
+        "1. SCREENSHOT (le plus simple)\n"
+        "   Envoie une ou plusieurs photos de l'app\n"
+        "   Bourse Direct → le bot lit tout auto\n"
+        "   Tu peux envoyer plusieurs captures a la\n"
+        "   suite, il les fusionne (attends 12s)\n"
         "\n"
-        "ORDRES EN ATTENTE\n"
-        "  /attente NOM TICKER QTE PRIX\n"
-        "    → Reserve le cash, surveille le cours\n"
-        "    → Alerte quand le prix d entree est atteint\n"
-        "    → Alerte si le cours s eloigne trop\n"
-        "    → /scan reevalue la viabilite a chaque analyse\n"
-        "  /annuler NOM — annule et libere le cash\n"
-        "  Ex: /attente EXOSENS EXENS.PA 17 63\n"
+        "2. MANUEL\n"
+        "   /add TICKER QTE PRU SL TP\n"
+        "   Ex: /add GNFT.PA 100 8.51 7.66 9.79\n"
         "\n"
-        "CLOTURE DE POSITIONS\n"
-        "  /vendu NOM — prix TP auto (ordre BD execute)\n"
-        "  /vendu NOM PRIX — prix manuel\n"
-        "  /close TICKER QTE PRIX FRAIS — avec frais\n"
+        "3. CSV\n"
+        "   Exporte depuis BD → envoie le fichier .csv\n"
+        "   /import pour le guide\n"
         "\n"
-        "SYNC GMAIL BOURSE DIRECT\n"
-        "  /syncmail — verifie les emails BD maintenant\n"
-        "  Auto : check a chaque horaire si Gmail configure\n"
-        "  Quand 'Finalisation strategie' detectee :\n"
-        "    le bot te demande le prix de vente\n"
-        "\n"
-        "MISES A JOUR\n"
-        "  /update — version actuelle + alerte si maj dispo\n"
-        "  git pull origin main + relancer le bot\n"
-        "\n"
-        "Code source : github.com/myopencomm/Tradingbot\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Suite : /tuto 8 — Mode Playwright (connexion BD)",
+        "Cash disponible : /cash 1500",
         cid,
     )
-    time.sleep(0.5)
+    time.sleep(0.4)
     send(
-        "TradingBot — Guide complet (8/8)\n"
+        "Mode Classic — Workflow quotidien\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "AUTOMATIQUE\n"
+        "  9h05  → briefing IA (macro + positions)\n"
+        "  9/12/15/17h → check SL/TP, alertes\n"
+        "  Lundi 9h10 → analyse de rotation\n"
         "\n"
-        "MODE PLAYWRIGHT — OPTIONNEL\n"
+        "A LA DEMANDE\n"
+        "  /status   → portefeuille + P&L live\n"
+        "  /morning  → briefing maintenant\n"
+        "  /scan     → 3 opportunites avec ton cash\n"
+        "  /research TICKER → analyse approfondie\n"
         "\n"
-        "Connexion directe a Bourse Direct via navigateur\n"
-        "headless. Lecture live du portefeuille et du cash.\n"
-        "Les screenshots restent disponibles en parallele.\n"
+        "ORDRES (instructions a saisir sur BD)\n"
+        "  /buy TICKER QTE PRU\n"
+        "    → ordre Expert Take Profit complet\n"
+        "  /setup TICKER QTE PRU\n"
+        "    → SL + TP apres achat deja effectue",
+        cid,
+    )
+
+
+def _tuto_playwright(cid):
+    send(
+        "Mode Playwright — Installation\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Connexion directe a Bourse Direct via\n"
+        "navigateur headless. Les screenshots\n"
+        "restent disponibles en parallele.\n"
         "\n"
         "INSTALLATION (une seule fois)\n"
         "  venv/bin/pip install playwright\n"
@@ -861,19 +824,95 @@ def cmd_tuto(args, cid):
         "  BD_LOGIN=ton_identifiant_bourse_direct\n"
         "  BD_PASSWORD=ton_mot_de_passe\n"
         "\n"
-        "UTILISATION\n"
-        "  /connect  → connexion a BD\n"
-        "    Si 2FA : le bot attend ton code SMS\n"
-        "    Envoie le code directement dans Telegram\n"
-        "  /mode     → etat de la connexion\n"
-        "  /sync     → synchronise portefeuille depuis BD\n"
-        "  /disconnect → revenir en mode Classic\n"
+        "Redemarrer le bot apres avoir edite .env.",
+        cid,
+    )
+    time.sleep(0.4)
+    send(
+        "Mode Playwright — Utilisation\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "/connect\n"
+        "  Lance la connexion a Bourse Direct\n"
+        "  Si 2FA SMS : le bot te demande le code\n"
+        "  → Envoie les chiffres directement ici\n"
+        "  Tu as 90 secondes pour repondre\n"
+        "\n"
+        "/mode     → voir l'etat de la connexion\n"
+        "/sync     → synchroniser depuis BD\n"
+        "/disconnect → revenir en mode Classic\n"
         "\n"
         "Le bot demarre toujours en mode Classic.\n"
-        "/connect est requis apres chaque redemarrage.\n"
-        "\n"
+        "/connect est a relancer apres chaque\n"
+        "redemarrage du bot.",
+        cid,
+    )
+
+
+def _tuto_avance(cid):
+    send(
+        "Fonctions avancees — Ordres en attente\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Tape /help pour la liste complete des commandes",
+        "Pour placer un ordre limite sur BD et\n"
+        "laisser le bot surveiller son declenchement :\n"
+        "\n"
+        "  /attente NOM TICKER QTE PRIX [SL TP]\n"
+        "  Ex: /attente EXOSENS EXENS.PA 17 63\n"
+        "\n"
+        "→ Reserve le cash automatiquement\n"
+        "→ Alerte si le cours touche ton prix\n"
+        "→ Alerte si le cours s'eloigne trop (+15%)\n"
+        "→ /scan reevalue la viabilite a chaque analyse\n"
+        "\n"
+        "  /annuler NOM → annule et libere le cash",
+        cid,
+    )
+    time.sleep(0.4)
+    send(
+        "Fonctions avancees — Cloture & Gmail\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "CLOTURE DE POSITIONS\n"
+        "  /vendu NOM       → prix TP automatique\n"
+        "  /vendu NOM PRIX  → prix manuel\n"
+        "  /close TICKER QTE PRIX FRAIS → avec frais\n"
+        "\n"
+        "SYNC GMAIL BOURSE DIRECT\n"
+        "Detecte les emails 'Finalisation strategie'\n"
+        "et cloture auto les positions concernees.\n"
+        "\n"
+        "  .env :\n"
+        "    GMAIL_USER=ton@gmail.com\n"
+        "    GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx\n"
+        "  Mot de passe app :\n"
+        "    myaccount.google.com/apppasswords\n"
+        "\n"
+        "  /syncmail → verifie maintenant\n"
+        "  Auto : check aux horaires (9/12/15/17h)\n"
+        "\n"
+        "STATS\n"
+        "  /stats → win rate, P&L, profit factor",
+        cid,
+    )
+
+
+def _tuto_update(cid):
+    send(
+        "Mettre a jour le bot\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "1. Recupere les nouveautes :\n"
+        "   git pull origin main\n"
+        "\n"
+        "2. Relance le bot :\n"
+        "   pkill -f main.py\n"
+        "   venv/bin/python3 main.py > tradingbot.log 2>&1 &\n"
+        "\n"
+        "Voir ce qui a change :\n"
+        "   git log --oneline -10\n"
+        "\n"
+        "Verifier la version actuelle :\n"
+        "   /update\n"
+        "\n"
+        "Code source :\n"
+        "github.com/myopencomm/Tradingbot",
         cid,
     )
 
