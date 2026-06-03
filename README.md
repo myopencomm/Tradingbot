@@ -7,7 +7,7 @@
 ![Platform](https://img.shields.io/badge/Platform-Telegram-26A5E4?logo=telegram&logoColor=white)
 ![AI](https://img.shields.io/badge/IA-Groq%20%7C%20Gemini%20%7C%20Anthropic%20%7C%20OpenAI%20%7C%20Mistral-orange)
 ![Broker](https://img.shields.io/badge/Courtier-Bourse%20Direct-navy)
-![Mode](https://img.shields.io/badge/Mode-Classic%20%7C%20Playwright-purple)
+![Mode](https://img.shields.io/badge/Mode-Classic%20%7C%20Playwright%20%28bêta%29-purple)
 
 Bourse Direct ne dispose pas d'API publique. TradingBot comble ce manque : il analyse votre portefeuille chaque matin, surveille vos positions, génère les instructions d'ordres précises à saisir sur l'app iPhone ou web, et vous alerte en temps réel — le tout depuis Telegram.
 
@@ -233,7 +233,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Sync Gmail Bourse Direct** | Détecte auto les emails "Finalisation de votre stratégie" et clôture les positions (IMAP, sans OAuth) |
 | **Recherche web gratuite** | DuckDuckGo + yfinance — aucune clé payante requise |
 | **Contexte personnel** | Fichier de contexte IA pour des conseils adaptés à votre situation |
-| **Mode Playwright** *(optionnel)* | Connexion Bourse Direct via navigateur headless — lecture live du portefeuille, sync automatique, et passage d'ordres réels depuis Telegram |
+| **Mode Playwright** *(bêta — optionnel)* | Connexion Bourse Direct via navigateur headless — lecture live du portefeuille, sync automatique, et passage d'ordres réels depuis Telegram ⚠️ non testé en prod |
 
 ---
 
@@ -368,6 +368,19 @@ TradingBot/
 
 ## Mode Playwright — Connexion Bourse Direct
 
+> ### ⚠️ AVERTISSEMENT — FONCTIONNALITÉ EN BÊTA
+>
+> **Le mode Playwright n'a pas encore été testé en conditions réelles.** Les scripts de connexion, de lecture de portefeuille et de passage d'ordres ont été développés par ingénierie inverse de l'interface Bourse Direct (exploration du DOM, analyse des bundles JavaScript). Ils n'ont pas encore été exécutés sur un compte avec de l'argent réel.
+>
+> **Ce mode opère sur votre compte de courtage avec votre argent réel.** Une erreur dans les scripts peut entraîner le passage d'ordres non désirés, une mauvaise quantité, ou une mauvaise valeur. Vous êtes entièrement responsable de tout ordre exécuté.
+>
+> **Avant de l'utiliser :**
+> - Testez d'abord `/sync` seul (lecture seule — aucun risque)
+> - Ne testez `/ordre` qu'avec de petites quantités
+> - Vérifiez toujours l'écran de récapitulatif avant de taper `/oui`
+> - Gardez l'app Bourse Direct ouverte en parallèle pour surveiller
+> - En cas de doute, tapez `/non` ou fermez la session avec `/disconnect`
+
 Le mode Playwright est **entièrement optionnel**. Le mode Classic (défaut) reste pleinement fonctionnel sans rien configurer.
 
 ### Ce que ça apporte
@@ -447,6 +460,29 @@ Compare le portefeuille réel BD avec `positions.json` — met à jour le cash, 
 ### Comportement au redémarrage
 
 Le bot démarre **toujours en mode Classic**, même si le mode Playwright était actif avant. La session Playwright ne survit pas à un redémarrage — vous devez relancer `/connect` manuellement.
+
+### État du développement
+
+| Fonctionnalité | Statut |
+|---|---|
+| Connexion BD + TOTP | ✅ Testé et fonctionnel |
+| Lecture portefeuille CTO (`/sync`) | ✅ Testé et fonctionnel |
+| Formulaire ordre standard (UI explorée) | 🔬 API reverse-engineered, non testé |
+| Ordre Expert TAKE PROFIT (UI explorée) | 🔬 API reverse-engineered, non testé |
+| Ordre Expert STOP LOSS | 🔬 Identifié dans l'UI, non implémenté |
+| Ordre Expert STOP SUIVEUR (trailing) | 🔬 Identifié dans l'UI, non implémenté |
+| Passage d'ordre réel (`/ordre` + `/oui`) | ❌ **Jamais testé — à valider avant usage** |
+
+**Ce qui a été exploré :**
+- L'interface BD utilise un formulaire Vue.js en **4 étapes** pour les ordres Expert : choix du type → configuration (compte, sens, qté, validité) → sélection de stratégie (STOP LOSS / TAKE PROFIT / STOP SUIVEUR) → confirmation
+- L'API `hub/trading` accepte `POST /order/create` puis `POST /order/execute/strategy`
+- Le payload a été extrait du bundle `ordertrade.bundle.js` par analyse statique
+
+**Ce qui reste à tester :**
+- Que le payload `create_order()` soit accepté par l'API BD en conditions réelles
+- Que `execute_strategy()` déclenche bien l'ordre Expert côté BD
+- La gestion des erreurs API (session expirée, solde insuffisant, marché fermé...)
+- L'implémentation des stratégies STOP LOSS et STOP SUIVEUR
 
 ### Note sur les CGU
 
