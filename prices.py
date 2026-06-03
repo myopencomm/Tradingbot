@@ -35,6 +35,76 @@ def get_price(ticker: str) -> float | None:
     return None
 
 
+def get_fundamentals(ticker: str) -> dict:
+    """Fondamentaux yfinance : objectif analyste, P/E, beta, 52w range, consensus."""
+    try:
+        t    = yf.Ticker(ticker)
+        info = t.info or {}
+        result = {}
+
+        target = info.get("targetMeanPrice") or info.get("targetMedianPrice")
+        if target:
+            result["analyst_target"] = round(float(target), 2)
+
+        for key in ("trailingPE", "forwardPE"):
+            if info.get(key):
+                result["pe"] = round(float(info[key]), 1)
+                break
+
+        if info.get("beta"):
+            result["beta"] = round(float(info["beta"]), 2)
+
+        low52  = info.get("fiftyTwoWeekLow")
+        high52 = info.get("fiftyTwoWeekHigh")
+        if low52 and high52:
+            result["week52_low"]  = round(float(low52), 2)
+            result["week52_high"] = round(float(high52), 2)
+
+        cap = info.get("marketCap")
+        if cap:
+            result["market_cap_m"] = round(cap / 1_000_000, 0)
+
+        try:
+            rec = t.recommendations_summary
+            if rec is not None and not rec.empty:
+                row = rec.iloc[0]
+                result["analyst_buy"]   = int(row.get("strongBuy", 0) + row.get("buy", 0))
+                result["analyst_hold"]  = int(row.get("hold", 0))
+                result["analyst_sell"]  = int(row.get("sell", 0) + row.get("strongSell", 0))
+        except Exception:
+            pass
+
+        try:
+            dates = t.earnings_dates
+            if dates is not None and not dates.empty:
+                future = dates[dates.index > datetime.now(pytz.UTC)]
+                if not future.empty:
+                    result["next_earnings"] = future.index[0].strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+        return result
+    except Exception as e:
+        print(f"⚠️ Fundamentals error {ticker}: {e}")
+        return {}
+
+
+def get_yf_news(ticker: str, max_items: int = 6) -> list[dict]:
+    """Actualités récentes via yfinance (titre + source)."""
+    try:
+        news = yf.Ticker(ticker).news or []
+        out  = []
+        for item in news[:max_items]:
+            title = item.get("title", "")
+            pub   = item.get("publisher", "")
+            if title:
+                out.append({"title": title, "publisher": pub})
+        return out
+    except Exception as e:
+        print(f"⚠️ YF news error {ticker}: {e}")
+        return []
+
+
 def get_technicals(ticker: str) -> dict:
     """RSI 14j, momentum 1 mois, ratio volume vs moyenne 20 séances."""
     try:

@@ -147,11 +147,28 @@ def morning_briefing(send_fn) -> None:
 2. Risque global : LOW / MEDIUM / HIGH
 (Cash insuffisant pour nouvelles positions : {cash}€ < 1000€)"""
 
+        # News yfinance + fondamentaux clés par position
+        enriched_lines = []
+        for name, cfg in portfolio.load().get("positions", {}).items():
+            news  = prices.get_yf_news(cfg["ticker"], max_items=2)
+            funds = prices.get_fundamentals(cfg["ticker"])
+            parts = []
+            if funds.get("analyst_target"):
+                parts.append(f"objectif analyste {funds['analyst_target']}")
+            if funds.get("next_earnings"):
+                parts.append(f"résultats le {funds['next_earnings']}")
+            for n in news:
+                parts.append(n["title"])
+            if parts:
+                enriched_lines.append(f"  {name} : " + " | ".join(parts))
+        enriched_block = ("\nNEWS & DONNÉES ANALYSTES\n" + "\n".join(enriched_lines)) if enriched_lines else ""
+
         prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {ctx_block}
 PORTEFEUILLE
 {snapshot}
+{enriched_block}
 
 CONTEXTE MARCHÉ
 {macro}
@@ -299,6 +316,9 @@ def research_ticker(send_fn, ticker: str) -> None:
         web       = research.research_stock(ticker)
         catalysts = research.search_catalysts(ticker)
         tech      = prices.get_technicals(ticker)
+        funds     = prices.get_fundamentals(ticker)
+        yf_news   = prices.get_yf_news(ticker)
+
         tech_block = ""
         if tech:
             rsi = tech.get("rsi", "N/A")
@@ -310,6 +330,31 @@ def research_ticker(send_fn, ticker: str) -> None:
                 f"- Momentum 1 mois : {mom:+}%\n"
                 f"- Volume ratio : {vol}x moyenne 20j\n"
             )
+
+        funds_lines = []
+        if funds.get("analyst_target"):
+            funds_lines.append(f"- Objectif analyste moyen : {funds['analyst_target']}")
+        if funds.get("pe"):
+            funds_lines.append(f"- P/E : {funds['pe']}")
+        if funds.get("beta"):
+            funds_lines.append(f"- Beta : {funds['beta']}")
+        if funds.get("week52_low") and funds.get("week52_high"):
+            funds_lines.append(f"- Range 52 semaines : {funds['week52_low']} — {funds['week52_high']}")
+        if funds.get("market_cap_m"):
+            funds_lines.append(f"- Capitalisation : {funds['market_cap_m']:.0f}M€")
+        if "analyst_buy" in funds:
+            funds_lines.append(
+                f"- Consensus analystes : {funds['analyst_buy']} Achat / "
+                f"{funds['analyst_hold']} Neutre / {funds['analyst_sell']} Vente"
+            )
+        if funds.get("next_earnings"):
+            funds_lines.append(f"- Prochains résultats : {funds['next_earnings']}")
+        funds_block = ("\nFONDAMENTAUX\n" + "\n".join(funds_lines)) if funds_lines else ""
+
+        news_block = ""
+        if yf_news:
+            news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
+            news_block = "\nACTUALITÉS RÉCENTES (Yahoo Finance)\n" + "\n".join(news_lines)
 
         if held:
             quote = prices.get_quote(held["ticker"])
@@ -330,9 +375,12 @@ MA POSITION
 - PRU : {sym}{held['entry_price']} | {held['qty']} titres | P&L : {sym}{pnl:+.0f}
 - SL actuel : {sym}{held['target_low']} (marge : {pct_to_sl:.1f}%)
 - TP actuel : {sym}{held['target_high']} (potentiel restant : {pct_to_tp:.1f}%)
-{tech_block}
-ACTUALITÉS ET CATALYSEURS
+{tech_block}{funds_block}{news_block}
+
+RECHERCHE WEB
 {web}
+
+CATALYSEURS IMMINENTS
 {catalysts}
 
 RÉPONDS EN 3 BLOCS UNIQUEMENT :
@@ -356,7 +404,8 @@ DÉCISION
 {FORMAT_TELEGRAM}
 {ctx_block}
 TICKER ANALYSÉ : {ticker} — JE NE DÉTIENS PAS CETTE ACTION.
-{tech_block}
+{tech_block}{funds_block}{news_block}
+
 RECHERCHE WEB
 {web}
 
@@ -388,21 +437,31 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
         ctx = _trading_context()
         ctx_block = f"\n{ctx}\n" if ctx else ""
 
-        if ticker:  # kept for backward compat — prefer research_ticker directly
+        if ticker:  # backward compat
             return research_ticker(send_fn, ticker)
         else:
-            macro      = research.market_context()
-            catalysts  = research.market_catalysts()
+            macro     = research.market_context()
+            catalysts = research.market_catalysts()
+
+            # News yfinance sur les positions en portefeuille pour enrichir le briefing
+            positions_news = []
+            for name, cfg in portfolio.load().get("positions", {}).items():
+                news = prices.get_yf_news(cfg["ticker"], max_items=2)
+                for n in news:
+                    positions_news.append(f"- {name} : {n['title']}")
+            news_block = ("\nNEWS RÉCENTES POSITIONS\n" + "\n".join(positions_news)) if positions_news else ""
+
             prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_block}
 {snapshot}
+{news_block}
 
 CONTEXTE MARCHÉ
 {macro}
 
-CATALYSEURS IMMINENTS EURONEXT
+CATALYSEURS IMMINENTS — TOUS MARCHÉS
 {catalysts}
 
 Cash disponible : {cash}€
