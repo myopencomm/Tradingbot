@@ -1,184 +1,128 @@
 """
-Lecture du portefeuille et des données de compte Bourse Direct via Playwright.
-Les URLs privées sont découvertes dynamiquement après connexion (nav inspection).
+Lecture du portefeuille Bourse Direct via Playwright.
+URL : /fr/page/portefeuille-tr  (iframe → /priv/new/portefeuille-TR.php)
+Compte CTO : select value=2  |  PEA : value=1
 """
-import re
 import time
+import re
 import playwright_session as session
 
-# URLs candidates pour le portefeuille — découvertes à la première utilisation
-_portfolio_url: str | None = None
+BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/page/portefeuille-tr"
+CTO_SELECT_VALUE = "2"  # Compte Titre ordinaire
 
-# Patterns d'URLs connus pour les pages de portefeuille BD
-_PORTFOLIO_PATTERNS = [
-    "/fr/compte/portefeuille",
-    "/fr/compte",
-    "/priv/portefeuille",
-    "/priv/compte",
-]
-
-
-# ─── Découverte d'URL ────────────────────────────────────────────────────────
-
-def discover_portfolio_url() -> str | None:
-    """
-    Après login, inspecte la navigation pour trouver l'URL du portefeuille.
-    Cherche des liens contenant "portefeuille", "compte", "titres", "positions".
-    """
-    global _portfolio_url
-    if _portfolio_url:
-        return _portfolio_url
-
-    page = session.get_page()
-    if not page:
-        return None
-
-    try:
-        # 1 — Cherche dans les liens de la page courante
-        links = page.evaluate("""
-            () => Array.from(document.querySelectorAll('a[href]'))
-                .map(a => a.href)
-                .filter(href =>
-                    /portefeuille|compte|titres|positions|wallet/i.test(href)
-                    && !href.includes('ouvrir')
-                    && !href.includes('tarif')
-                )
-        """)
-        if links:
-            _portfolio_url = links[0]
-            print(f"[BD Reader] URL portefeuille découverte : {_portfolio_url}")
-            return _portfolio_url
-
-        # 2 — Essaye les patterns connus en vérifiant le statut HTTP
-        for pattern in _PORTFOLIO_PATTERNS:
-            url = f"https://www.boursedirect.fr{pattern}"
-            page.goto(url, wait_until="domcontentloaded", timeout=8000)
-            if "login" not in page.url.lower() and "404" not in page.title().lower():
-                _portfolio_url = page.url
-                print(f"[BD Reader] URL portefeuille (fallback) : {_portfolio_url}")
-                return _portfolio_url
-
-    except Exception as e:
-        print(f"[BD Reader] Erreur découverte URL : {e}")
-
-    return None
-
-
-def reset_urls():
-    """Réinitialise les URLs découvertes (après reconnexion)."""
-    global _portfolio_url
-    _portfolio_url = None
-
-
-# ─── Lecture portefeuille ────────────────────────────────────────────────────
 
 def get_portfolio() -> dict | None:
     """
-    Lit le portefeuille depuis Bourse Direct.
-    Retourne {"cash": float, "positions": [{"name", "qty", "pru", "current"}]}
-    ou None si la lecture échoue.
+    Lit le portefeuille CTO depuis Bourse Direct.
+    Retourne {"cash": float, "positions": [...]} ou None si échec.
     """
     page = session.get_page()
     if not page:
         return None
 
-    url = discover_portfolio_url()
-    if not url:
-        print("[BD Reader] Impossible de trouver la page portefeuille.")
-        return None
-
     try:
-        if page.url != url:
-            page.goto(url, wait_until="domcontentloaded", timeout=10000)
-            time.sleep(1)
+        if BD_PORTFOLIO_URL not in page.url:
+            page.goto(BD_PORTFOLIO_URL, wait_until="domcontentloaded", timeout=15000)
+            time.sleep(2)
 
         if "login" in page.url.lower():
-            print("[BD Reader] Session expirée — reconnexion requise.")
+            print("[BD Reader] Session expirée.")
             return None
 
-        return _parse_portfolio(page)
+        # Bascule sur le CTO dans l'iframe
+        page.evaluate(f"""() => {{
+            const iframes = document.querySelectorAll('iframe');
+            for (let f of iframes) {{
+                try {{
+                    const doc = f.contentDocument || f.contentWindow.document;
+                    const sel = doc.querySelector('select');
+                    if (sel) {{
+                        sel.value = '{CTO_SELECT_VALUE}';
+                        sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+                        return true;
+                    }}
+                }} catch(e) {{}}
+            }}
+            return false;
+        }}""")
+        time.sleep(1.5)  # Attend le rechargement AJAX
+
+        raw_text = page.evaluate("""() => {
+            const iframes = document.querySelectorAll('iframe');
+            for (let f of iframes) {
+                try {
+                    const doc = f.contentDocument || f.contentWindow.document;
+                    const text = doc.body ? doc.body.innerText : '';
+                    if (text.includes('Solde espèces')) return text;
+                } catch(e) {}
+            }
+            return '';
+        }""")
+
+        if not raw_text:
+            print("[BD Reader] Aucune donnée dans l'iframe portefeuille.")
+            return None
+
+        return _parse(raw_text)
 
     except Exception as e:
-        print(f"[BD Reader] Erreur lecture portefeuille : {e}")
+        print(f"[BD Reader] Erreur : {e}")
         return None
 
 
-def _parse_portfolio(page) -> dict:
-    """
-    Parse le DOM de la page portefeuille.
-    Stratégie : cherche les tableaux de positions et le solde cash.
-    NOTE : les sélecteurs exacts seront affinés lors du premier test connecté.
-    """
-    result = {"cash": None, "positions": [], "raw_html": None}
+def _parse(text: str) -> dict:
+    """Parse le texte brut de la page portefeuille BD."""
+    result = {"cash": None, "positions": []}
 
-    try:
-        # Cash — cherche patterns communs : "Liquidités", "Espèces", "Solde"
-        cash_text = page.evaluate("""
-            () => {
-                const patterns = ['liquidit', 'espèce', 'solde disponible', 'cash'];
-                for (const el of document.querySelectorAll('*')) {
-                    const text = el.innerText || '';
-                    if (patterns.some(p => text.toLowerCase().includes(p))) {
-                        const match = text.match(/([\\d\\s,.]+)\\s*€/);
-                        if (match) return match[1].replace(/\\s/g, '').replace(',', '.');
-                    }
-                }
-                return null;
-            }
-        """)
-        if cash_text:
-            result["cash"] = float(cash_text)
+    for line in text.splitlines():
+        # Cash : "Solde espèces\t65,37 €\t..."
+        if "Solde espèces" in line:
+            m = re.search(r'Solde espèces\s*\t\s*([\d\s,]+)\s*€', line)
+            if m:
+                result["cash"] = _parse_float(m.group(1))
+            continue
 
-        # Positions — cherche les lignes de tableau avec des tickers/quantités
-        rows = page.evaluate("""
-            () => {
-                const rows = [];
-                // Cherche les lignes de tableau avec au moins 3 colonnes numériques
-                document.querySelectorAll('table tr, [class*="ligne"], [class*="row"]').forEach(row => {
-                    const cells = Array.from(row.querySelectorAll('td, [class*="cell"]'));
-                    if (cells.length >= 3) {
-                        rows.push(cells.map(c => c.innerText.trim()));
-                    }
-                });
-                return rows;
-            }
-        """)
-        result["positions"] = _parse_position_rows(rows)
+        # Ignore les lignes d'ordres ("Vente transmise", "Achat transmis")
+        if "transmise" in line or "transmis" in line or "Seuil" in line or "Lim." in line:
+            continue
 
-        # Capture HTML brut pour debug si rien trouvé
-        if not result["positions"] and not result["cash"]:
-            result["raw_html"] = page.content()[:3000]
+        # Lignes de positions : commencent par " NOM\tQTE\tPRU\tCOURS\t..."
+        parts = [p.strip() for p in line.split("\t")]
+        parts = [p for p in parts if p]  # retire les cellules vides
+        if len(parts) < 4:
+            continue
 
-    except Exception as e:
-        print(f"[BD Reader] Erreur parsing : {e}")
+        name = parts[0]
+        # Filtre : nom non vide, pas un header, pas un total
+        if not name or name in ("Libellé", "TOTAL", "Evaluation") or name.startswith("Sélectionnez"):
+            continue
+        # La quantité doit être un entier
+        try:
+            qty = int(_parse_float(parts[1]))
+        except Exception:
+            continue
+        if qty <= 0:
+            continue
+
+        pru = _parse_float(parts[2]) if len(parts) > 2 else None
+        cours = _parse_float(parts[3]) if len(parts) > 3 else None
+
+        result["positions"].append({
+            "name":  name,
+            "qty":   qty,
+            "pru":   pru,
+            "cours": cours,
+        })
 
     return result
 
 
-def _parse_position_rows(rows: list) -> list:
-    """Tente d'extraire des positions depuis les lignes de tableau."""
-    positions = []
-    for row in rows:
-        if len(row) < 3:
-            continue
-        # On cherche une ligne avec : un nom, une quantité entière, un prix décimal
-        nums = []
-        name_candidate = ""
-        for cell in row:
-            clean = cell.replace("\xa0", "").replace(" ", "").replace(",", ".")
-            if re.match(r"^\d+$", clean):
-                nums.append(int(clean))
-            elif re.match(r"^\d+\.\d+$", clean):
-                nums.append(float(clean))
-            elif len(cell) > 2 and not re.match(r"^[\d.,\s%€+-]+$", cell):
-                name_candidate = cell.split("\n")[0].strip()
-
-        if name_candidate and len(nums) >= 2:
-            positions.append({
-                "name": name_candidate,
-                "qty": nums[0] if isinstance(nums[0], int) else None,
-                "pru": nums[1] if len(nums) > 1 else None,
-                "current": nums[2] if len(nums) > 2 else None,
-            })
-
-    return positions
+def _parse_float(s: str) -> float | None:
+    """Convertit '1 050,60 €' ou '63,42234' en float."""
+    if not s:
+        return None
+    try:
+        clean = re.sub(r'[€$£\s]', '', str(s)).replace(',', '.').replace('\xa0', '')
+        return round(float(clean), 5)
+    except Exception:
+        return None

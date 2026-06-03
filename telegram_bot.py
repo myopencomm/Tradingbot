@@ -990,9 +990,14 @@ def cmd_sync(args, cid):
         send("Le mode Playwright n'est pas actif. /connect pour l'activer.", cid)
         return
     if not playwright_session.is_connected():
-        send("Session Playwright active mais non connectee a BD. /connect pour relancer.", cid)
+        send("Session Playwright non connectee. /connect pour relancer.", cid)
         return
-    send("Synchronisation en cours... (non encore implementee — bientot disponible)", cid)
+    import sync_engine
+    threading.Thread(
+        target=sync_engine.sync,
+        args=(lambda m: send(m, cid),),
+        daemon=True,
+    ).start()
 
 
 # ─── Routeur ────────────────────────────────────────────────────────────────

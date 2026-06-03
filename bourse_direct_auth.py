@@ -88,22 +88,37 @@ def login(send_fn) -> bool:
 
 def _needs_otp(page) -> bool:
     return (
-        page.locator('input[name="otp"]').count() > 0
-        or page.locator('input[name="code"]').count() > 0
-        or "code" in page.url.lower()
-        or page.locator("text=code").count() > 0
+        page.locator('input[type="number"]').count() >= 6
+        or page.locator('[role="spinbutton"]').count() >= 4
+        or page.locator('input[name="otp"]').count() > 0
+        or "TOTP" in page.content()
     )
 
 
 def _fill_otp(page, code: str):
+    digits = [c for c in code.strip() if c.isdigit()]
+    # TOTP BD : 6 spinbuttons individuels
+    spinbuttons = page.locator('[role="spinbutton"]').all()
+    if len(spinbuttons) >= len(digits):
+        for i, digit in enumerate(digits):
+            spinbuttons[i].fill(digit)
+        # Cocher "Faire confiance à cet appareil — Oui" pour activer le bouton
+        try:
+            page.locator('input[type="radio"]').first.click(timeout=2000)
+        except Exception:
+            pass
+        time.sleep(0.3)
+        try:
+            page.locator('button:has-text("Continuer"):not([disabled])').click(timeout=5000)
+        except Exception:
+            page.keyboard.press("Enter")
+        return
+    # Fallback champ unique
     for sel in ('input[name="otp"]', 'input[name="code"]', 'input[type="tel"]'):
         if page.locator(sel).count() > 0:
             page.fill(sel, code)
             page.locator(sel).press("Enter")
             return
-    # Fallback : premier input numérique visible
-    page.locator('input[type="number"]:visible').first.fill(code)
-    page.locator('input[type="number"]:visible').first.press("Enter")
 
 
 def _is_logged_in(page) -> bool:
