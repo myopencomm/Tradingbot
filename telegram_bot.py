@@ -627,12 +627,12 @@ def cmd_scan(args, cid):
 
 def cmd_research(args, cid):
     if not args:
-        send("Usage: /research TICKER\nEx: /research LBIRD", cid)
+        send("Usage: /research TICKER\nEx: /research GNFT.PA", cid)
         return
     ticker = args[0].upper()
     send(f"Analyse de {ticker} en cours...", cid)
     threading.Thread(
-        target=analysis.scan_opportunities,
+        target=analysis.research_ticker,
         args=(lambda m: send(m, cid), ticker),
         daemon=True,
     ).start()

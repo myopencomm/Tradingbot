@@ -281,8 +281,87 @@ def _validate_tickers(text: str) -> str:
     return text
 
 
+def research_ticker(send_fn, ticker: str) -> None:
+    """Analyse approfondie d'un ticker spécifique — focalisée sur cette seule action."""
+    try:
+        ai   = get_provider()
+        ctx  = _trading_context()
+        ctx_block = f"\nCONTEXTE PERSONNEL\n{ctx}\n" if ctx else ""
+
+        # Cherche si le ticker est en portefeuille (par ticker ou par nom)
+        data      = portfolio.load()
+        positions = data.get("positions", {})
+        held      = next(
+            (cfg for cfg in positions.values()
+             if cfg["ticker"].upper() == ticker.upper()),
+            None,
+        )
+        if held:
+            quote   = prices.get_quote(held["ticker"])
+            price   = quote.get("price", "?")
+            sym     = prices.currency_symbol(quote.get("currency", "EUR"))
+            chg     = ((price - held["entry_price"]) / held["entry_price"]) * 100 if isinstance(price, float) else 0
+            pnl     = (price - held["entry_price"]) * held["qty"] if isinstance(price, float) else 0
+            pos_block = (
+                f"\nPOSITION EN PORTEFEUILLE\n"
+                f"- Cours actuel : {sym}{price} ({chg:+.2f}%)\n"
+                f"- PRU : {sym}{held['entry_price']} | Quantité : {held['qty']}t\n"
+                f"- P&L latent : {sym}{pnl:+.0f}\n"
+                f"- SL : {sym}{held['target_low']} | TP : {sym}{held['target_high']}\n"
+            )
+            position_question = (
+                "Cette action est dans mon portefeuille. Dois-je conserver, renforcer, alléger ou vendre ?\n"
+                "Évalue aussi si le SL/TP actuel reste pertinent au vu des catalyseurs récents."
+            )
+        else:
+            pos_block = "\nACTION NON DÉTENUE — analyse pour une éventuelle entrée.\n"
+            position_question = (
+                "Je ne détiens pas cette action. Y a-t-il une opportunité d'entrée ?\n"
+                "Si oui : signal (ACHAT/NEUTRE), prix d'entrée, SL (-10%), TP (+15%), catalyseur principal."
+            )
+
+        web       = research.research_stock(ticker)
+        catalysts = research.search_catalysts(ticker)
+        tech      = prices.get_technicals(ticker)
+        if tech:
+            rsi = tech.get("rsi", "N/A")
+            mom = tech.get("momentum_1m", "N/A")
+            vol = tech.get("vol_ratio", "N/A")
+            tech_block = (
+                f"\nINDICATEURS TECHNIQUES\n"
+                f"- RSI 14j : {rsi}\n"
+                f"- Momentum 1 mois : {mom:+}%\n"
+                f"- Volume ratio : {vol}x moyenne 20j\n"
+            )
+        else:
+            tech_block = ""
+
+        prompt = f"""{TRADER_SYSTEM}
+{TICKER_RULES}
+{FORMAT_TELEGRAM}
+{ctx_block}
+TICKER ANALYSÉ : {ticker}
+{pos_block}
+{tech_block}
+RECHERCHE WEB
+{web}
+
+CATALYSEURS IMMINENTS
+{catalysts}
+
+QUESTION : {position_question}
+Niveau de risque selon les critères stricts (LOW/MEDIUM/HIGH). Maximum 25 lignes."""
+
+        result = _strip_markdown(ai.complete(prompt, max_tokens=600))
+        result = _validate_tickers(result)
+        send_fn(f"🔍 ANALYSE {ticker}\n\n{result}")
+
+    except Exception as e:
+        send_fn(f"Erreur analyse {ticker}: {e}")
+
+
 def scan_opportunities(send_fn, ticker: str = None) -> None:
-    """Scan général ou analyse d'un ticker spécifique."""
+    """Scan général du marché — top 3 opportunités avec le cash disponible."""
     try:
         ai = get_provider()
         cash = portfolio.get_cash()
@@ -291,36 +370,8 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
         ctx = _trading_context()
         ctx_block = f"\n{ctx}\n" if ctx else ""
 
-        if ticker:
-            web        = research.research_stock(ticker)
-            catalysts  = research.search_catalysts(ticker)
-            tech       = prices.get_technicals(ticker)
-            if tech:
-                rsi    = tech.get("rsi", "N/A")
-                mom    = tech.get("momentum_1m", "N/A")
-                vol    = tech.get("vol_ratio", "N/A")
-                tech_block = (
-                    f"\nINDICATEURS TECHNIQUES\n"
-                    f"- RSI 14j : {rsi}\n"
-                    f"- Momentum 1 mois : {mom:+}%\n"
-                    f"- Volume ratio : {vol}x moyenne 20j\n"
-                )
-            else:
-                tech_block = ""
-            prompt = f"""{TRADER_SYSTEM}
-{TICKER_RULES}
-{FORMAT_TELEGRAM}
-{ctx_block}
-{snapshot}
-{tech_block}
-RECHERCHE WEB {ticker}
-{web}
-
-CATALYSEURS IMMINENTS
-{catalysts}
-
-Donne un avis actionnable : signal (ACHAT/VENTE/NEUTRE), ticker exact vérifié, prix d'entrée, SL (-10%), TP (+15%), catalyseur principal, niveau de risque selon les critères ci-dessus."""
-            header = f"🔍 ANALYSE {ticker}"
+        if ticker:  # kept for backward compat — prefer research_ticker directly
+            return research_ticker(send_fn, ticker)
         else:
             macro      = research.market_context()
             catalysts  = research.market_catalysts()
