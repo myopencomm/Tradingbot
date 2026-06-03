@@ -305,19 +305,34 @@ def research_ticker(send_fn, ticker: str) -> None:
         ctx  = _trading_context()
         ctx_block = f"\nCONTEXTE PERSONNEL\n{ctx}\n" if ctx else ""
 
-        # Cherche si le ticker est en portefeuille (par ticker ou par nom)
+        # Cherche si le ticker est en portefeuille
+        # Correspondance : ticker exact, ticker sans suffixe, nom de position
         data      = portfolio.load()
         positions = data.get("positions", {})
-        held      = next(
-            (cfg for cfg in positions.values()
-             if cfg["ticker"].upper() == ticker.upper()),
-            None,
-        )
-        web       = research.research_stock(ticker)
-        catalysts = research.search_catalysts(ticker)
-        tech      = prices.get_technicals(ticker)
-        funds     = prices.get_fundamentals(ticker)
-        yf_news   = prices.get_yf_news(ticker)
+        query_up  = ticker.upper()
+        query_base = query_up.split(".")[0]  # ex: "EXENS" depuis "EXENS.PA"
+
+        held_name = None
+        held      = None
+        for pos_name, cfg in positions.items():
+            stored = cfg["ticker"].upper()
+            stored_base = stored.split(".")[0]
+            if (stored == query_up
+                    or stored_base == query_base
+                    or pos_name.upper() == query_up
+                    or pos_name.upper() == query_base):
+                held      = cfg
+                held_name = pos_name
+                break
+
+        # Utilise le ticker stocké (exact) pour toutes les requêtes de données
+        real_ticker = held["ticker"] if held else ticker
+
+        web       = research.research_stock(real_ticker)
+        catalysts = research.search_catalysts(real_ticker)
+        tech      = prices.get_technicals(real_ticker)
+        funds     = prices.get_fundamentals(real_ticker)
+        yf_news   = prices.get_yf_news(real_ticker)
 
         tech_block = ""
         if tech:
@@ -417,11 +432,10 @@ Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-10%), TP (+15%)
 Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=600))
-        # Validation tickers uniquement pour les analyses "pas en portefeuille"
-        # (évite les faux positifs sur abréviations médicales/scientifiques)
         if not held:
             result = _validate_tickers(result)
-        send_fn(f"🔍 ANALYSE {ticker}\n\n{result}")
+        label = f"{held_name} ({real_ticker})" if held else real_ticker
+        send_fn(f"🔍 ANALYSE {label}\n\n{result}")
 
     except Exception as e:
         send_fn(f"Erreur analyse {ticker}: {e}")
