@@ -296,33 +296,10 @@ def research_ticker(send_fn, ticker: str) -> None:
              if cfg["ticker"].upper() == ticker.upper()),
             None,
         )
-        if held:
-            quote   = prices.get_quote(held["ticker"])
-            price   = quote.get("price", "?")
-            sym     = prices.currency_symbol(quote.get("currency", "EUR"))
-            chg     = ((price - held["entry_price"]) / held["entry_price"]) * 100 if isinstance(price, float) else 0
-            pnl     = (price - held["entry_price"]) * held["qty"] if isinstance(price, float) else 0
-            pos_block = (
-                f"\nPOSITION EN PORTEFEUILLE\n"
-                f"- Cours actuel : {sym}{price} ({chg:+.2f}%)\n"
-                f"- PRU : {sym}{held['entry_price']} | Quantité : {held['qty']}t\n"
-                f"- P&L latent : {sym}{pnl:+.0f}\n"
-                f"- SL : {sym}{held['target_low']} | TP : {sym}{held['target_high']}\n"
-            )
-            position_question = (
-                "Cette action est dans mon portefeuille. Dois-je conserver, renforcer, alléger ou vendre ?\n"
-                "Évalue aussi si le SL/TP actuel reste pertinent au vu des catalyseurs récents."
-            )
-        else:
-            pos_block = "\nACTION NON DÉTENUE — analyse pour une éventuelle entrée.\n"
-            position_question = (
-                "Je ne détiens pas cette action. Y a-t-il une opportunité d'entrée ?\n"
-                "Si oui : signal (ACHAT/NEUTRE), prix d'entrée, SL (-10%), TP (+15%), catalyseur principal."
-            )
-
         web       = research.research_stock(ticker)
         catalysts = research.search_catalysts(ticker)
         tech      = prices.get_technicals(ticker)
+        tech_block = ""
         if tech:
             rsi = tech.get("rsi", "N/A")
             mom = tech.get("momentum_1m", "N/A")
@@ -333,15 +310,52 @@ def research_ticker(send_fn, ticker: str) -> None:
                 f"- Momentum 1 mois : {mom:+}%\n"
                 f"- Volume ratio : {vol}x moyenne 20j\n"
             )
-        else:
-            tech_block = ""
 
-        prompt = f"""{TRADER_SYSTEM}
+        if held:
+            quote = prices.get_quote(held["ticker"])
+            price = quote.get("price", "?")
+            sym   = prices.currency_symbol(quote.get("currency", "EUR"))
+            chg   = ((price - held["entry_price"]) / held["entry_price"]) * 100 if isinstance(price, float) else 0
+            pnl   = (price - held["entry_price"]) * held["qty"] if isinstance(price, float) else 0
+            pct_to_tp = ((held["target_high"] - price) / price * 100) if isinstance(price, float) else "?"
+            pct_to_sl = ((price - held["target_low"]) / price * 100) if isinstance(price, float) else "?"
+
+            prompt = f"""{TRADER_SYSTEM}
+{FORMAT_TELEGRAM}
+{ctx_block}
+JE DÉTIENS {ticker} — ANALYSE MA POSITION, PAS UNE NOUVELLE ENTRÉE.
+
+MA POSITION
+- Cours actuel : {sym}{price} ({chg:+.2f}%)
+- PRU : {sym}{held['entry_price']} | {held['qty']} titres | P&L : {sym}{pnl:+.0f}
+- SL actuel : {sym}{held['target_low']} (marge : {pct_to_sl:.1f}%)
+- TP actuel : {sym}{held['target_high']} (potentiel restant : {pct_to_tp:.1f}%)
+{tech_block}
+ACTUALITÉS ET CATALYSEURS
+{web}
+{catalysts}
+
+RÉPONDS EN 3 BLOCS UNIQUEMENT :
+
+POTENTIEL RESTANT
+- L'action a-t-elle encore du chemin vers le TP ? Pourquoi ?
+- Quels catalyseurs peuvent débloquer la hausse ?
+- Quels risques peuvent faire plonger le cours ?
+
+MON SL / TP SONT-ILS ENCORE BONS ?
+- Faut-il remonter le SL pour protéger des gains, ou le laisser ?
+- Le TP est-il toujours réaliste au vu des news ?
+
+DÉCISION
+- CONSERVER / VENDRE MAINTENANT / ALLÉGER / AJUSTER SL ou TP
+- Une phrase de justification. Pas de bla-bla."""
+
+        else:
+            prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_block}
-TICKER ANALYSÉ : {ticker}
-{pos_block}
+TICKER ANALYSÉ : {ticker} — JE NE DÉTIENS PAS CETTE ACTION.
 {tech_block}
 RECHERCHE WEB
 {web}
@@ -349,11 +363,15 @@ RECHERCHE WEB
 CATALYSEURS IMMINENTS
 {catalysts}
 
-QUESTION : {position_question}
-Niveau de risque selon les critères stricts (LOW/MEDIUM/HIGH). Maximum 25 lignes."""
+Y a-t-il une opportunité d'entrée sur {ticker} ?
+Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-10%), TP (+15%), catalyseur principal, risque (LOW/MEDIUM/HIGH).
+Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=600))
-        result = _validate_tickers(result)
+        # Validation tickers uniquement pour les analyses "pas en portefeuille"
+        # (évite les faux positifs sur abréviations médicales/scientifiques)
+        if not held:
+            result = _validate_tickers(result)
         send_fn(f"🔍 ANALYSE {ticker}\n\n{result}")
 
     except Exception as e:
