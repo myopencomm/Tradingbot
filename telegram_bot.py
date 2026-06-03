@@ -208,10 +208,15 @@ def cmd_add(args, cid):
 
         # Si un ordre en attente existait pour cette valeur, l'annuler sans rendre le cash
         # (le cash était déjà réservé = déjà déduit du disponible)
+        # Recherche par nom exact OU par ticker (évite les écarts de nommage)
         data = portfolio.load()
-        had_pending = name in data.get("pending_orders", {})
+        pending = data.get("pending_orders", {})
+        pending_key = name if name in pending else next(
+            (k for k, v in pending.items() if v.get("ticker") == ticker), None
+        )
+        had_pending = pending_key is not None
         if had_pending:
-            data.get("pending_orders", {}).pop(name, None)
+            pending.pop(pending_key, None)
             portfolio.save(data)
 
         portfolio.add_position(name, ticker, qty, pru, sl, tp)
