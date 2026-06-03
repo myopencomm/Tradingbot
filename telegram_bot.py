@@ -11,6 +11,9 @@ import prices
 import analysis
 import orders
 import stats
+import bot_mode
+import playwright_session
+import bourse_direct_auth
 
 # ─── Buffer multi-screenshots ────────────────────────────────────────────────
 # Collecte toutes les photos envoyées dans les N secondes qui suivent la 1ère,
@@ -841,12 +844,94 @@ def cmd_tuto(args, cid):
     )
 
 
+# ─── Mode Playwright ────────────────────────────────────────────────────────
+
+def cmd_mode(args, cid):
+    mode = bot_mode.get_mode()
+    if mode == bot_mode.BotMode.PLAYWRIGHT:
+        age = playwright_session.session_age_str()
+        connected = playwright_session.is_connected()
+        status = f"connecte depuis {age}" if connected else "session non connectee"
+        send(
+            f"Mode actuel : Playwright ({status})\n\n"
+            f"Commandes disponibles :\n"
+            f"/disconnect — fermer la session et revenir en mode Classic\n"
+            f"/sync — synchroniser le portefeuille depuis Bourse Direct",
+            cid,
+        )
+    else:
+        send(
+            "Mode actuel : Classic\n"
+            "Les donnees viennent de Yahoo Finance.\n"
+            "Les screenshots sont analyses par vision IA.\n\n"
+            "/connect — activer le mode Playwright (Bourse Direct live)",
+            cid,
+        )
+
+
+def cmd_connect(args, cid):
+    if bot_mode.is_playwright() and playwright_session.is_connected():
+        send(f"Deja connecte a Bourse Direct (session active depuis {playwright_session.session_age_str()}).", cid)
+        return
+
+    send("Lancement de la connexion a Bourse Direct...", cid)
+
+    def _do_connect():
+        ok = playwright_session.start()
+        if not ok:
+            send("Impossible de lancer Playwright. Verifie que playwright est installe (pip install playwright && playwright install chromium).", cid)
+            return
+
+        success = bourse_direct_auth.login(lambda msg: send(msg, cid))
+        if success:
+            bot_mode.set_mode(bot_mode.BotMode.PLAYWRIGHT)
+            send(
+                "Mode Playwright actif\n"
+                "Connecte a Bourse Direct\n\n"
+                "/sync — synchroniser le portefeuille\n"
+                "/disconnect — revenir en mode Classic",
+                cid,
+            )
+        else:
+            playwright_session.stop()
+
+    threading.Thread(target=_do_connect, daemon=True).start()
+
+
+def cmd_disconnect(args, cid):
+    if not bot_mode.is_playwright():
+        send("Deja en mode Classic.", cid)
+        return
+    playwright_session.stop()
+    bot_mode.set_mode(bot_mode.BotMode.CLASSIC)
+    send(
+        "Session Playwright fermee.\n"
+        "Mode Classic actif.\n"
+        "Les screenshots et Yahoo Finance restent disponibles.",
+        cid,
+    )
+
+
+def cmd_sync(args, cid):
+    if not bot_mode.is_playwright():
+        send("Le mode Playwright n'est pas actif. /connect pour l'activer.", cid)
+        return
+    if not playwright_session.is_connected():
+        send("Session Playwright active mais non connectee a BD. /connect pour relancer.", cid)
+        return
+    send("Synchronisation en cours... (non encore implementee — bientot disponible)", cid)
+
+
 # ─── Routeur ────────────────────────────────────────────────────────────────
 
 COMMANDS = {
     "/help": cmd_help,
     "/start": cmd_start,
     "/status": cmd_status,
+    "/mode": cmd_mode,
+    "/connect": cmd_connect,
+    "/disconnect": cmd_disconnect,
+    "/sync": cmd_sync,
     "/cash": cmd_cash,
     "/add": cmd_add,
     "/remove": cmd_remove,
@@ -887,6 +972,9 @@ def _handle_message(message: dict):
         return
 
     if not text.startswith("/"):
+        # Relay 2FA : si une connexion Playwright attend un code OTP
+        if bourse_direct_auth.is_waiting_for_otp() and text.strip().isdigit() and len(text.strip()) >= 4:
+            bourse_direct_auth.set_otp(text)
         return
 
     parts = text.split()
