@@ -388,7 +388,6 @@ def cmd_close(args, cid):
             cid,
         )
         return
-    name = args[0].upper().split(".")[0]
     try:
         qty        = int(args[1])
         exit_price = float(args[2].replace(",", "."))
@@ -399,8 +398,9 @@ def cmd_close(args, cid):
 
     data = portfolio.load()
     positions = data.get("positions", {})
-    if name not in positions:
-        send(f"Position {name} introuvable. Positions actuelles: {list(positions.keys())}", cid)
+    name = _find_position(args[0], positions)
+    if not name:
+        send(f"Position '{args[0]}' introuvable. Positions: {list(positions.keys())}", cid)
         return
 
     cfg = positions[name]
