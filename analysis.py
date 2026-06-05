@@ -451,38 +451,49 @@ Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
         send_fn(f"Erreur analyse {ticker}: {e}")
 
 
+def _extract_tickers(text: str) -> list[str]:
+    """Extrait les tickers format Yahoo Finance d'un texte (ex: GET.PA, MSFT, BP.L)."""
+    import re
+    return list(dict.fromkeys(re.findall(
+        r'\b([A-Z]{1,6}(?:\.[A-Z]{1,3})?)\b', text
+    )))
+
+
 def scan_opportunities(send_fn, ticker: str = None) -> None:
-    """Scan général du marché — top 3 opportunités avec le cash disponible."""
+    """
+    Scan en 2 passes pour éviter l'incohérence avec /research :
+    - Passe 1 : l'IA identifie des tickers candidats depuis les news/catalyseurs
+    - Passe 2 : on fetch les vrais technicals + fondamentaux pour chaque candidat,
+      puis l'IA valide avec les mêmes données que /research (peut dire NEUTRE → exclu)
+    """
     try:
         ai = get_provider()
         cash = portfolio.get_cash()
         snapshot = _portfolio_snapshot()
-
         ctx = _trading_context()
         ctx_block = f"\n{ctx}\n" if ctx else ""
 
         if ticker:  # backward compat
             return research_ticker(send_fn, ticker)
-        else:
-            today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
-            macro     = research.market_context()
-            catalysts = research.market_catalysts()
 
-            # News yfinance sur les positions en portefeuille
-            positions_news = []
-            for name, cfg in portfolio.load().get("positions", {}).items():
-                news = prices.get_yf_news(cfg["ticker"], max_items=2)
-                for n in news:
-                    positions_news.append(f"- {name} : {n['title']}")
-            news_block = ("\nNEWS RÉCENTES POSITIONS\n" + "\n".join(positions_news)) if positions_news else ""
+        today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
+        macro     = research.market_context()
+        catalysts = research.market_catalysts()
 
-            prompt = f"""{TRADER_SYSTEM}
+        # News yfinance sur les positions en portefeuille
+        positions_news = []
+        for name, cfg in portfolio.load().get("positions", {}).items():
+            pos_news = prices.get_yf_news(cfg["ticker"], max_items=2)
+            for n in pos_news:
+                positions_news.append(f"- {name} : {n['title']}")
+        news_block = ("\nNEWS RÉCENTES POSITIONS\n" + "\n".join(positions_news)) if positions_news else ""
+
+        # ── Passe 1 : positions + candidats (tickers uniquement) ─────────────
+        pass1_prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 
 AUJOURD'HUI : {today_str}
-RÈGLE ABSOLUE CATALYSEURS : chaque opportunité proposée DOIT avoir un catalyseur daté APRÈS le {today_str}.
-Tout catalyseur déjà passé (avant aujourd'hui) doit être ignoré. Si aucun catalyseur futur identifiable → ne pas proposer l'action.
 {ctx_block}
 {snapshot}
 {news_block}
@@ -493,25 +504,133 @@ CONTEXTE MARCHÉ
 CATALYSEURS IMMINENTS — TOUS MARCHÉS
 {catalysts}
 
-Cash disponible : {cash}€
+TÂCHE EN 2 PARTIES :
 
-Pour chaque position ci-dessus, donne en 1 ligne : MAINTENIR / SURVEILLER / VENDRE et pourquoi.
+1. Pour chaque position en portefeuille : 1 ligne — MAINTENIR / SURVEILLER / VENDRE + raison.
 
-Ensuite propose jusqu'à 3 opportunités UNIQUEMENT si elles ont un catalyseur futur concret et daté.
-Si moins de 3 opportunités solides → propose-en moins plutôt que de forcer.
-Tous les marchés Bourse Direct valides (Euronext, NYSE, NASDAQ, LSE, Xetra).
-Pour chaque opportunité, format exact :
-NOM SOCIETE (TICKER)
-- Marché : ex Euronext Paris / NASDAQ / LSE
-- Entrée : X€  SL : X€  TP : X€
-- Catalyseur : [événement précis + date future]
-- Raison : ...
+2. Identifie 3 à 5 tickers CANDIDATS avec un catalyseur futur daté APRÈS le {today_str}.
+Réponds pour la partie 2 UNIQUEMENT avec les tickers, format Yahoo Finance, un par ligne.
+Exemple : GET.PA
+          DSY.PA
+          MSFT
+Ne donne PAS de prix, pas d'analyse — juste les tickers."""
+
+        pass1 = _strip_markdown(ai.complete(pass1_prompt, max_tokens=400))
+
+        # Sépare l'analyse positions de la liste de tickers
+        lines = pass1.strip().splitlines()
+        portfolio_lines = []
+        candidate_lines = []
+        in_candidates = False
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Heuristique : ligne courte sans ponctuation = ticker candidat
+            if len(stripped) <= 12 and stripped.replace(".", "").replace("-", "").isupper():
+                in_candidates = True
+            if in_candidates:
+                candidate_lines.append(stripped)
+            else:
+                portfolio_lines.append(stripped)
+
+        portfolio_summary = "\n".join(portfolio_lines)
+        raw_tickers = _extract_tickers(" ".join(candidate_lines))
+
+        # Filtre : uniquement les tickers Yahoo Finance valides (prix disponible)
+        held_tickers = {cfg["ticker"].upper() for cfg in portfolio.load().get("positions", {}).values()}
+        valid_candidates = []
+        for t in raw_tickers[:6]:
+            if t.upper() in held_tickers:
+                continue
+            q = prices.get_quote(t)
+            if q.get("price"):
+                valid_candidates.append((t, q["price"]))
+
+        # ── Passe 2 : validation avec vrais données techniques ───────────────
+        if not valid_candidates:
+            send_fn(
+                f"🔍 SCAN OPPORTUNITÉS\n\n"
+                f"POSITIONS\n{portfolio_summary}\n\n"
+                f"Aucun candidat avec catalyseur futur vérifiable identifié aujourd'hui.\n\n"
+                f"💰 Cash: {cash}€"
+            )
+            return
+
+        opportunities = []
+        for t, current_price in valid_candidates[:4]:
+            tech  = prices.get_technicals(t)
+            funds = prices.get_fundamentals(t)
+            yf_news = prices.get_yf_news(t, max_items=4)
+            web   = research.research_stock(t)
+            cats  = research.search_catalysts(t)
+
+            tech_block = ""
+            if tech:
+                tech_block = (
+                    f"\nINDICATEURS TECHNIQUES\n"
+                    f"- RSI 14j : {tech.get('rsi', 'N/A')}\n"
+                    f"- Momentum 1 mois : {tech.get('momentum_1m', 'N/A'):+}%\n"
+                    f"- Volume ratio : {tech.get('vol_ratio', 'N/A')}x moyenne 20j\n"
+                )
+
+            funds_lines = []
+            if funds.get("analyst_target"):
+                funds_lines.append(f"- Objectif analyste : {funds['analyst_target']}")
+            if funds.get("next_earnings"):
+                funds_lines.append(f"- Prochains résultats : {funds['next_earnings']}")
+            if "analyst_buy" in funds:
+                funds_lines.append(
+                    f"- Consensus : {funds['analyst_buy']} Achat / "
+                    f"{funds['analyst_hold']} Neutre / {funds['analyst_sell']} Vente"
+                )
+            funds_block = ("\nFONDAMENTAUX\n" + "\n".join(funds_lines)) if funds_lines else ""
+
+            news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
+            news_b = ("\nACTUALITÉS\n" + "\n".join(news_lines)) if news_lines else ""
+
+            validate_prompt = f"""{TRADER_SYSTEM}
+{TICKER_RULES}
+{FORMAT_TELEGRAM}
+
+AUJOURD'HUI : {today_str}
+TICKER ANALYSÉ : {t} — JE NE DÉTIENS PAS CETTE ACTION. CASH DISPONIBLE : {cash}€.
+Cours actuel : {current_price}
+{tech_block}{funds_block}{news_b}
+
+RECHERCHE WEB
+{web}
+
+CATALYSEURS IMMINENTS
+{cats}
+
+Signal ACHAT ou NEUTRE/ÉVITER ?
+RÈGLE : si tu donnerais NEUTRE ou ÉVITER dans un /research → réponds EXCLUS en 1 mot.
+Si ACHAT : donne format exact :
+NOM SOCIETE ({t})
+- Marché : ...
+- Cours actuel : {current_price} | Entrée : X  SL : X (-10%)  TP : X (+15%)
+- Catalyseur : [événement précis + date après {today_str}]
+- Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
-            header = "🔍 SCAN OPPORTUNITÉS"
 
-        result = _strip_markdown(ai.complete(prompt, max_tokens=700))
-        result = _validate_tickers(result)
-        send_fn(f"{header}\n\n{result}\n\n💰 Cash: {cash}€")
+            val = _strip_markdown(ai.complete(validate_prompt, max_tokens=250))
+            if val.strip().upper().startswith("EXCLU"):
+                continue
+            val = _validate_tickers(val)
+            opportunities.append(val)
+
+        # ── Assemblage final ──────────────────────────────────────────────────
+        result_parts = [f"POSITIONS\n{portfolio_summary}"]
+        if opportunities:
+            result_parts.append("OPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities))
+        else:
+            result_parts.append(
+                "Aucun candidat ne passe le filtre technique aujourd'hui.\n"
+                "Attendre un meilleur point d'entrée ou de nouveaux catalyseurs."
+            )
+
+        send_fn(f"🔍 SCAN OPPORTUNITÉS\n\n" + "\n\n".join(result_parts) + f"\n\n💰 Cash: {cash}€")
 
     except Exception as e:
         send_fn(f"⚠️ Erreur scan: {e}")
