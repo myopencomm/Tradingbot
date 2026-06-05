@@ -70,7 +70,12 @@ def _portfolio_snapshot() -> str:
     data = portfolio.load()
     cash = data.get("cash_available", 0)
     positions = data.get("positions", {})
-    lines = [f"💰 Cash: {cash}€", "📁 Positions:"]
+    today = datetime.now(PARIS).strftime("%d/%m/%Y")
+    lines = [
+        f"SNAPSHOT PORTEFEUILLE — SOURCE DE VÉRITÉ — {today}",
+        f"💰 Cash: {cash}€",
+        "📁 Positions (UNIQUEMENT ces positions sont actives — ignorer tout autre mention) :",
+    ]
     for name, cfg in positions.items():
         quote = prices.get_quote(cfg["ticker"])
         price = quote.get("price")
@@ -135,11 +140,13 @@ def morning_briefing(send_fn) -> None:
         ctx = _trading_context()
         ctx_block = f"\n--- CONTEXTE PERSONNEL ---\n{ctx}\n" if ctx else ""
 
+        today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
+
         if cash >= 1000:
             mission = f"""MISSION
 1. Pour chaque position : signal (conserver/alléger/vendre), tendance courte, commentaire bref.
-2. Top 3 opportunités pour le cash disponible ({cash}€) :
-   TICKER — prix entrée — SL — TP — raison — risque
+2. Top 3 opportunités pour le cash disponible ({cash}€) — UNIQUEMENT si catalyseur futur daté après le {today_str} :
+   TICKER — prix entrée — SL — TP — catalyseur [événement + date] — risque
 3. Risque global : LOW / MEDIUM / HIGH"""
         else:
             mission = f"""MISSION
@@ -165,8 +172,11 @@ def morning_briefing(send_fn) -> None:
 
         prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
+
+AUJOURD'HUI : {today_str}
+RÈGLE : tout catalyseur proposé doit être un événement futur daté après le {today_str}. Catalyseurs passés = exclus.
 {ctx_block}
-PORTEFEUILLE
+PORTEFEUILLE — SOURCE DE VÉRITÉ
 {snapshot}
 {enriched_block}
 
@@ -454,10 +464,11 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
         if ticker:  # backward compat
             return research_ticker(send_fn, ticker)
         else:
+            today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
             macro     = research.market_context()
             catalysts = research.market_catalysts()
 
-            # News yfinance sur les positions en portefeuille pour enrichir le briefing
+            # News yfinance sur les positions en portefeuille
             positions_news = []
             for name, cfg in portfolio.load().get("positions", {}).items():
                 news = prices.get_yf_news(cfg["ticker"], max_items=2)
@@ -468,6 +479,10 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
             prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
+
+AUJOURD'HUI : {today_str}
+RÈGLE ABSOLUE CATALYSEURS : chaque opportunité proposée DOIT avoir un catalyseur daté APRÈS le {today_str}.
+Tout catalyseur déjà passé (avant aujourd'hui) doit être ignoré. Si aucun catalyseur futur identifiable → ne pas proposer l'action.
 {ctx_block}
 {snapshot}
 {news_block}
@@ -480,19 +495,18 @@ CATALYSEURS IMMINENTS — TOUS MARCHÉS
 
 Cash disponible : {cash}€
 
-Si des ordres en attente sont listés ci-dessus, commence par les évaluer :
-ORDRE EN ATTENTE NOM — MAINTENIR ou ANNULER ?
-- Justification courte (conditions changées ? thèse toujours valide ?)
+Pour chaque position ci-dessus, donne en 1 ligne : MAINTENIR / SURVEILLER / VENDRE et pourquoi.
 
-Ensuite propose jusqu'à 3 opportunités avec catalyseur imminent identifié.
-Tous les marchés accessibles via Bourse Direct sont valides (Euronext, NYSE, NASDAQ, LSE, Xetra).
+Ensuite propose jusqu'à 3 opportunités UNIQUEMENT si elles ont un catalyseur futur concret et daté.
+Si moins de 3 opportunités solides → propose-en moins plutôt que de forcer.
+Tous les marchés Bourse Direct valides (Euronext, NYSE, NASDAQ, LSE, Xetra).
 Pour chaque opportunité, format exact :
 NOM SOCIETE (TICKER)
 - Marché : ex Euronext Paris / NASDAQ / LSE
 - Entrée : X€  SL : X€  TP : X€
-- Catalyseur : ...
+- Catalyseur : [événement précis + date future]
 - Raison : ...
-- Risque : LOW / MEDIUM / HIGH  (applique les critères stricts ci-dessus)"""
+- Risque : LOW / MEDIUM / HIGH"""
             header = "🔍 SCAN OPPORTUNITÉS"
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=700))
