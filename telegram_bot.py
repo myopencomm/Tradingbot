@@ -243,7 +243,11 @@ def cmd_remove(args, cid):
     if not args:
         send("Usage: /remove TICKER", cid)
         return
-    name = args[0].upper().split(".")[0]
+    positions = portfolio.get_positions()
+    name = _find_position(args[0], positions)
+    if not name:
+        send(f"Position '{args[0]}' introuvable.\nPositions: {list(positions.keys())}", cid)
+        return
     portfolio.remove_position(name)
     send(f"Position {name} supprimee.", cid)
 
@@ -253,15 +257,15 @@ def cmd_sl(args, cid):
     if len(args) < 2:
         send("Usage: /sl TICKER PRIX\nEx: /sl LBIRD 22.01", cid)
         return
-    name = args[0].upper().split(".")[0]
     try:
         price = float(args[1].replace(",", "."))
     except ValueError:
         send("Prix invalide.", cid)
         return
     data = portfolio.load()
-    if name not in data.get("positions", {}):
-        send(f"Position {name} introuvable.", cid)
+    name = _find_position(args[0], data.get("positions", {}))
+    if not name:
+        send(f"Position '{args[0]}' introuvable.", cid)
         return
     portfolio.update_sl(name, price)
     cfg = data["positions"][name]
@@ -277,16 +281,20 @@ def cmd_tp(args, cid):
     if len(args) < 2:
         send("Usage: /tp TICKER PRIX\nEx: /tp LBIRD 28.13", cid)
         return
-    name = args[0].upper().split(".")[0]
     try:
         price = float(args[1].replace(",", "."))
     except ValueError:
         send("Prix invalide.", cid)
         return
+    data = portfolio.load()
+    name = _find_position(args[0], data.get("positions", {}))
+    if not name:
+        send(f"Position '{args[0]}' introuvable.", cid)
+        return
     if portfolio.update_tp(name, price):
         send(f"TP {name} mis a jour: {price}€", cid)
     else:
-        send(f"Position {name} introuvable.", cid)
+        send(f"Erreur mise a jour TP {name}.", cid)
 
 
 def cmd_order(args, cid):
@@ -531,6 +539,24 @@ def cmd_update(args, cid):
         send(f"Impossible de lire la version : {e}", cid)
 
 
+def _find_position(name_input: str, positions: dict) -> str | None:
+    """
+    Trouve la clé d'une position dans le dict par :
+    1. Nom exact (GENFIT)
+    2. Ticker base exact (GNFT pour GNFT.PA)
+    3. Préfixe unique (GEN si seul GENFIT commence par GEN)
+    Retourne None si introuvable ou ambigu.
+    """
+    key = name_input.upper().split(".")[0]
+    if key in positions:
+        return key
+    for n, cfg in positions.items():
+        if cfg["ticker"].split(".")[0].upper() == key:
+            return n
+    matches = [n for n in positions if n.startswith(key)]
+    return matches[0] if len(matches) == 1 else None
+
+
 def cmd_vendu(args, cid):
     # /vendu NOM [PRIX] — clôture intelligente avec prix auto ou manuel
     if not args:
@@ -542,23 +568,11 @@ def cmd_vendu(args, cid):
         )
         return
 
-    name_input = args[0].upper().split(".")[0]
     data = portfolio.load()
     positions = data.get("positions", {})
-
-    # Recherche de la position : nom exact, puis ticker, puis préfixe
-    name = None
-    if name_input in positions:
-        name = name_input
-    else:
-        for n, cfg in positions.items():
-            ticker_base = cfg["ticker"].split(".")[0].upper()
-            if ticker_base == name_input or n.startswith(name_input):
-                name = n
-                break
-
+    name = _find_position(args[0], positions)
     if not name:
-        send(f"Position '{name_input}' introuvable.\nPositions: {list(positions.keys())}", cid)
+        send(f"Position '{args[0]}' introuvable.\nPositions: {list(positions.keys())}", cid)
         return
 
     cfg = positions[name]
