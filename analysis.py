@@ -129,52 +129,55 @@ def _breach_warning(ticker: str, pru: float, sl: float) -> str | None:
 
 
 def morning_briefing(send_fn) -> None:
-    """Briefing quotidien 9h05 : analyse portefeuille + macro + opportunités."""
+    """
+    Briefing quotidien 9h05.
+    - Analyse portefeuille : prompt direct avec données réelles.
+    - Opportunités (si cash >= 1000€) : même 2 passes que scan_opportunities
+      pour éviter que l'IA invente des prix depuis des articles web périmés.
+    """
     print(f"[{datetime.now(PARIS).strftime('%Y-%m-%d %H:%M:%S')}] Analyse matinale...")
     try:
         ai = get_provider()
         snapshot = _portfolio_snapshot()
         macro = research.market_context()
         cash = portfolio.get_cash()
-
         ctx = _trading_context()
         ctx_block = f"\n--- CONTEXTE PERSONNEL ---\n{ctx}\n" if ctx else ""
-
         today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
-
-        if cash >= 1000:
-            mission = f"""MISSION
-1. Pour chaque position : signal (conserver/alléger/vendre), tendance courte, commentaire bref.
-2. Top 3 opportunités pour le cash disponible ({cash}€) — UNIQUEMENT si catalyseur futur daté après le {today_str} :
-   TICKER — prix entrée — SL — TP — catalyseur [événement + date] — risque
-3. Risque global : LOW / MEDIUM / HIGH"""
-        else:
-            mission = f"""MISSION
-1. Pour chaque position : signal (conserver/alléger/vendre), tendance courte, commentaire bref.
-2. Risque global : LOW / MEDIUM / HIGH
-(Cash insuffisant pour nouvelles positions : {cash}€ < 1000€)"""
 
         # News yfinance + fondamentaux clés par position
         enriched_lines = []
         for name, cfg in portfolio.load().get("positions", {}).items():
-            news  = prices.get_yf_news(cfg["ticker"], max_items=2)
-            funds = prices.get_fundamentals(cfg["ticker"])
-            parts = []
+            pos_news = prices.get_yf_news(cfg["ticker"], max_items=2)
+            funds    = prices.get_fundamentals(cfg["ticker"])
+            parts    = []
             if funds.get("analyst_target"):
                 parts.append(f"objectif analyste {funds['analyst_target']}")
             if funds.get("next_earnings"):
                 parts.append(f"résultats le {funds['next_earnings']}")
-            for n in news:
+            for n in pos_news:
                 parts.append(n["title"])
             if parts:
                 enriched_lines.append(f"  {name} : " + " | ".join(parts))
         enriched_block = ("\nNEWS & DONNÉES ANALYSTES\n" + "\n".join(enriched_lines)) if enriched_lines else ""
 
-        prompt = f"""{TRADER_SYSTEM}
+        # ── Passe 1 : analyse portefeuille (+ candidats si cash suffisant) ───
+        if cash >= 1000:
+            catalysts = research.market_catalysts()
+            opps_mission = f"""
+2. Identifie 3 à 5 tickers CANDIDATS avec un catalyseur futur daté après le {today_str}.
+   Réponds UNIQUEMENT avec les tickers Yahoo Finance (ex: ALFRE.PA, MSFT), un par ligne.
+   Ne donne AUCUN prix — juste les tickers.
+3. Risque global portefeuille : LOW / MEDIUM / HIGH"""
+        else:
+            catalysts = ""
+            opps_mission = f"\n2. Risque global : LOW / MEDIUM / HIGH\n(Cash {cash}€ insuffisant pour nouvelles positions)"
+
+        prompt1 = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 
 AUJOURD'HUI : {today_str}
-RÈGLE : tout catalyseur proposé doit être un événement futur daté après le {today_str}. Catalyseurs passés = exclus.
+RÈGLE CATALYSEURS : événements futurs uniquement, datés après le {today_str}.
 {ctx_block}
 PORTEFEUILLE — SOURCE DE VÉRITÉ
 {snapshot}
@@ -183,11 +186,93 @@ PORTEFEUILLE — SOURCE DE VÉRITÉ
 CONTEXTE MARCHÉ
 {macro}
 
-{mission}"""
+{f"CATALYSEURS — TOUS MARCHÉS{chr(10)}{catalysts}" if catalysts else ""}
 
-        result = _strip_markdown(ai.complete(prompt, max_tokens=900))
+MISSION
+1. Pour chaque position : MAINTENIR / SURVEILLER / VENDRE + commentaire bref.
+{opps_mission}"""
+
+        pass1 = _strip_markdown(ai.complete(prompt1, max_tokens=600))
+
+        # ── Passe 2 : validation des candidats avec prix réels ───────────────
+        opportunities = []
+        if cash >= 1000:
+            # Extrait les tickers candidats (lignes courtes en majuscules)
+            held_tickers = {cfg["ticker"].upper()
+                            for cfg in portfolio.load().get("positions", {}).values()}
+            raw_tickers = _extract_tickers(pass1)
+
+            for t in raw_tickers[:5]:
+                if t.upper() in held_tickers:
+                    continue
+                q = prices.get_quote(t)
+                current_price = q.get("price")
+                if not current_price:
+                    continue
+
+                tech   = prices.get_technicals(t)
+                funds  = prices.get_fundamentals(t)
+                yf_n   = prices.get_yf_news(t, max_items=4)
+                social = research.get_social_sentiment(t)
+                web    = research.research_stock(t)
+                cats   = research.search_catalysts(t)
+
+                tech_b = ""
+                if tech:
+                    tech_b = (
+                        f"\nTECHNICALS : RSI {tech.get('rsi','N/A')} | "
+                        f"Momentum {tech.get('momentum_1m','N/A'):+}% | "
+                        f"Vol ratio {tech.get('vol_ratio','N/A')}x\n"
+                    )
+                funds_b = ""
+                fl = []
+                if funds.get("analyst_target"):
+                    fl.append(f"Objectif analyste : {funds['analyst_target']}")
+                if funds.get("next_earnings"):
+                    fl.append(f"Résultats le : {funds['next_earnings']}")
+                if fl:
+                    funds_b = "\n" + " | ".join(fl) + "\n"
+
+                social_b = f"\nSENTIMENT : {social}" if social and "aucune donnée" not in social else ""
+                news_b   = ("\nNEWS : " + " | ".join(n["title"] for n in yf_n[:3])) if yf_n else ""
+
+                val_prompt = f"""{TRADER_SYSTEM}
+{TICKER_RULES}
+{FORMAT_TELEGRAM}
+
+AUJOURD'HUI : {today_str}. TICKER : {t}. COURS RÉEL : {current_price}€. CASH DISPO : {cash}€.
+{tech_b}{funds_b}{social_b}{news_b}
+
+RECHERCHE WEB : {web}
+CATALYSEURS : {cats}
+
+Signal ACHAT ou NEUTRE/ÉVITER ?
+Si NEUTRE/ÉVITER → réponds exactement : EXCLUS
+Si ACHAT → format :
+{t} — Entrée : {current_price}€  SL : X€ (-10%)  TP : X€ (+15%)
+- Catalyseur : [événement précis + date après {today_str}]
+- Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
+
+                val = _strip_markdown(ai.complete(val_prompt, max_tokens=200))
+                if val.strip().upper().startswith("EXCLU"):
+                    continue
+                val = _validate_tickers(val)
+                opportunities.append(val)
+
+        # ── Assemblage final ─────────────────────────────────────────────────
+        # Extrait la partie analyse portefeuille (avant les tickers candidats)
+        portfolio_analysis = "\n".join(
+            l for l in pass1.splitlines()
+            if not (len(l.strip()) <= 12 and l.strip().replace(".", "").replace("-", "").isupper())
+        ).strip()
+
         date = datetime.now(PARIS).strftime("%d/%m/%Y")
-        send_fn(f"🌅 BRIEFING — {date}\n\n{snapshot}\n\n{result}")
+        msg  = f"🌅 BRIEFING — {date}\n\n{snapshot}\n\n{portfolio_analysis}"
+        if opportunities:
+            msg += "\n\nOPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities)
+        elif cash >= 1000:
+            msg += "\n\nAucune opportunité ne passe le filtre technique aujourd'hui."
+        send_fn(msg)
 
     except Exception as e:
         print(f"Erreur briefing: {e}")
