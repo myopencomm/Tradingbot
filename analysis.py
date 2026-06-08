@@ -343,6 +343,7 @@ def research_ticker(send_fn, ticker: str) -> None:
         tech      = prices.get_technicals(real_ticker)
         funds     = prices.get_fundamentals(real_ticker)
         yf_news   = prices.get_yf_news(real_ticker)
+        social    = research.get_social_sentiment(real_ticker)
 
         tech_block = ""
         if tech:
@@ -390,6 +391,7 @@ def research_ticker(send_fn, ticker: str) -> None:
             pct_to_tp = ((held["target_high"] - price) / price * 100) if isinstance(price, float) else "?"
             pct_to_sl = ((price - held["target_low"]) / price * 100) if isinstance(price, float) else "?"
 
+            social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
             prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {ctx_block}
@@ -400,7 +402,7 @@ MA POSITION
 - PRU : {sym}{held['entry_price']} | {held['qty']} titres | P&L : {sym}{pnl:+.0f}
 - SL actuel : {sym}{held['target_low']} (marge : {pct_to_sl:.1f}%)
 - TP actuel : {sym}{held['target_high']} (potentiel restant : {pct_to_tp:.1f}%)
-{tech_block}{funds_block}{news_block}
+{tech_block}{funds_block}{news_block}{social_block}
 
 RECHERCHE WEB
 {web}
@@ -424,12 +426,13 @@ DÉCISION
 - Une phrase de justification. Pas de bla-bla."""
 
         else:
+            social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
             prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_block}
 TICKER ANALYSÉ : {ticker} — JE NE DÉTIENS PAS CETTE ACTION.
-{tech_block}{funds_block}{news_block}
+{tech_block}{funds_block}{news_block}{social_block}
 
 RECHERCHE WEB
 {web}
@@ -559,11 +562,12 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
 
         opportunities = []
         for t, current_price in valid_candidates[:4]:
-            tech  = prices.get_technicals(t)
-            funds = prices.get_fundamentals(t)
+            tech   = prices.get_technicals(t)
+            funds  = prices.get_fundamentals(t)
             yf_news = prices.get_yf_news(t, max_items=4)
-            web   = research.research_stock(t)
-            cats  = research.search_catalysts(t)
+            web    = research.research_stock(t)
+            cats   = research.search_catalysts(t)
+            social = research.get_social_sentiment(t)
 
             tech_block = ""
             if tech:
@@ -589,6 +593,7 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
             news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
             news_b = ("\nACTUALITÉS\n" + "\n".join(news_lines)) if news_lines else ""
 
+            social_b = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
             validate_prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
@@ -596,7 +601,7 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
 AUJOURD'HUI : {today_str}
 TICKER ANALYSÉ : {t} — JE NE DÉTIENS PAS CETTE ACTION. CASH DISPONIBLE : {cash}€.
 Cours actuel : {current_price}
-{tech_block}{funds_block}{news_b}
+{tech_block}{funds_block}{news_b}{social_b}
 
 RECHERCHE WEB
 {web}

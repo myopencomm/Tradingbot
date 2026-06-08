@@ -177,6 +177,76 @@ def market_catalysts() -> str:
     return "\n".join(snippets[:20]) or "Aucune donnée catalyseurs disponible."
 
 
+def get_social_sentiment(ticker: str) -> str:
+    """
+    Sentiment social via StockTwits (gratuit, sans clé) + Reddit JSON API.
+    Retourne un résumé texte injecté dans les prompts /research et /scan.
+
+    StockTwits : fonctionne bien pour les US stocks et quelques stocks FR majeurs.
+    Reddit : r/stocks, r/investing, r/wallstreetbets — surtout pertinent US.
+    """
+    # Ticker base sans suffixe (EXENS.PA → EXENS, ILMN → ILMN)
+    base = ticker.upper().split(".")[0]
+    lines = []
+
+    # ── StockTwits ────────────────────────────────────────────────────────────
+    try:
+        st_url = f"https://api.stocktwits.com/api/2/streams/symbol/{base}.json"
+        r = requests.get(st_url, headers=HEADERS, timeout=6)
+        if r.status_code == 200:
+            data = r.json()
+            messages = data.get("messages", [])
+
+            def _st_sentiment(m):
+                ent = m.get("entities") or {}
+                return (ent.get("sentiment") or {}).get("basic")
+
+            bullish = sum(1 for m in messages if _st_sentiment(m) == "Bullish")
+            bearish = sum(1 for m in messages if _st_sentiment(m) == "Bearish")
+            total   = bullish + bearish
+            if total > 0:
+                bull_pct = round(bullish / total * 100)
+                lines.append(f"StockTwits ({len(messages)} msgs) : {bull_pct}% bullish / {100-bull_pct}% bearish")
+                for m in messages[:5]:
+                    sent = _st_sentiment(m) or ""
+                    body = m.get("body", "").replace("\n", " ")[:120]
+                    if body:
+                        tag = f"[{sent}] " if sent else ""
+                        lines.append(f"  • {tag}{body}")
+            elif messages:
+                lines.append(f"StockTwits : {len(messages)} messages récents, sentiment non tagué")
+    except Exception as e:
+        print(f"⚠️ StockTwits {ticker}: {e}")
+
+    # ── Reddit (JSON API publique, sans clé) ──────────────────────────────────
+    try:
+        reddit_headers = {**HEADERS, "User-Agent": "TradingBot/1.0 (research tool)"}
+        subreddits = ["stocks", "investing", "wallstreetbets"]
+        reddit_lines = []
+        for sub in subreddits:
+            r = requests.get(
+                f"https://www.reddit.com/r/{sub}/search.json",
+                params={"q": base, "sort": "relevance", "t": "week", "limit": 3},
+                headers=reddit_headers, timeout=6,
+            )
+            if r.status_code != 200:
+                continue
+            posts = r.json().get("data", {}).get("children", [])
+            for post in posts:
+                d = post.get("data", {})
+                title = d.get("title", "")[:100]
+                score = d.get("score", 0)
+                if title and score > 5:
+                    reddit_lines.append(f"  • r/{sub} (+{score}) {title}")
+        if reddit_lines:
+            lines.append(f"Reddit (7 derniers jours) :")
+            lines.extend(reddit_lines[:5])
+    except Exception as e:
+        print(f"⚠️ Reddit {ticker}: {e}")
+
+    return "\n".join(lines) if lines else "Sentiment social : aucune donnée disponible."
+
+
 def scan_sector(sector: str) -> str:
     """Meilleures opportunités dans un secteur, tous marchés."""
     queries = [
