@@ -90,5 +90,32 @@ def sync(page, send_fn) -> bool:
     else:
         lines.append("\nAucune modification détectée.")
 
+    # ── Ordres en cours sur BD ───────────────────────────────────────────
+    orders = bd.get("orders", [])
+    if orders:
+        lines.append("\nORDRES EN COURS SUR BD")
+        for o in orders:
+            typ   = o.get("type", "?")
+            sens  = o.get("sens", "")
+            seuil = o.get("seuil")
+            profit = o.get("profit")
+            statut = o.get("statut", "")
+            detail = []
+            if seuil:
+                detail.append(f"SL {seuil}€")
+            if profit:
+                detail.append(f"TP {profit}€")
+            detail_str = " | ".join(detail)
+            lines.append(f"  {sens} {typ} : {detail_str} ({statut})")
+
+    # ── Investissements programmés ───────────────────────────────────────
+    programmed = bd.get("programmed", [])
+    if programmed:
+        lines.append("\nINVESTISSEMENTS PROGRAMMÉS")
+        for p in programmed:
+            lines.append(f"  {p[:120]}")
+    else:
+        lines.append("\nInvest. programmés : aucun")
+
     send_fn("✅ Sync BD terminée\n\n" + "\n".join(lines))
     return True
