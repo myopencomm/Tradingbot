@@ -32,3 +32,10 @@ env/
 
 # Claude Code local settings (permissions, etc.)
 .claude/
+
+# Mode Playwright — état + captures d'exploration (données perso)
+bot_state.json
+.playwright-mcp/
+bd_*.png
+*.png
+PLAYWRIGHT_STRATEGY.md
