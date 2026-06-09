@@ -34,9 +34,26 @@ def sync(page, send_fn) -> bool:
             lines.append(f"Cash : {bd['cash']}€ (inchangé)")
 
     # ── Positions BD → local ─────────────────────────────────────────────
-    # Matching prioritaire sur le ticker BD (ex: "EXENS" ↔ "EXENS.PA")
     def _local_base(cfg):
         return cfg["ticker"].upper().split(".")[0]
+
+    def _match_local(bd_ticker, bd_name):
+        """Trouve la clé locale par ticker, nom complet (bd_name), ou substring."""
+        bd_ticker = (bd_ticker or "").upper()
+        bd_name_u = (bd_name or "").upper()
+        for k, cfg in local.items():
+            local_bd_name = (cfg.get("bd_name") or "").upper()
+            if bd_ticker and _local_base(cfg) == bd_ticker:
+                return k
+            if bd_name_u and local_bd_name and bd_name_u == local_bd_name:
+                return k
+            if k.upper() == bd_name_u or k.upper() == bd_name_u.replace(" ", ""):
+                return k
+            # Substring : "MCPHY" ⊂ "MCPHY ENERGY", ou bd_name ⊂ alias
+            if bd_name_u and (k.upper() in bd_name_u or
+                              (local_bd_name and (local_bd_name in bd_name_u or bd_name_u in local_bd_name))):
+                return k
+        return None
 
     matched_local_keys = set()
 
@@ -46,14 +63,7 @@ def sync(page, send_fn) -> bool:
         bd_qty    = pos["qty"]
         bd_pru    = pos["pru"]
 
-        # 1) ticker base exact  2) nom de position  3) nom collé
-        local_key = next(
-            (k for k, cfg in local.items()
-             if _local_base(cfg) == bd_ticker
-             or k.upper() == bd_name
-             or k.upper() == bd_name.replace(" ", "")),
-            None
-        )
+        local_key = _match_local(bd_ticker, bd_name)
 
         if local_key:
             matched_local_keys.add(local_key)
@@ -84,29 +94,46 @@ def sync(page, send_fn) -> bool:
                 f"⚠️ {local_key} dans le bot mais absent de BD — vendu ?"
             )
 
-    if changed:
-        portfolio.save(data)
-        lines.append("\npositions.json mis à jour.")
-    else:
-        lines.append("\nAucune modification détectée.")
-
-    # ── Ordres en cours sur BD ───────────────────────────────────────────
+    # ── Ordres en cours sur BD → mettent à jour les SL/TP des positions ──
+    # Les ordres BD (Take Profit, Stop Loss) reflètent les vraies protections
+    # placées. On aligne target_low (Seuil/SL) et target_high (Profit/TP) dessus.
     orders = bd.get("orders", [])
     if orders:
         lines.append("\nORDRES EN COURS SUR BD")
         for o in orders:
-            typ   = o.get("type", "?")
-            sens  = o.get("sens", "")
-            seuil = o.get("seuil")
+            typ    = o.get("type", "?")
+            sens   = o.get("sens", "")
+            seuil  = o.get("seuil")
             profit = o.get("profit")
             statut = o.get("statut", "")
+            o_ticker = (o.get("bd_ticker") or "").upper()
+            o_name   = (o.get("name") or "").upper()
+
             detail = []
             if seuil:
                 detail.append(f"SL {seuil}€")
             if profit:
                 detail.append(f"TP {profit}€")
-            detail_str = " | ".join(detail)
-            lines.append(f"  {sens} {typ} : {detail_str} ({statut})")
+            lines.append(f"  {o.get('name','?')} : {sens} {typ} {' | '.join(detail)} ({statut})")
+
+            # Met à jour la position locale correspondante
+            lk = _match_local(o_ticker, o_name)
+            if lk:
+                pos_cfg = data["positions"][lk]
+                if seuil and abs(seuil - pos_cfg.get("target_low", 0)) >= 0.01:
+                    lines.append(f"    → SL {lk} : {pos_cfg.get('target_low')} → {seuil}")
+                    pos_cfg["target_low"] = seuil
+                    changed = True
+                if profit and abs(profit - pos_cfg.get("target_high", 0)) >= 0.01:
+                    lines.append(f"    → TP {lk} : {pos_cfg.get('target_high')} → {profit}")
+                    pos_cfg["target_high"] = profit
+                    changed = True
+
+    if changed:
+        portfolio.save(data)
+        lines.append("\npositions.json mis à jour.")
+    else:
+        lines.append("\nAucune modification détectée.")
 
     # ── Investissements programmés ───────────────────────────────────────
     programmed = bd.get("programmed", [])

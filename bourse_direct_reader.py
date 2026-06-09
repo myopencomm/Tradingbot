@@ -120,12 +120,13 @@ def get_portfolio(page, send_fn=None) -> dict | None:
             log(f"Lecture positions échouée : {e}")
 
         # ── Onglet Mes ordres ────────────────────────────────────────────────
+        # Chaque bloc .ConsolidatedOrders contient le titre + ses ordres ensemble
         orders = []
         if _click_tab(page, "Mes ordres"):
             _dismiss_popups(page)
             try:
-                for row in page.locator(".order-line").all():
-                    parsed = _parse_order(row.inner_text(timeout=2000))
+                for block in page.locator(".ConsolidatedOrders-module_content_elUGZ").all():
+                    parsed = _parse_order(block.inner_text(timeout=2000))
                     if parsed:
                         orders.append(parsed)
             except Exception as e:
@@ -164,8 +165,13 @@ def get_portfolio(page, send_fn=None) -> dict | None:
 
 
 def _parse_position(text: str) -> dict | None:
+    """
+    Parse une .position-row.
+    bd_ticker peut être absent pour les valeurs suspendues (pas de lien marché) :
+    dans ce cas on garde quand même la position via son nom complet.
+    """
     parts = [p.strip() for p in text.split("\n") if p.strip()]
-    if len(parts) < 5:
+    if len(parts) < 4:
         return None
 
     name = bd_ticker = qty = pru = None
@@ -193,15 +199,17 @@ def _parse_position(text: str) -> dict | None:
                 qty = int(clean)
                 break
 
-    if not name or not bd_ticker or qty is None:
+    # bd_ticker optionnel (valeurs suspendues) : nom + qty suffisent
+    if not name or qty is None:
         return None
-    return {"name": name, "bd_ticker": bd_ticker, "qty": qty, "pru": pru}
+    return {"name": name, "bd_ticker": bd_ticker or "", "qty": qty, "pru": pru}
 
 
 def _parse_order(text: str) -> dict | None:
     """
-    Parse une ligne .order-line.
-    Ex : 'Vente(CPT) 0/17 - 31/12/2026 à 17:35:00 Take Profit Seuil57.20 € En cours Profit72.90 € En cours'
+    Parse un bloc .ConsolidatedOrders (titre + ordre ensemble).
+    Ex : 'Exosens | XPAR › EXENS | 61.45 EUR | ... Vente(CPT) 0/17 ...
+          Take Profit Seuil57.20 € En cours Profit72.90 € En cours'
     """
     flat = text.replace("\n", " ").replace("\t", " ")
     flat = re.sub(r'\s+', ' ', flat).strip()
@@ -209,6 +217,16 @@ def _parse_order(text: str) -> dict | None:
         return None
 
     order = {"raw": flat}
+
+    # Nom + ticker du titre concerné
+    if "›" in flat:
+        m_tick = re.search(r'›\s*([A-Z0-9]+)', flat)
+        if m_tick:
+            order["bd_ticker"] = m_tick.group(1).strip()
+    # Nom = premier mot avant le premier séparateur/marché
+    m_name = re.match(r'^([A-Za-zÀ-ÿ0-9.\- ]+?)\s*[|›]', flat)
+    if m_name:
+        order["name"] = m_name.group(1).strip()
 
     # Sens
     m = re.search(r'(Achat|Vente)\s*\(([A-Z]+)\)', flat)
