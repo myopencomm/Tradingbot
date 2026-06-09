@@ -24,12 +24,12 @@
 
 ```json
 {
-  "login": "<BD_LOGIN>",
+  "login": "<BD_LOGIN en MAJUSCULES>",
   "mic": "XPAR",
   "ticker": "AI",
   "currency": "EUR",
   "quantity": "1",
-  "portfolio": "<BD_ACCOUNT>",
+  "portfolio": "<BD_ACCOUNT — numéro de compte CTO>",
   "type": "limit",
   "side": "buy",
   "validity": "day",
@@ -43,9 +43,10 @@
   "brokerage": null
 }
 ```
+> login et portfolio = données personnelles, lues depuis `.env` (BD_LOGIN, BD_ACCOUNT).
 
 ### CORRECTIONS à apporter à bourse_direct_orders.py
-1. **`login` en MAJUSCULES** : le form envoie `<BD_LOGIN>` (BD_LOGIN.upper())
+1. **`login` en MAJUSCULES** : le form envoie `BD_LOGIN.upper()`
 2. **`ticker` SANS préfixe `E:`** ← ERREUR ACTUELLE dans TICKER_MAP.
    - Le vrai ticker API = mnémonique de la place : `AI` (XPAR), `AIL` (XETR), `ILMN` (XNAS)
    - Donc EXENS.PA → ticker `EXENS` + mic `XPAR` (PAS `E:EXENS`)

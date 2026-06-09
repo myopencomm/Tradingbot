@@ -20,7 +20,8 @@ import json
 
 BD_API_BASE = "https://www.boursedirect.fr/hub/trading"
 BD_LOGIN    = os.getenv("BD_LOGIN", "")
-BD_ACCOUNT  = "<BD_ACCOUNT>"  # CTO Compte Titre Ordinaire
+# Numéro de compte CTO — donnée personnelle, à mettre dans .env (BD_ACCOUNT)
+BD_ACCOUNT  = os.getenv("BD_ACCOUNT", "")
 
 # Token CSRF statique extrait du bundle ordertrade.bundle.js
 _CSRF = "OWY4NmQwODE4ODRjN2Q2NTlhMmZlYWEwYzU1YWQwMTVhM2JmNGYxYjJiMGI4MjJjZDE1ZDMGYwMGEwOA=="
