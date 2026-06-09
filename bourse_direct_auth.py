@@ -39,10 +39,9 @@ def login(send_fn) -> bool:
 
     try:
         page.goto(BD_URL, wait_until="domcontentloaded", timeout=20000)
-        time.sleep(1)
+        time.sleep(2)
 
         # ── Remplissage credentials ──────────────────────────────────────────
-        # Utilise click + type pour déclencher les événements clavier (Vue.js)
         login_field = page.locator('input[placeholder="Identifiant"]')
         login_field.click()
         login_field.type(BD_LOGIN, delay=50)
@@ -52,14 +51,7 @@ def login(send_fn) -> bool:
         pwd_field.type(BD_PASSWORD, delay=50)
 
         page.click('button:has-text("Se connecter")')
-
-        # Attend que la page change (soit TOTP, soit dashboard)
-        try:
-            page.wait_for_url(lambda url: "login" not in url or "TOTP" in page.content(),
-                              timeout=8000)
-        except Exception:
-            pass  # Timeout ok — on vérifie ensuite
-        time.sleep(1)
+        time.sleep(4)  # Attend la réponse du serveur BD
 
         # ── Détection TOTP ──────────────────────────────────────────────────
         if _needs_otp(page):
@@ -70,7 +62,7 @@ def login(send_fn) -> bool:
 
             send_fn(
                 "Code TOTP Bourse Direct ?\n"
-                "(Application d'authentification — Google Authenticator, Authy...)\n"
+                "(Google Authenticator, Authy...)\n"
                 "Envoie le code a 6 chiffres (90 secondes) :"
             )
             got_code = _otp_event.wait(timeout=OTP_TIMEOUT)
@@ -84,19 +76,13 @@ def login(send_fn) -> bool:
             if not success:
                 return False
 
-            # Attend la redirection post-TOTP
-            try:
-                page.wait_for_url(lambda url: "login" not in url, timeout=10000)
-            except Exception:
-                pass
-            time.sleep(2)
+            time.sleep(4)  # Attend la redirection post-TOTP
 
         if _is_logged_in(page):
             session.mark_connected()
             return True
 
-        # Debug : montre l'URL courante pour diagnostiquer
-        send_fn(f"Connexion échouée. URL actuelle : {page.url[:80]}")
+        send_fn(f"Connexion échouée. URL : {page.url[:80]}")
         return False
 
     except Exception as e:
@@ -126,8 +112,7 @@ def _fill_totp(page, code: str, send_fn=None) -> bool:
         return False
 
     try:
-        # Attendre que les spinbuttons soient présents
-        page.wait_for_selector('[role="spinbutton"]', timeout=5000)
+        time.sleep(1)
         spinbuttons = page.locator('[role="spinbutton"]').all()
 
         if len(spinbuttons) < 6:
@@ -155,13 +140,11 @@ def _fill_totp(page, code: str, send_fn=None) -> bool:
         except Exception:
             pass
 
-        # Attend que le bouton Continuer soit actif puis clique
+        # Clique sur Continuer (délai pour que Vue.js valide le formulaire)
+        time.sleep(0.5)
         try:
-            btn = page.locator('button:has-text("Continuer")')
-            btn.wait_for(state="enabled", timeout=4000)
-            btn.click()
+            page.locator('button:has-text("Continuer")').click(timeout=3000)
         except Exception:
-            # Fallback : Enter depuis le dernier champ
             spinbuttons[-1].press("Enter")
 
         return True
