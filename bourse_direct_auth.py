@@ -1,6 +1,6 @@
 """
 Authentification Bourse Direct via Playwright.
-Flow : login/password → détection 2FA → relay code via Telegram → session active.
+Flow : login/password → détection TOTP → relay code via Telegram → session active.
 """
 import os
 import threading
@@ -10,11 +10,10 @@ BD_URL      = "https://www.boursedirect.fr/fr/login"
 BD_LOGIN    = os.getenv("BD_LOGIN", "")
 BD_PASSWORD = os.getenv("BD_PASSWORD", "")
 
-# Partagé avec telegram_bot pour le relay 2FA
 _otp_event        = threading.Event()
 _otp_code: str | None = None
 _waiting_for_otp  = False
-OTP_TIMEOUT = 90  # secondes
+OTP_TIMEOUT = 90
 
 
 def is_waiting_for_otp() -> bool:
@@ -22,18 +21,12 @@ def is_waiting_for_otp() -> bool:
 
 
 def set_otp(code: str):
-    """Appelé par le handler Telegram quand l'user répond avec le code 2FA."""
     global _otp_code
     _otp_code = code.strip()
     _otp_event.set()
 
 
 def login(send_fn) -> bool:
-    """
-    Lance le flow de connexion complet.
-    send_fn : fonction d'envoi Telegram pour le relay 2FA.
-    Retourne True si connecté, False sinon.
-    """
     import playwright_session as session
 
     page = session.get_page()
@@ -45,15 +38,30 @@ def login(send_fn) -> bool:
         return False
 
     try:
-        page.goto(BD_URL, wait_until="domcontentloaded", timeout=15000)
+        page.goto(BD_URL, wait_until="domcontentloaded", timeout=20000)
+        time.sleep(1)
 
-        # Remplissage login (sélecteurs inspectés sur boursedirect.fr/fr/login)
-        page.fill('input[placeholder="Identifiant"]', BD_LOGIN)
-        page.fill('input[placeholder="Mot de passe"]', BD_PASSWORD)
+        # ── Remplissage credentials ──────────────────────────────────────────
+        # Utilise click + type pour déclencher les événements clavier (Vue.js)
+        login_field = page.locator('input[placeholder="Identifiant"]')
+        login_field.click()
+        login_field.type(BD_LOGIN, delay=50)
+
+        pwd_field = page.locator('input[placeholder="Mot de passe"]')
+        pwd_field.click()
+        pwd_field.type(BD_PASSWORD, delay=50)
+
         page.click('button:has-text("Se connecter")')
-        time.sleep(3)
 
-        # Détection 2FA
+        # Attend que la page change (soit TOTP, soit dashboard)
+        try:
+            page.wait_for_url(lambda url: "login" not in url or "TOTP" in page.content(),
+                              timeout=8000)
+        except Exception:
+            pass  # Timeout ok — on vérifie ensuite
+        time.sleep(1)
+
+        # ── Détection TOTP ──────────────────────────────────────────────────
         if _needs_otp(page):
             global _otp_code, _waiting_for_otp
             _otp_code = None
@@ -61,64 +69,107 @@ def login(send_fn) -> bool:
             _waiting_for_otp = True
 
             send_fn(
-                "Code 2FA Bourse Direct reçu par SMS ?\n"
-                "Envoie-le ici (tu as 90 secondes) :"
+                "Code TOTP Bourse Direct ?\n"
+                "(Application d'authentification — Google Authenticator, Authy...)\n"
+                "Envoie le code a 6 chiffres (90 secondes) :"
             )
             got_code = _otp_event.wait(timeout=OTP_TIMEOUT)
             _waiting_for_otp = False
 
             if not got_code or not _otp_code:
-                send_fn("Timeout 2FA — connexion annulée.")
+                send_fn("Timeout TOTP — connexion annulée.")
                 return False
 
-            _fill_otp(page, _otp_code)
+            success = _fill_totp(page, _otp_code, send_fn)
+            if not success:
+                return False
+
+            # Attend la redirection post-TOTP
+            try:
+                page.wait_for_url(lambda url: "login" not in url, timeout=10000)
+            except Exception:
+                pass
             time.sleep(2)
 
         if _is_logged_in(page):
             session.mark_connected()
             return True
 
-        send_fn("Connexion échouée (credentials incorrects ou page inattendue).")
+        # Debug : montre l'URL courante pour diagnostiquer
+        send_fn(f"Connexion échouée. URL actuelle : {page.url[:80]}")
         return False
 
     except Exception as e:
-        send_fn(f"Erreur lors de la connexion BD : {e}")
+        send_fn(f"Erreur connexion BD : {e}")
         return False
 
 
 def _needs_otp(page) -> bool:
+    content = page.content()
     return (
-        page.locator('input[type="number"]').count() >= 6
-        or page.locator('[role="spinbutton"]').count() >= 4
-        or page.locator('input[name="otp"]').count() > 0
-        or "TOTP" in page.content()
+        page.locator('[role="spinbutton"]').count() >= 4
+        or page.locator('input[type="number"]').count() >= 4
+        or "TOTP" in content
+        or "authentification" in content.lower() and "code" in content.lower()
     )
 
 
-def _fill_otp(page, code: str):
+def _fill_totp(page, code: str, send_fn=None) -> bool:
+    """
+    Remplit le formulaire TOTP BD (6 spinbuttons individuels).
+    Utilise click + press_sequentially pour déclencher les événements Vue.js.
+    """
     digits = [c for c in code.strip() if c.isdigit()]
-    # TOTP BD : 6 spinbuttons individuels
-    spinbuttons = page.locator('[role="spinbutton"]').all()
-    if len(spinbuttons) >= len(digits):
+    if len(digits) != 6:
+        if send_fn:
+            send_fn(f"Code invalide : {len(digits)} chiffres reçus, 6 attendus.")
+        return False
+
+    try:
+        # Attendre que les spinbuttons soient présents
+        page.wait_for_selector('[role="spinbutton"]', timeout=5000)
+        spinbuttons = page.locator('[role="spinbutton"]').all()
+
+        if len(spinbuttons) < 6:
+            if send_fn:
+                send_fn(f"Formulaire TOTP inattendu ({len(spinbuttons)} champs). Réessaie.")
+            return False
+
+        # Remplit chaque champ digit par digit avec événements clavier
         for i, digit in enumerate(digits):
-            spinbuttons[i].fill(digit)
-        # Cocher "Faire confiance à cet appareil — Oui" pour activer le bouton
+            sb = spinbuttons[i]
+            sb.click()
+            time.sleep(0.05)
+            # Triple clear + type pour garantir la réactivité Vue
+            sb.press("Control+a")
+            sb.press("Backspace")
+            sb.press_sequentially(digit, delay=30)
+        time.sleep(0.3)
+
+        # Coche "Faire confiance à cet appareil — Oui"
         try:
-            page.locator('input[type="radio"]').first.click(timeout=2000)
+            radio_oui = page.locator('input[type="radio"]').first
+            if not radio_oui.is_checked():
+                radio_oui.click()
+            time.sleep(0.2)
         except Exception:
             pass
-        time.sleep(0.3)
+
+        # Attend que le bouton Continuer soit actif puis clique
         try:
-            page.locator('button:has-text("Continuer"):not([disabled])').click(timeout=5000)
+            btn = page.locator('button:has-text("Continuer")')
+            btn.wait_for(state="enabled", timeout=4000)
+            btn.click()
         except Exception:
-            page.keyboard.press("Enter")
-        return
-    # Fallback champ unique
-    for sel in ('input[name="otp"]', 'input[name="code"]', 'input[type="tel"]'):
-        if page.locator(sel).count() > 0:
-            page.fill(sel, code)
-            page.locator(sel).press("Enter")
-            return
+            # Fallback : Enter depuis le dernier champ
+            spinbuttons[-1].press("Enter")
+
+        return True
+
+    except Exception as e:
+        if send_fn:
+            send_fn(f"Erreur remplissage TOTP : {e}")
+        return False
 
 
 def _is_logged_in(page) -> bool:
