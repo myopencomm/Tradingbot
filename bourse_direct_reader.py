@@ -128,6 +128,15 @@ def get_portfolio(page, send_fn=None) -> dict | None:
                 for block in page.locator(".ConsolidatedOrders-module_content_elUGZ").all():
                     parsed = _parse_order(block.inner_text(timeout=2000))
                     if parsed:
+                        # order_id : élément enfant avec id="order-{uuid}"
+                        try:
+                            oid_el = block.locator('[id^="order-"]').first
+                            if oid_el.count() > 0:
+                                oid = oid_el.get_attribute("id", timeout=1500)
+                                if oid:
+                                    parsed["order_id"] = oid.replace("order-", "")
+                        except Exception:
+                            pass
                         orders.append(parsed)
             except Exception as e:
                 log(f"Lecture ordres échouée : {e}")

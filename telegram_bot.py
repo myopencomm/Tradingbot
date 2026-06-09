@@ -67,64 +67,65 @@ def cmd_start(args, cid):
 
 def cmd_help(args, cid):
     send(
-        "TradingBot — Liste des commandes\n"
+        "TradingBot — Aide\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "\n"
-        "PORTEFEUILLE\n"
-        "/status     — P&L en temps reel pour chaque position\n"
-        "/cash       — Voir ou mettre a jour le cash\n"
-        "/cash 1234  — Definir le cash disponible\n"
-        "/stats      — Win rate, P&L realise, profit factor\n"
+        "VOIR MON PORTEFEUILLE\n"
+        "/status — positions + P&L en temps reel\n"
+        "/cash — cash dispo  |  /cash 1234 — le definir\n"
+        "/stats — bilan (win rate, P&L, profit factor)\n"
         "\n"
-        "POSITIONS\n"
-        "/add TICKER QTE PRU SL TP — Ajouter une position\n"
-        "/remove TICKER   — Supprimer une position\n"
-        "/sl TICKER PRIX  — Modifier le stop-loss\n"
-        "/tp TICKER PRIX  — Modifier le take-profit\n"
-        "\n"
-        "ORDRES EN ATTENTE\n"
-        "/attente NOM TICKER QTE PRIX [SL TP]\n"
-        "  → Reserve le cash, surveille le declenchement\n"
-        "/annuler NOM — Annule et libere le cash\n"
-        "\n"
-        "CLOTURE\n"
-        "/vendu NOM [PRIX]           — Cloture (prix TP auto)\n"
-        "/close TICKER QTE PRIX [FRAIS] — Avec frais\n"
-        "/syncmail — Detecte les ordres BD finalises (Gmail)\n"
-        "\n"
-        "INSTRUCTIONS CLASSIQUES (Mode Classic)\n"
-        "/buy TICKER QTE PRU      — Genere ordre Expert TP+SL\n"
-        "/setup TICKER QTE PRU   — Genere 2 ordres protection\n"
-        "/order buy|sell TICKER QTE PRIX — Ordre simple\n"
-        "\n"
-        "PASSAGE D'ORDRES REEL (Mode Playwright)\n"
-        "/ordre vendre TICKER QTE marche\n"
-        "/ordre vendre TICKER QTE limite PRIX\n"
-        "/ordre vendre TICKER QTE expert SL TP\n"
-        "/ordre acheter TICKER QTE marche\n"
-        "/ordre acheter TICKER QTE limite PRIX\n"
-        "  → /oui pour confirmer | /non pour annuler\n"
-        "\n"
-        "MODE PLAYWRIGHT\n"
-        "/mode        — Etat de la connexion BD\n"
-        "/connect     — Connexion a Bourse Direct (TOTP)\n"
-        "/disconnect  — Revenir en mode Classic\n"
-        "/sync        — Synchroniser portefeuille depuis BD\n"
+        "GERER MES POSITIONS (dans le bot)\n"
+        "/add TICKER QTE PRU SL TP — ajouter\n"
+        "/remove TICKER — retirer\n"
+        "/sl TICKER PRIX — changer le stop-loss\n"
+        "/tp TICKER PRIX — changer le take-profit\n"
         "\n"
         "ANALYSE IA\n"
-        "/morning          — Briefing macro + positions + opps\n"
-        "/scan             — Top 3 opportunites\n"
-        "/research TICKER [question] — Analyse approfondie\n"
-        "  Ex: /research EXENS.PA dois-je vendre ?\n"
+        "/morning — briefing du jour (macro + positions + opps)\n"
+        "/scan — meilleures opportunites avec ton cash\n"
+        "/research TICKER [question] — analyse d'une action\n"
+        "  ex: /research EXENS.PA dois-je vendre ?\n"
+        "\n"
+        "VENDRE / CLOTURER\n"
+        "/vendu NOM [PRIX] — enregistre une vente (prix TP si omis)\n"
+        "/close TICKER QTE PRIX [FRAIS] — vente avec frais\n"
+        "\n"
+        "━━━ 2 FACONS DE PASSER UN ORDRE ━━━\n"
+        "\n"
+        "A) MODE CLASSIC — le bot ecrit les instructions,\n"
+        "   TU les saisis toi-meme sur Bourse Direct :\n"
+        "/setup TICKER QTE PRU\n"
+        "  → texte des 2 ordres protection (SL -10% + TP +15%)\n"
+        "    a poser apres un achat deja fait\n"
+        "/buy TICKER QTE PRU\n"
+        "  → texte d'1 ordre Expert (achat+SL+TP groupes)\n"
+        "/order buy|sell TICKER QTE PRIX — 1 ordre simple\n"
+        "/attente NOM TICKER QTE PRIX [SL TP]\n"
+        "  → reserve le cash, t'alerte quand le cours est atteint\n"
+        "/annuler NOM — annule un ordre en attente (bot)\n"
+        "\n"
+        "B) MODE PLAYWRIGHT — le bot passe l'ordre\n"
+        "   REELLEMENT sur Bourse Direct pour toi :\n"
+        "/connect — se connecter a BD (code TOTP)\n"
+        "/sync — lire portefeuille + ordres reels depuis BD\n"
+        "/ordre acheter|vendre TICKER QTE marche\n"
+        "/ordre acheter|vendre TICKER QTE limite PRIX\n"
+        "/ordre vendre TICKER QTE expert SL TP\n"
+        "  → /oui confirme et envoie  |  /non annule\n"
+        "/annuler_bd TICKER — annule un ordre en cours sur BD\n"
+        "/mode — etat connexion  |  /disconnect — repasser Classic\n"
+        "\n"
+        "DETECTION AUTO DES VENTES\n"
+        "/syncmail — lit les emails BD 'strategie finalisee'\n"
+        "  (utile si tu n'utilises PAS le mode Playwright)\n"
         "\n"
         "IMPORT\n"
-        "Photo BD — Import automatique par vision IA\n"
-        "/import  — Guide import CSV\n"
+        "Envoie une photo de l'app BD → import auto (vision IA)\n"
+        "/import — guide import CSV\n"
         "\n"
         "AIDE\n"
-        "/help — Cette liste\n"
-        "/tuto — Guide interactif (install/classic/playwright...)\n"
-        "/update — Version + alertes mises a jour\n"
+        "/tuto — guide pas a pas  |  /update — version\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         cid,
     )
@@ -1248,14 +1249,80 @@ def cmd_oui(args, cid):
             with _pending_lock:
                 _pending_order = None
 
-            if result:
-                send(f"Ordre envoye\n{pending['summary']}", cid)
-            else:
+            if not result:
                 send("Envoi echoue — verifier sur BD directement.", cid)
+                return
+
+            # ── Vérification post-ordre : relit le carnet pour confirmer ──────
+            import bourse_direct_reader as reader
+            ticker_base = pending["ticker"].upper().split(".")[0]
+            try:
+                bd = playwright_session.run(
+                    lambda page: reader.get_portfolio(page), timeout=60
+                )
+                found = False
+                if bd:
+                    for o in bd.get("orders", []):
+                        if (o.get("bd_ticker", "").upper() == ticker_base
+                                or ticker_base in (o.get("name", "").upper())):
+                            found = True
+                            break
+                if found:
+                    send(f"Ordre envoye et CONFIRME dans le carnet BD\n{pending['summary']}", cid)
+                else:
+                    send(
+                        f"Ordre envoye\n{pending['summary']}\n\n"
+                        f"⚠️ Pas encore visible dans le carnet — verifie sur BD dans 1 min.",
+                        cid,
+                    )
+            except Exception:
+                send(f"Ordre envoye\n{pending['summary']}\n(verification carnet impossible)", cid)
         except Exception as e:
             send(f"Erreur envoi : {e}", cid)
 
     threading.Thread(target=_do_send, daemon=True).start()
+
+
+def cmd_annuler_bd(args, cid):
+    """Annule un ordre en cours sur Bourse Direct (mode Playwright)."""
+    if not _check_playwright_ready(cid):
+        return
+    if not args:
+        send("Usage: /annuler_bd TICKER\nEx: /annuler_bd EXENS.PA", cid)
+        return
+    ticker_base = args[0].upper().split(".")[0]
+    send(f"Recherche de l'ordre {ticker_base} sur BD...", cid)
+
+    def _do_cancel():
+        import bourse_direct_reader as reader
+        import bourse_direct_orders as bd_orders
+        try:
+            bd = playwright_session.run(lambda page: reader.get_portfolio(page), timeout=60)
+            if not bd:
+                send("Lecture BD impossible.", cid)
+                return
+            target = None
+            for o in bd.get("orders", []):
+                if (o.get("bd_ticker", "").upper() == ticker_base
+                        or ticker_base in (o.get("name", "").upper())):
+                    target = o
+                    break
+            if not target:
+                send(f"Aucun ordre en cours trouve pour {ticker_base}.", cid)
+                return
+            oid = target.get("order_id")
+            if not oid:
+                send(f"Ordre {ticker_base} trouve mais order_id illisible. Annule sur BD directement.", cid)
+                return
+            res = playwright_session.run(lambda page: bd_orders.cancel_order(page, oid), timeout=60)
+            if res is not None:
+                send(f"Ordre {target.get('name', ticker_base)} ({target.get('type','?')}) annule sur BD.", cid)
+            else:
+                send("Annulation echouee — verifier sur BD.", cid)
+        except Exception as e:
+            send(f"Erreur annulation : {e}", cid)
+
+    threading.Thread(target=_do_cancel, daemon=True).start()
 
 
 def cmd_non(args, cid):
@@ -1283,6 +1350,7 @@ COMMANDS = {
     "/ordre": cmd_ordre,
     "/oui": cmd_oui,
     "/non": cmd_non,
+    "/annuler_bd": cmd_annuler_bd,
     "/cash": cmd_cash,
     "/add": cmd_add,
     "/remove": cmd_remove,

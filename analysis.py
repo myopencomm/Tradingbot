@@ -712,6 +712,18 @@ NOM SOCIETE ({t})
             if val.strip().upper().startswith("EXCLU"):
                 continue
             val = _validate_tickers(val)
+
+            # Feature scan→ordre : commande prête à l'emploi (quantité suggérée)
+            try:
+                budget = min(cash * 0.5, 800)  # sizing prudent par position
+                qty_sugg = max(1, int(budget / current_price)) if current_price else 1
+                val += (
+                    f"\n→ Passer l'ordre (mode Playwright) :\n"
+                    f"   /ordre acheter {t} {qty_sugg} limite {current_price}"
+                )
+            except Exception:
+                pass
+
             opportunities.append(val)
 
         # ── Assemblage final ──────────────────────────────────────────────────

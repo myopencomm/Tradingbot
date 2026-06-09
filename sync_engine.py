@@ -87,11 +87,18 @@ def sync(page, send_fn) -> bool:
                 f"   → pas dans le bot. /add NOM {bd_ticker}.PA {bd_qty} {bd_pru} <SL> <TP>"
             )
 
-    # ── Positions locales absentes de BD ────────────────────────────────
+    # ── Positions locales absentes de BD → probablement vendues ─────────
+    # Détection de clôture : si une position du bot n'est plus sur BD,
+    # elle a été vendue. On propose la commande de clôture (avec le prix TP
+    # comme estimation car l'ordre TP est le scénario de sortie le plus courant).
     for local_key in local:
         if local_key not in matched_local_keys:
+            cfg = local[local_key]
+            tp = cfg.get("target_high")
+            suggestion = f"/vendu {local_key} {tp}" if tp else f"/vendu {local_key} PRIX"
             lines.append(
-                f"⚠️ {local_key} dans le bot mais absent de BD — vendu ?"
+                f"⚠️ {local_key} absent de BD — VENDU ?\n"
+                f"   → Confirme la cloture : {suggestion}"
             )
 
     # ── Ordres en cours sur BD → mettent à jour les SL/TP des positions ──
