@@ -11,62 +11,76 @@ BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/page/portefeuille-tr"
 CTO_SELECT_VALUE = "2"  # Compte Titre ordinaire
 
 
-def get_portfolio() -> dict | None:
+def get_portfolio(send_fn=None) -> dict | None:
     """
     Lit le portefeuille CTO depuis Bourse Direct.
     Retourne {"cash": float, "positions": [...]} ou None si échec.
     """
+    def log(msg):
+        print(f"[BD Reader] {msg}")
+        if send_fn:
+            send_fn(msg)
+
     page = session.get_page()
     if not page:
         return None
 
     try:
-        if BD_PORTFOLIO_URL not in page.url:
-            page.goto(BD_PORTFOLIO_URL, wait_until="domcontentloaded", timeout=15000)
-            time.sleep(2)
+        page.goto(BD_PORTFOLIO_URL, wait_until="domcontentloaded", timeout=20000)
+        time.sleep(2)
 
         if "login" in page.url.lower():
-            print("[BD Reader] Session expirée.")
+            log("Session expirée — reconnecte avec /connect.")
             return None
 
-        # Bascule sur le CTO dans l'iframe
-        page.evaluate(f"""() => {{
-            const iframes = document.querySelectorAll('iframe');
-            for (let f of iframes) {{
-                try {{
-                    const doc = f.contentDocument || f.contentWindow.document;
-                    const sel = doc.querySelector('select');
-                    if (sel) {{
-                        sel.value = '{CTO_SELECT_VALUE}';
-                        sel.dispatchEvent(new Event('change', {{bubbles: true}}));
-                        return true;
-                    }}
-                }} catch(e) {{}}
-            }}
-            return false;
-        }}""")
-        time.sleep(1.5)  # Attend le rechargement AJAX
+        # Le contenu est dans un iframe interne (/priv/new/portefeuille-TR.php)
+        # qui charge en AJAX. On accède via l'API frames de Playwright.
+        pf_frame = None
+        for _ in range(20):  # polling jusqu'à 10s
+            time.sleep(0.5)
+            for fr in page.frames:
+                if "portefeuille-TR" in fr.url or "portefeuille" in fr.url.lower():
+                    pf_frame = fr
+                    break
+            if pf_frame:
+                # Vérifie que le contenu est chargé
+                try:
+                    if pf_frame.locator("select").count() > 0:
+                        break
+                except Exception:
+                    pass
+            pf_frame = None
 
-        raw_text = page.evaluate("""() => {
-            const iframes = document.querySelectorAll('iframe');
-            for (let f of iframes) {
-                try {
-                    const doc = f.contentDocument || f.contentWindow.document;
-                    const text = doc.body ? doc.body.innerText : '';
-                    if (text.includes('Solde espèces')) return text;
-                } catch(e) {}
-            }
-            return '';
-        }""")
+        if not pf_frame:
+            log("Iframe portefeuille introuvable. La page a peut-être changé de structure.")
+            return None
 
-        if not raw_text:
-            print("[BD Reader] Aucune donnée dans l'iframe portefeuille.")
+        # Bascule sur le CTO
+        try:
+            pf_frame.locator("select").first.select_option(CTO_SELECT_VALUE)
+            time.sleep(2)  # rechargement AJAX après changement de compte
+        except Exception as e:
+            log(f"Bascule CTO échouée : {e}")
+
+        # Lit le texte du frame
+        raw_text = ""
+        for _ in range(10):
+            try:
+                raw_text = pf_frame.locator("body").inner_text(timeout=3000)
+                if "Solde espèces" in raw_text:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
+        if "Solde espèces" not in raw_text:
+            log("Données portefeuille non chargées (pas de 'Solde espèces').")
             return None
 
         return _parse(raw_text)
 
     except Exception as e:
-        print(f"[BD Reader] Erreur : {e}")
+        log(f"Erreur : {e}")
         return None
 
 

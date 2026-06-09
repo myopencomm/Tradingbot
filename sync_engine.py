@@ -13,9 +13,8 @@ def sync(send_fn) -> bool:
     """
     send_fn("Synchronisation avec Bourse Direct...")
 
-    bd = reader.get_portfolio()
+    bd = reader.get_portfolio(send_fn=send_fn)
     if not bd:
-        send_fn("Impossible de lire le portefeuille BD. Session active ?")
         return False
 
     data = portfolio.load()
