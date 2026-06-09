@@ -26,16 +26,17 @@ BD_ACCOUNT  = "<BD_ACCOUNT>"  # CTO Compte Titre Ordinaire
 _CSRF = "OWY4NmQwODE4ODRjN2Q2NTlhMmZlYWEwYzU1YWQwMTVhM2JmNGYxYjJiMGI4MjJjZDE1ZDMGYwMGEwOA=="
 
 # ── Mapping yfinance ticker → données BD ─────────────────────────────────────
-# mic     : Market Identifier Code (XPAR=Euronext Paris, XNAS=NASDAQ, XNYS=NYSE...)
-# bd_ticker : symbole interne BD (préfixe E: pour Euronext)
-# Découvert depuis portefeuille-TR.php et fiche-valeur.php?val=...&pl=...
+# mic       : Market Identifier Code (XPAR=Euronext Paris, XNAS=NASDAQ, XNYS=NYSE...)
+# bd_ticker : mnémonique de la place — PAS de préfixe "E:" (confirmé via /order/create live)
+#             ex: Air Liquide XPAR → "AI", Xetra → "AIL", ILMN → "ILMN"
+# Pour les tickers yfinance type ISIN (.PA sur un ISIN), préciser le vrai mnémo ici.
 TICKER_MAP: dict[str, dict] = {
-    "EXENS.PA":               {"bd_ticker": "E:EXENS",  "mic": "XPAR", "currency": "EUR"},
-    "GNFT.PA":                {"bd_ticker": "E:GNFT",   "mic": "XPAR", "currency": "EUR"},
-    "LBIRD.PA":               {"bd_ticker": "E:LBIRD",  "mic": "XPAR", "currency": "EUR"},
-    "MCPHY.PA":               {"bd_ticker": "E:MCPHY",  "mic": "XPAR", "currency": "EUR"},
-    "FR0011799907.PA":        {"bd_ticker": "E:GVN",    "mic": "XPAR", "currency": "EUR"},
-    "ILMN":                   {"bd_ticker": "ILMN",     "mic": "XNAS", "currency": "USD"},
+    "EXENS.PA":               {"bd_ticker": "EXENS",  "mic": "XPAR", "currency": "EUR"},
+    "GNFT.PA":                {"bd_ticker": "GNFT",   "mic": "XPAR", "currency": "EUR"},
+    "LBIRD.PA":               {"bd_ticker": "LBIRD",  "mic": "XPAR", "currency": "EUR"},
+    "MCPHY.PA":               {"bd_ticker": "MCPHY",  "mic": "XPAR", "currency": "EUR"},
+    "FR0011799907.PA":        {"bd_ticker": "ALGV",   "mic": "XPAR", "currency": "EUR"},  # Genomic Vision
+    "ILMN":                   {"bd_ticker": "ILMN",   "mic": "XNAS", "currency": "USD"},
     # Ajouter au fur et à mesure lors des premiers passages d'ordres
 }
 
@@ -46,32 +47,34 @@ def get_ticker_info(yf_ticker: str) -> dict | None:
     Cherche d'abord dans TICKER_MAP (override manuel),
     puis applique les règles de conversion automatique.
 
-    Règles de conversion yfinance → BD :
-      .PA  → E:<base>  MIC=XPAR  EUR   (Euronext Paris)
-      .BR  → E:<base>  MIC=XBRU  EUR   (Euronext Bruxelles)
-      .AS  → E:<base>  MIC=XAMS  EUR   (Euronext Amsterdam)
-      .L   → <base>    MIC=XLON  GBP   (London Stock Exchange)
-      .DE  → <base>    MIC=XETR  EUR   (Xetra Frankfurt)
-      (rien) → <base>  MIC=XNAS  USD   (NASDAQ — défaut US)
+    Règles de conversion yfinance → BD (mnémonique SANS préfixe) :
+      .PA  → <base>  MIC=XPAR  EUR   (Euronext Paris)
+      .BR  → <base>  MIC=XBRU  EUR   (Euronext Bruxelles)
+      .AS  → <base>  MIC=XAMS  EUR   (Euronext Amsterdam)
+      .L   → <base>  MIC=XLON  GBP   (London Stock Exchange)
+      .DE  → <base>  MIC=XETR  EUR   (Xetra Frankfurt)
+      (rien) → <base> MIC=XNAS USD   (NASDAQ — défaut US)
+
+    NOTE : le mnémonique BD peut différer du ticker yfinance (ex: Genomic Vision
+    = GVN sur yfinance ISIN mais ALGV sur Euronext). En cas de doute, ajouter
+    un override explicite dans TICKER_MAP.
     """
     t = yf_ticker.upper()
     if t in TICKER_MAP:
         return TICKER_MAP[t]
 
-    # Conversion automatique par suffixe
-    for suffix, bd_prefix, mic, currency in [
-        (".PA", "E:", "XPAR", "EUR"),
-        (".BR", "E:", "XBRU", "EUR"),
-        (".AS", "E:", "XAMS", "EUR"),
-        (".L",  "",   "XLON", "GBP"),
-        (".DE", "",   "XETR", "EUR"),
+    for suffix, mic, currency in [
+        (".PA", "XPAR", "EUR"),
+        (".BR", "XBRU", "EUR"),
+        (".AS", "XAMS", "EUR"),
+        (".L",  "XLON", "GBP"),
+        (".DE", "XETR", "EUR"),
     ]:
         if t.endswith(suffix):
             base = t[: -len(suffix)]
-            return {"bd_ticker": f"{bd_prefix}{base}", "mic": mic, "currency": currency}
+            return {"bd_ticker": base, "mic": mic, "currency": currency}
 
-    # US stock sans suffixe — NASDAQ par défaut
-    # Si c'est un NYSE, ajouter manuellement dans TICKER_MAP avec "mic": "XNYS"
+    # US sans suffixe — NASDAQ par défaut (NYSE → ajouter override "mic": "XNYS")
     return {"bd_ticker": t, "mic": "XNAS", "currency": "USD"}
 
 
@@ -141,22 +144,32 @@ def create_order(page, ticker: str, side: str, qty: int,
         print(f"[BD Orders] Ticker inconnu : {ticker} — ajouter dans TICKER_MAP")
         return None
 
+    # validityDate ISO 8601 requise si validity != day ; sinon jour courant
+    from datetime import datetime, timedelta
+    validity_date = None
+    if validity in ("end_of_year",):
+        validity_date = f"{datetime.now().year}-12-31T00:00:00.000Z"
+    elif validity == "day":
+        validity_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000Z")
+
     payload = {
-        "login":          BD_LOGIN,
+        "login":          BD_LOGIN.upper(),          # MAJUSCULES (confirmé live)
         "mic":            info["mic"],
-        "ticker":         info["bd_ticker"],
+        "ticker":         info["bd_ticker"],          # mnémonique SANS préfixe E:
         "currency":       info["currency"],
-        "quantity":       qty,
+        "quantity":       str(qty),                   # string (confirmé live)
         "portfolio":      BD_ACCOUNT,
         "type":           order_type,
         "side":           side,
         "validity":       validity,
-        "validityDate":   None,
+        "validityDate":   validity_date,
         "settlement":     "cash",
         "limit":          limit_price,
         "stop":           stop_price,
-        "position_effect": None,
-        "globex":         None,
+        "position_effect": "open" if side == "buy" else "close",
+        "globex":         False,
+        "comment":        None,
+        "brokerage":      None,
     }
 
     if smart:
@@ -186,7 +199,7 @@ def send_order(page, order_id: str) -> dict | None:
     """
     payload = {
         "order_id": order_id,
-        "login":    BD_LOGIN,
+        "login":    BD_LOGIN.upper(),
         "csrf":     _CSRF,
     }
     result = _api_post(page, "/order/send", payload)
@@ -198,6 +211,25 @@ def send_order(page, order_id: str) -> dict | None:
     return result.get("data")
 
 
+def cancel_order(page, order_id: str) -> dict | None:
+    """
+    Annule un ordre en cours sur BD (Take Profit, Stop Loss, ordre limite...).
+    Endpoint /order/cancel confirmé dans portfolio.js.
+    """
+    payload = {
+        "order_id": order_id,
+        "login":    BD_LOGIN.upper(),
+        "csrf":     _CSRF,
+    }
+    result = _api_post(page, "/order/cancel", payload)
+    if not result:
+        return None
+    if not result.get("ok"):
+        print(f"[BD Orders] cancel_order HTTP {result.get('status')} : {result.get('data')}")
+        return None
+    return result.get("data")
+
+
 def execute_strategy(page, order_id: str) -> dict | None:
     """
     Exécute un ordre Expert (SL+TP combiné) — ACTION IRRÉVERSIBLE.
@@ -205,7 +237,7 @@ def execute_strategy(page, order_id: str) -> dict | None:
     """
     payload = {
         "order_id": order_id,
-        "login":    BD_LOGIN,
+        "login":    BD_LOGIN.upper(),
         "csrf":     _CSRF,
     }
     result = _api_post(page, "/order/execute/strategy", payload)
