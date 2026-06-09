@@ -6,14 +6,15 @@ import portfolio
 import bourse_direct_reader as reader
 
 
-def sync(send_fn) -> bool:
+def sync(page, send_fn) -> bool:
     """
     Lit le portefeuille depuis BD et met à jour positions.json.
+    `page` fourni par playwright_session.run() (thread worker).
     Retourne True si sync réussie.
     """
     send_fn("Synchronisation avec Bourse Direct...")
 
-    bd = reader.get_portfolio(send_fn=send_fn)
+    bd = reader.get_portfolio(page, send_fn=send_fn)
     if not bd:
         return False
 

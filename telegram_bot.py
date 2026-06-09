@@ -1015,11 +1015,22 @@ def cmd_connect(args, cid):
     def _do_connect():
         ok = playwright_session.start()
         if not ok:
-            send("Impossible de lancer Playwright. Verifie que playwright est installe (pip install playwright && playwright install chromium).", cid)
+            send("Impossible de lancer Playwright. Verifie l'installation (pip install playwright && playwright install chromium).", cid)
             return
 
-        success = bourse_direct_auth.login(lambda msg: send(msg, cid))
+        try:
+            # login s'exécute dans le thread worker via run()
+            success = playwright_session.run(
+                lambda page: bourse_direct_auth.login(page, lambda msg: send(msg, cid)),
+                timeout=140,  # > OTP_TIMEOUT (90s) pour laisser le temps au 2FA
+            )
+        except Exception as e:
+            send(f"Erreur connexion : {e}", cid)
+            playwright_session.stop()
+            return
+
         if success:
+            playwright_session.mark_connected()
             bot_mode.set_mode(bot_mode.BotMode.PLAYWRIGHT)
             send(
                 "Mode Playwright actif\n"
@@ -1056,11 +1067,17 @@ def cmd_sync(args, cid):
         send("Session Playwright non connectee. /connect pour relancer.", cid)
         return
     import sync_engine
-    threading.Thread(
-        target=sync_engine.sync,
-        args=(lambda m: send(m, cid),),
-        daemon=True,
-    ).start()
+
+    def _do_sync():
+        try:
+            playwright_session.run(
+                lambda page: sync_engine.sync(page, lambda m: send(m, cid)),
+                timeout=90,
+            )
+        except Exception as e:
+            send(f"Erreur sync : {e}", cid)
+
+    threading.Thread(target=_do_sync, daemon=True).start()
 
 
 # ─── Ordres Playwright ──────────────────────────────────────────────────────
@@ -1130,8 +1147,6 @@ def cmd_ordre(args, cid):
 
     def _do_order():
         global _pending_order
-        page = playwright_session.get_page()
-
         try:
             if type_arg == "expert":
                 if len(args) < 6:
@@ -1139,7 +1154,9 @@ def cmd_ordre(args, cid):
                     return
                 sl = float(args[4].replace(",", "."))
                 tp = float(args[5].replace(",", "."))
-                order_data = bd_orders.create_expert_order(page, ticker, qty, sl, tp)
+                order_data = playwright_session.run(
+                    lambda page: bd_orders.create_expert_order(page, ticker, qty, sl, tp)
+                )
                 is_expert  = True
                 summary    = bd_orders.format_order_summary(
                     order_data or {}, ticker, side, qty, "meta",
@@ -1150,17 +1167,18 @@ def cmd_ordre(args, cid):
                     send("Limite requiert un prix : /ordre vendre TICKER QTE limite PRIX", cid)
                     return
                 prix = float(args[4].replace(",", "."))
-                order_data = bd_orders.create_order(
-                    page, ticker, side, qty,
-                    order_type="limit", limit_price=prix
+                order_data = playwright_session.run(
+                    lambda page: bd_orders.create_order(
+                        page, ticker, side, qty, order_type="limit", limit_price=prix)
                 )
                 is_expert  = False
                 summary    = bd_orders.format_order_summary(
                     order_data or {}, ticker, side, qty, "limit", limit_price=prix
                 )
             else:  # marche
-                order_data = bd_orders.create_order(
-                    page, ticker, side, qty, order_type="market"
+                order_data = playwright_session.run(
+                    lambda page: bd_orders.create_order(
+                        page, ticker, side, qty, order_type="market")
                 )
                 is_expert  = False
                 summary    = bd_orders.format_order_summary(
@@ -1219,12 +1237,13 @@ def cmd_oui(args, cid):
     def _do_send():
         global _pending_order
         import bourse_direct_orders as bd_orders
-        page = playwright_session.get_page()
         try:
             if pending["is_expert"]:
-                result = bd_orders.execute_strategy(page, pending["order_id"])
+                result = playwright_session.run(
+                    lambda page: bd_orders.execute_strategy(page, pending["order_id"]))
             else:
-                result = bd_orders.send_order(page, pending["order_id"])
+                result = playwright_session.run(
+                    lambda page: bd_orders.send_order(page, pending["order_id"]))
 
             with _pending_lock:
                 _pending_order = None

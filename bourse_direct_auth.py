@@ -26,13 +26,12 @@ def set_otp(code: str):
     _otp_event.set()
 
 
-def login(send_fn) -> bool:
-    import playwright_session as session
-
-    page = session.get_page()
-    if page is None:
-        return False
-
+def login(page, send_fn) -> bool:
+    """
+    Exécute le flow de connexion sur `page`.
+    DOIT être appelé via playwright_session.run() (thread worker).
+    Ne marque PAS la session connectée — c'est le caller qui le fait.
+    """
     if not BD_LOGIN or not BD_PASSWORD:
         send_fn("BD_LOGIN ou BD_PASSWORD manquant dans .env")
         return False
@@ -118,7 +117,6 @@ def login(send_fn) -> bool:
                     send_fn(f"Redirection en cours... URL={page.url[-50:]}")
 
         if _is_logged_in(page):
-            session.mark_connected()
             return True
 
         send_fn(f"Connexion échouée. URL : {page.url[:80]}")

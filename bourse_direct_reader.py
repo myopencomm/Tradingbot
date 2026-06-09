@@ -5,25 +5,21 @@ Compte CTO : select value=2  |  PEA : value=1
 """
 import time
 import re
-import playwright_session as session
 
 BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/page/portefeuille-tr"
 CTO_SELECT_VALUE = "2"  # Compte Titre ordinaire
 
 
-def get_portfolio(send_fn=None) -> dict | None:
+def get_portfolio(page, send_fn=None) -> dict | None:
     """
     Lit le portefeuille CTO depuis Bourse Direct.
+    `page` fourni par playwright_session.run() (thread worker).
     Retourne {"cash": float, "positions": [...]} ou None si échec.
     """
     def log(msg):
         print(f"[BD Reader] {msg}")
         if send_fn:
             send_fn(msg)
-
-    page = session.get_page()
-    if not page:
-        return None
 
     try:
         page.goto(BD_PORTFOLIO_URL, wait_until="domcontentloaded", timeout=20000)
