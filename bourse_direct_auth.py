@@ -39,7 +39,7 @@ def login(send_fn) -> bool:
 
     try:
         page.goto(BD_URL, wait_until="domcontentloaded", timeout=20000)
-        time.sleep(2)
+        time.sleep(1)
 
         # ── Remplissage credentials ──────────────────────────────────────────
         login_field = page.locator('input[placeholder="Identifiant"]')
@@ -51,10 +51,20 @@ def login(send_fn) -> bool:
         pwd_field.type(BD_PASSWORD, delay=50)
 
         page.click('button:has-text("Se connecter")')
-        time.sleep(4)  # Attend la réponse du serveur BD
 
-        # ── Détection TOTP ──────────────────────────────────────────────────
-        if _needs_otp(page):
+        # Polling : attend jusqu'à 10s que la page évolue
+        # On cherche SOIT les spinbuttons TOTP, SOIT une URL hors /login
+        totp_detected = False
+        for _ in range(20):
+            time.sleep(0.5)
+            if "login" not in page.url.lower():
+                break  # Connecté directement (pas de TOTP)
+            if page.locator('[role="spinbutton"]').count() >= 4:
+                totp_detected = True
+                break
+
+        # ── TOTP détecté ─────────────────────────────────────────────────────
+        if totp_detected:
             global _otp_code, _waiting_for_otp
             _otp_code = None
             _otp_event.clear()
@@ -72,11 +82,14 @@ def login(send_fn) -> bool:
                 send_fn("Timeout TOTP — connexion annulée.")
                 return False
 
-            success = _fill_totp(page, _otp_code, send_fn)
-            if not success:
+            if not _fill_totp(page, _otp_code, send_fn):
                 return False
 
-            time.sleep(4)  # Attend la redirection post-TOTP
+            # Polling post-TOTP : attend la redirection
+            for _ in range(12):
+                time.sleep(0.5)
+                if "login" not in page.url.lower():
+                    break
 
         if _is_logged_in(page):
             session.mark_connected()
@@ -91,13 +104,9 @@ def login(send_fn) -> bool:
 
 
 def _needs_otp(page) -> bool:
-    content = page.content()
-    return (
-        page.locator('[role="spinbutton"]').count() >= 4
-        or page.locator('input[type="number"]').count() >= 4
-        or "TOTP" in content
-        or "authentification" in content.lower() and "code" in content.lower()
-    )
+    # Détection stricte : uniquement sur la présence réelle des spinbuttons
+    # (pas de match texte — "authentification" est présent sur la page de login)
+    return page.locator('[role="spinbutton"]').count() >= 4
 
 
 def _fill_totp(page, code: str, send_fn=None) -> bool:
