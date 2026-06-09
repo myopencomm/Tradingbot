@@ -41,6 +41,15 @@ def login(send_fn) -> bool:
         page.goto(BD_URL, wait_until="domcontentloaded", timeout=20000)
         time.sleep(1)
 
+        # ── Ferme le popup cookies s'il est présent ──────────────────────────
+        try:
+            cookie_btn = page.locator('button:has-text("Continuer sans accepter")')
+            if cookie_btn.count() > 0:
+                cookie_btn.click()
+                time.sleep(0.5)
+        except Exception:
+            pass
+
         # ── Remplissage credentials ──────────────────────────────────────────
         login_field = page.locator('input[placeholder="Identifiant"]')
         login_field.click()
@@ -51,17 +60,29 @@ def login(send_fn) -> bool:
         pwd_field.type(BD_PASSWORD, delay=50)
 
         page.click('button:has-text("Se connecter")')
+        send_fn("Credentials envoyés, attente réponse BD...")
 
-        # Polling : attend jusqu'à 10s que la page évolue
-        # On cherche SOIT les spinbuttons TOTP, SOIT une URL hors /login
+        # Polling : attend jusqu'à 12s que la page évolue
         totp_detected = False
-        for _ in range(20):
+        for i in range(24):
             time.sleep(0.5)
-            if "login" not in page.url.lower():
-                break  # Connecté directement (pas de TOTP)
-            if page.locator('[role="spinbutton"]').count() >= 4:
+            url = page.url.lower()
+            if "login" not in url:
+                break  # Connecté directement
+            # Détection TOTP : spinbuttons OU inputs numériques (6 champs)
+            nb_spin  = page.locator('[role="spinbutton"]').count()
+            nb_num   = page.locator('input[type="number"]').count()
+            if nb_spin >= 4 or nb_num >= 4:
                 totp_detected = True
+                send_fn(f"Formulaire TOTP détecté ({nb_spin} spinbuttons, {nb_num} inputs num).")
                 break
+            # Debug toutes les 3s
+            if i > 0 and i % 6 == 0:
+                send_fn(f"En attente... URL={url[-40:]} spin={nb_spin} num={nb_num}")
+
+        if not totp_detected and "login" in page.url.lower():
+            send_fn(f"Aucun formulaire TOTP détecté après 12s.\nURL : {page.url}\nVérifier credentials .env")
+            return False
 
         # ── TOTP détecté ─────────────────────────────────────────────────────
         if totp_detected:
@@ -121,12 +142,14 @@ def _fill_totp(page, code: str, send_fn=None) -> bool:
         return False
 
     try:
-        time.sleep(1)
+        time.sleep(0.5)
+        # Essaie d'abord les spinbuttons, puis les inputs numériques
         spinbuttons = page.locator('[role="spinbutton"]').all()
-
+        if len(spinbuttons) < 6:
+            spinbuttons = page.locator('input[type="number"]').all()
         if len(spinbuttons) < 6:
             if send_fn:
-                send_fn(f"Formulaire TOTP inattendu ({len(spinbuttons)} champs). Réessaie.")
+                send_fn(f"Formulaire TOTP : {len(spinbuttons)} champs trouvés (6 attendus). Réessaie.")
             return False
 
         # Remplit chaque champ digit par digit avec événements clavier
