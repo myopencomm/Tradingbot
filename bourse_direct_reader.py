@@ -1,13 +1,19 @@
 """
 Lecture du portefeuille Bourse Direct via Playwright.
-URL : /fr/page/portefeuille-tr  (iframe → /priv/new/portefeuille-TR.php)
-Compte CTO : select value=2  |  PEA : value=1
+
+Page React : https://www.boursedirect.fr/fr/mon-compte/portefeuilles
+- Sélecteur de compte : boutons #up / #down (carte PEA ↔ CTO)
+- Header cash : [data-testid="portfolio-header_available-cash-value"]
+- Lignes positions : .position-row  (texte tabulé multi-lignes)
+
+Structure d'une ligne position (innerText, séparé par \n) :
+  <icône> | NOM | PLACE › TICKER | COURS DEVISE | VAR% | QTÉ | PRU : X € | var% | VALO | +/-VAL | POIDS%
+Ex : Exosens | XPAR › EXENS | 61.45 EUR | +0.41 % | 17 | PRU : 63.4223 € | -3.11 % | 1 044.65 € | -33.53 € | 13%
 """
 import time
 import re
 
-BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/page/portefeuille-tr"
-CTO_SELECT_VALUE = "2"  # Compte Titre ordinaire
+BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/mon-compte/portefeuilles"
 
 
 def get_portfolio(page, send_fn=None) -> dict | None:
@@ -23,116 +29,159 @@ def get_portfolio(page, send_fn=None) -> dict | None:
 
     try:
         page.goto(BD_PORTFOLIO_URL, wait_until="domcontentloaded", timeout=20000)
-        time.sleep(2)
+        time.sleep(3)  # React charge les données en AJAX
 
         if "login" in page.url.lower():
             log("Session expirée — reconnecte avec /connect.")
             return None
 
-        # Le contenu est dans un iframe interne (/priv/new/portefeuille-TR.php)
-        # qui charge en AJAX. On accède via l'API frames de Playwright.
-        pf_frame = None
-        for _ in range(20):  # polling jusqu'à 10s
-            time.sleep(0.5)
-            for fr in page.frames:
-                if "portefeuille-TR" in fr.url or "portefeuille" in fr.url.lower():
-                    pf_frame = fr
-                    break
-            if pf_frame:
-                # Vérifie que le contenu est chargé
-                try:
-                    if pf_frame.locator("select").count() > 0:
-                        break
-                except Exception:
-                    pass
-            pf_frame = None
-
-        if not pf_frame:
-            log("Iframe portefeuille introuvable. La page a peut-être changé de structure.")
-            return None
-
-        # Bascule sur le CTO
+        # Ferme la popup de bienvenue si présente
         try:
-            pf_frame.locator("select").first.select_option(CTO_SELECT_VALUE)
-            time.sleep(2)  # rechargement AJAX après changement de compte
+            modal = page.locator("button.WelcomeModal-module_backBtn_QnNhW")
+            if modal.count() > 0:
+                modal.click()
+                time.sleep(0.5)
+        except Exception:
+            pass
+
+        # ── Bascule sur le CTO ────────────────────────────────────────────────
+        # La carte affichée en premier change avec les flèches #up/#down.
+        # On clique #down jusqu'à voir "CTO" dans la carte active (max 3 essais).
+        cto_selected = _ensure_cto(page, log)
+        if not cto_selected:
+            log("Impossible de sélectionner le compte CTO.")
+            return None
+        time.sleep(1.5)  # rechargement des données après switch
+
+        # ── Cash ──────────────────────────────────────────────────────────────
+        cash = None
+        try:
+            cash_txt = page.locator(
+                '[data-testid="portfolio-header_available-cash-value"]'
+            ).first.inner_text(timeout=4000)
+            cash = _parse_float(cash_txt)
         except Exception as e:
-            log(f"Bascule CTO échouée : {e}")
+            log(f"Lecture cash échouée : {e}")
 
-        # Lit le texte du frame
-        raw_text = ""
-        for _ in range(10):
-            try:
-                raw_text = pf_frame.locator("body").inner_text(timeout=3000)
-                if "Solde espèces" in raw_text:
-                    break
-            except Exception:
-                pass
-            time.sleep(0.5)
+        # ── Positions ──────────────────────────────────────────────────────────
+        positions = []
+        try:
+            rows = page.locator(".position-row").all()
+            for row in rows:
+                txt = row.inner_text(timeout=2000)
+                parsed = _parse_position(txt)
+                if parsed:
+                    positions.append(parsed)
+        except Exception as e:
+            log(f"Lecture positions échouée : {e}")
 
-        if "Solde espèces" not in raw_text:
-            log("Données portefeuille non chargées (pas de 'Solde espèces').")
+        if cash is None and not positions:
+            log("Aucune donnée lue (ni cash ni positions).")
             return None
 
-        return _parse(raw_text)
+        return {"cash": cash, "positions": positions}
 
     except Exception as e:
         log(f"Erreur : {e}")
         return None
 
 
-def _parse(text: str) -> dict:
-    """Parse le texte brut de la page portefeuille BD."""
-    result = {"cash": None, "positions": []}
-
-    for line in text.splitlines():
-        # Cash : "Solde espèces\t65,37 €\t..."
-        if "Solde espèces" in line:
-            m = re.search(r'Solde espèces\s*\t\s*([\d\s,]+)\s*€', line)
-            if m:
-                result["cash"] = _parse_float(m.group(1))
-            continue
-
-        # Ignore les lignes d'ordres ("Vente transmise", "Achat transmis")
-        if "transmise" in line or "transmis" in line or "Seuil" in line or "Lim." in line:
-            continue
-
-        # Lignes de positions : commencent par " NOM\tQTE\tPRU\tCOURS\t..."
-        parts = [p.strip() for p in line.split("\t")]
-        parts = [p for p in parts if p]  # retire les cellules vides
-        if len(parts) < 4:
-            continue
-
-        name = parts[0]
-        # Filtre : nom non vide, pas un header, pas un total
-        if not name or name in ("Libellé", "TOTAL", "Evaluation") or name.startswith("Sélectionnez"):
-            continue
-        # La quantité doit être un entier
+def _ensure_cto(page, log) -> bool:
+    """Clique #down jusqu'à ce que la carte active affiche le CTO."""
+    for _ in range(4):
+        # La carte active est la première .card visible
         try:
-            qty = int(_parse_float(parts[1]))
+            active_card = page.locator(
+                ".AccountCardSelector-module_card_Zt5-8"
+            ).first.inner_text(timeout=2000)
         except Exception:
+            active_card = ""
+
+        if "CTO" in active_card:
+            return True
+
+        # Pas le CTO → flèche suivant
+        try:
+            page.locator("button#down").click(timeout=2000)
+            time.sleep(1)
+        except Exception:
+            break
+    # Dernier check
+    try:
+        return "CTO" in page.locator(
+            ".AccountCardSelector-module_card_Zt5-8"
+        ).first.inner_text(timeout=2000)
+    except Exception:
+        return False
+
+
+def _parse_position(text: str) -> dict | None:
+    """
+    Parse une ligne .position-row.
+    Format innerText (lignes séparées par \\n) :
+      NOM, PLACE › TICKER, COURS DEVISE, VAR%, QTÉ, 'PRU : X €', var%, VALO, +/-VAL, POIDS
+    """
+    parts = [p.strip() for p in text.split("\n") if p.strip()]
+    if len(parts) < 5:
+        return None
+
+    name = None
+    bd_ticker = None
+    qty = None
+    pru = None
+
+    for p in parts:
+        # Ticker : "XPAR › EXENS" ou "XNGS › ILMN"
+        if "›" in p:
+            seg = p.split("›")
+            if len(seg) == 2:
+                bd_ticker = seg[1].strip()
+        # PRU : "PRU : 63.4223 €"
+        elif p.startswith("PRU"):
+            m = re.search(r'PRU\s*:\s*([\d\s.,]+)', p)
+            if m:
+                pru = _parse_float(m.group(1))
+
+    # Nom : première partie alphabétique longue (pas une icône 1-2 lettres)
+    for p in parts:
+        if "›" in p or p.startswith("PRU") or "€" in p or "%" in p:
             continue
-        if qty <= 0:
-            continue
+        if re.search(r'[A-Za-zÀ-ÿ]{3,}', p) and not p.replace(".", "").isdigit():
+            name = p
+            break
 
-        pru = _parse_float(parts[2]) if len(parts) > 2 else None
-        cours = _parse_float(parts[3]) if len(parts) > 3 else None
+    # Quantité : un entier seul parmi les parts (entre var% et PRU)
+    for i, p in enumerate(parts):
+        clean = p.replace(" ", "")
+        if clean.isdigit() and 0 < int(clean) < 100000:
+            # Heuristique : la qté précède "PRU"
+            if i + 1 < len(parts) and parts[i + 1].startswith("PRU"):
+                qty = int(clean)
+                break
 
-        result["positions"].append({
-            "name":  name,
-            "qty":   qty,
-            "pru":   pru,
-            "cours": cours,
-        })
+    if not name or not bd_ticker or qty is None:
+        return None
 
-    return result
+    return {
+        "name":      name,
+        "bd_ticker": bd_ticker,
+        "qty":       qty,
+        "pru":       pru,
+    }
 
 
 def _parse_float(s: str) -> float | None:
-    """Convertit '1 050,60 €' ou '63,42234' en float."""
+    """Convertit '1 050,60 €' ou '63.4223' ou '2 176.57 €' en float."""
     if not s:
         return None
     try:
-        clean = re.sub(r'[€$£\s]', '', str(s)).replace(',', '.').replace('\xa0', '')
+        clean = re.sub(r'[€$£\s\xa0]', '', str(s))
+        # Gère le format FR (virgule décimale) et US (point décimal)
+        # Si virgule ET point : la virgule est séparateur de milliers (format US)
+        if ',' in clean and '.' in clean:
+            clean = clean.replace(',', '')
+        elif ',' in clean:
+            clean = clean.replace(',', '.')
         return round(float(clean), 5)
     except Exception:
         return None
