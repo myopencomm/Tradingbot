@@ -14,7 +14,7 @@ _connected_at: datetime | None = None
 
 
 def start() -> bool:
-    """Lance Playwright (Chromium headless). Retourne True si OK."""
+    """Lance Playwright en mode visible (non-headless) — requis pour BD."""
     global _browser, _page, _playwright
     with _lock:
         if _browser is not None:
@@ -22,8 +22,19 @@ def start() -> bool:
         try:
             from playwright.sync_api import sync_playwright
             _playwright = sync_playwright().start()
-            _browser = _playwright.chromium.launch(headless=True)
-            _page = _browser.new_page()
+            _browser = _playwright.chromium.launch(
+                headless=False,
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+            )
+            ctx = _browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+            )
+            _page = ctx.new_page()
             return True
         except Exception as e:
             print(f"[Playwright] Erreur lancement : {e}")
