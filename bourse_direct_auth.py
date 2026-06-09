@@ -106,11 +106,16 @@ def login(send_fn) -> bool:
             if not _fill_totp(page, _otp_code, send_fn):
                 return False
 
-            # Polling post-TOTP : attend la redirection
-            for _ in range(12):
+            send_fn("Code TOTP envoyé, attente de la redirection...")
+
+            # Attend jusqu'à 15s que la connexion soit confirmée
+            # Vérifie le lien /fr/deconnexion (présent uniquement quand connecté)
+            for i in range(30):
                 time.sleep(0.5)
-                if "login" not in page.url.lower():
+                if _is_logged_in(page):
                     break
+                if i > 0 and i % 10 == 0:
+                    send_fn(f"Redirection en cours... URL={page.url[-50:]}")
 
         if _is_logged_in(page):
             session.mark_connected()
@@ -188,4 +193,13 @@ def _fill_totp(page, code: str, send_fn=None) -> bool:
 
 
 def _is_logged_in(page) -> bool:
-    return "login" not in page.url.lower()
+    """Vérifie la connexion sur le lien Déconnexion — fiable même pendant les redirects."""
+    try:
+        # Le lien /fr/deconnexion n'existe que sur les pages authentifiées
+        if page.locator('a[href="/fr/deconnexion"]').count() > 0:
+            return True
+        # Fallback : URL hors /login ET hors /identification
+        url = page.url.lower()
+        return "login" not in url and "identification" not in url
+    except Exception:
+        return False
