@@ -393,8 +393,8 @@ def _validate_tickers(text: str) -> str:
     return text
 
 
-def research_ticker(send_fn, ticker: str) -> None:
-    """Analyse approfondie d'un ticker spécifique — focalisée sur cette seule action."""
+def research_ticker(send_fn, ticker: str, question: str = "") -> None:
+    """Analyse approfondie d'un ticker. Si question fournie, répond à cette question précise."""
     try:
         ai   = get_provider()
         ctx  = _trading_context()
@@ -477,6 +477,7 @@ def research_ticker(send_fn, ticker: str) -> None:
             pct_to_sl = ((price - held["target_low"]) / price * 100) if isinstance(price, float) else "?"
 
             social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
+            question_block = f"\nQUESTION SPÉCIFIQUE : {question}" if question else ""
             prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {ctx_block}
@@ -494,7 +495,7 @@ RECHERCHE WEB
 
 CATALYSEURS IMMINENTS
 {catalysts}
-
+{question_block}
 RÉPONDS EN 3 BLOCS UNIQUEMENT :
 
 POTENTIEL RESTANT
@@ -507,11 +508,13 @@ MON SL / TP SONT-ILS ENCORE BONS ?
 - Le TP est-il toujours réaliste au vu des news ?
 
 DÉCISION
+- Réponds directement à la question spécifique si elle est posée.
 - CONSERVER / VENDRE MAINTENANT / ALLÉGER / AJUSTER SL ou TP
 - Une phrase de justification. Pas de bla-bla."""
 
         else:
             social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
+            question_block = f"\nQUESTION SPÉCIFIQUE : {question}" if question else ""
             prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
@@ -524,8 +527,9 @@ RECHERCHE WEB
 
 CATALYSEURS IMMINENTS
 {catalysts}
-
+{question_block}
 Y a-t-il une opportunité d'entrée sur {ticker} ?
+Réponds directement à la question spécifique si elle est posée.
 Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-10%), TP (+15%), catalyseur principal, risque (LOW/MEDIUM/HIGH).
 Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
 

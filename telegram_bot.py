@@ -114,7 +114,8 @@ def cmd_help(args, cid):
         "ANALYSE IA\n"
         "/morning          — Briefing macro + positions + opps\n"
         "/scan             — Top 3 opportunites\n"
-        "/research TICKER  — Analyse approfondie\n"
+        "/research TICKER [question] — Analyse approfondie\n"
+        "  Ex: /research EXENS.PA dois-je vendre ?\n"
         "\n"
         "IMPORT\n"
         "Photo BD — Import automatique par vision IA\n"
@@ -651,13 +652,21 @@ def cmd_scan(args, cid):
 
 def cmd_research(args, cid):
     if not args:
-        send("Usage: /research TICKER\nEx: /research GNFT.PA", cid)
+        send(
+            "Usage: /research TICKER [question]\n"
+            "Ex: /research EXENS.PA\n"
+            "Ex: /research EXENS.PA dois-je vendre ou tenir ?\n"
+            "Ex: /research MSFT est-ce un bon point d'entree ?",
+            cid,
+        )
         return
-    ticker = args[0].upper()
-    send(f"Analyse de {ticker} en cours...", cid)
+    ticker   = args[0].upper()
+    question = " ".join(args[1:]) if len(args) > 1 else ""
+    msg = f"Analyse de {ticker} en cours..." if not question else f"Analyse de {ticker} — '{question}'"
+    send(msg, cid)
     threading.Thread(
         target=analysis.research_ticker,
-        args=(lambda m: send(m, cid), ticker),
+        args=(lambda m: send(m, cid), ticker, question),
         daemon=True,
     ).start()
 
