@@ -1,3 +1,4 @@
+import math
 import time
 from datetime import datetime, timedelta
 import pytz
@@ -159,6 +160,7 @@ def get_quote(ticker: str) -> dict:
     """
     try:
         hist = yf.Ticker(ticker).history(period="2d")
+        hist = hist.dropna(subset=["Close"])
         if len(hist) >= 2:
             prev       = float(hist["Close"].iloc[-2])
             current    = float(hist["Close"].iloc[-1])
@@ -168,7 +170,7 @@ def get_quote(ticker: str) -> dict:
             prev       = current
             change_pct = 0.0
         else:
-            long_hist = yf.Ticker(ticker).history(period="1mo")
+            long_hist = yf.Ticker(ticker).history(period="1mo").dropna(subset=["Close"])
             status = "suspended" if long_hist.empty else "no_recent_data"
             return {"ticker": ticker, "price": None, "currency": "EUR",
                     "change_pct": None, "status": status}

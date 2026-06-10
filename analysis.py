@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 import pytz
 import portfolio
@@ -79,7 +80,7 @@ def _portfolio_snapshot() -> str:
     for name, cfg in positions.items():
         quote = prices.get_quote(cfg["ticker"])
         price = quote.get("price")
-        if price:
+        if price and not math.isnan(price):
             chg  = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
             pnl  = (price - cfg["entry_price"]) * cfg["qty"]
             sym  = prices.currency_symbol(quote.get("currency", "EUR"))
@@ -118,7 +119,7 @@ def _breach_warning(ticker: str, pru: float, sl: float) -> str | None:
     """Retourne un message d'alerte si le cours actuel a déjà franchi le SL ou dépasse +25%."""
     quote = prices.get_quote(ticker)
     price = quote.get("price")
-    if not price:
+    if not price or math.isnan(price):
         return None
     if price < sl:
         return f"⚠️ SL déjà dépassé : cours {price}€ < SL {sl}€ → /research {ticker}"
