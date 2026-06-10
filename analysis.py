@@ -497,6 +497,8 @@ RECHERCHE WEB
 CATALYSEURS IMMINENTS
 {catalysts}
 {question_block}
+INTERDICTIONS ABSOLUES : ne mentionne pas de point d'entrée, pas de "si tu n'as pas encore la position", pas de signal ACHAT, pas de niveau d'achat recommandé. Je suis déjà en position — tout conseil d'entrée est hors sujet.
+
 RÉPONDS EN 3 BLOCS UNIQUEMENT :
 
 POTENTIEL RESTANT
@@ -510,7 +512,7 @@ MON SL / TP SONT-ILS ENCORE BONS ?
 
 DÉCISION
 - Réponds directement à la question spécifique si elle est posée.
-- CONSERVER / VENDRE MAINTENANT / ALLÉGER / AJUSTER SL ou TP
+- CONSERVER / VENDRE MAINTENANT / ALLÉGER / AJUSTER SL ou TP — aucune autre option.
 - Une phrase de justification. Pas de bla-bla."""
 
         else:
