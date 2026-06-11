@@ -12,6 +12,9 @@ PARIS = pytz.timezone("Europe/Paris")
 TRADER_SYSTEM = """Tu es un expert trader actif sur tous les marchés accessibles via Bourse Direct (France).
 Compte-titres ordinaire (CTO), horizon court à moyen terme (jours à quelques semaines).
 Règles strictes: stop-loss -7% sur PRU, objectif minimum +10%, pas de levier.
+TP STRETCH : +10% est un MINIMUM, pas un plafond. Si l'objectif analyste ou le
+catalyseur justifie davantage, vise plus haut — et indique TOUJOURS le TP exact
+en prix ET en % pour que l'ordre puisse être passé tel quel.
 Univers : Euronext Paris/Growth, Euronext Amsterdam/Bruxelles, NYSE, NASDAQ, LSE, Xetra — tout ce qu'on peut acheter sur Bourse Direct.
 Priorité au meilleur rapport risque/rendement, peu importe le marché."""
 
@@ -250,7 +253,7 @@ CATALYSEURS : {cats}
 Signal ACHAT ou NEUTRE/ÉVITER ?
 Si NEUTRE/ÉVITER → réponds exactement : EXCLUS
 Si ACHAT → format :
-{t} — Entrée : {current_price}€  SL : X€ (-7%)  TP : X€ (+10%)
+{t} — Entrée : {current_price}€  SL : X€ (-7%)  TP : X€ (+X% — minimum +10%, plus si le potentiel le justifie)
 - Catalyseur : [événement précis + date après {today_str}]
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
@@ -533,7 +536,7 @@ CATALYSEURS IMMINENTS
 {question_block}
 Y a-t-il une opportunité d'entrée sur {ticker} ?
 Réponds directement à la question spécifique si elle est posée.
-Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-7%), TP (+10%), catalyseur principal, risque (LOW/MEDIUM/HIGH).
+Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-7%), TP (+10% minimum — plus haut si le potentiel le justifie, % exact obligatoire), catalyseur principal, risque (LOW/MEDIUM/HIGH).
 Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=600))
@@ -706,7 +709,7 @@ RÈGLE : si tu donnerais NEUTRE ou ÉVITER dans un /research → réponds EXCLUS
 Si ACHAT : donne format exact :
 NOM SOCIETE ({t})
 - Marché : ...
-- Cours actuel : {current_price} | Entrée : X  SL : X (-7%)  TP : X (+10%)
+- Cours actuel : {current_price} | Entrée : X  SL : X (-7%)  TP : X (+X% — minimum +10%, plus si le potentiel le justifie)
 - Catalyseur : [événement précis + date après {today_str}]
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
@@ -724,6 +727,20 @@ NOM SOCIETE ({t})
                     f"\n→ Passer l'ordre (mode Playwright) :\n"
                     f"   /ordre acheter {t} {qty_sugg} limite {current_price}"
                 )
+                # Reprend le SL/TP conseillés par l'IA (TP stretch inclus) pour
+                # que l'ordre de protection reflète exactement le conseil donné.
+                sl_m = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                tp_m = re.search(r"\bTP\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                if sl_m and tp_m:
+                    sl_v = float(sl_m.group(1).replace(",", "."))
+                    tp_v = float(tp_m.group(1).replace(",", "."))
+                    if sl_v < current_price < tp_v:
+                        tp_pct = (tp_v / current_price - 1) * 100
+                        stretch = f" (TP +{tp_pct:.0f}%)" if tp_pct >= 11 else ""
+                        val += (
+                            f"\n   puis protection : /ordre vendre {t} {qty_sugg} "
+                            f"expert {sl_v} {tp_v}{stretch}"
+                        )
             except Exception:
                 pass
 
