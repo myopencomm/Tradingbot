@@ -20,6 +20,11 @@ class AIProvider(ABC):
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
         pass
 
+    def complete_cheap(self, prompt: str, max_tokens: int = 100) -> str:
+        """Complétion sur le modèle le moins cher du provider (micro-tâches :
+        scoring, classification). Par défaut : même modèle que complete()."""
+        return self.complete(prompt, max_tokens=max_tokens)
+
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
         """Vision par défaut : renvoie une erreur explicite si non surchargé."""
         raise NotImplementedError(
@@ -30,6 +35,7 @@ class AIProvider(ABC):
 
 class AnthropicProvider(AIProvider):
     DEFAULT_MODEL = "claude-sonnet-4-6"
+    CHEAP_MODEL   = "claude-haiku-4-5-20251001"
 
     def __init__(self):
         import anthropic
@@ -39,6 +45,14 @@ class AnthropicProvider(AIProvider):
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
         msg = self.client.messages.create(
             model=self.model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text
+
+    def complete_cheap(self, prompt: str, max_tokens: int = 100) -> str:
+        msg = self.client.messages.create(
+            model=self.CHEAP_MODEL,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )

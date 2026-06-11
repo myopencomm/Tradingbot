@@ -265,12 +265,69 @@ def _boursorama_titles(base: str, max_items: int = 5) -> list[str]:
         return []
 
 
+def _boursorama_messages(base: str, max_threads: int = 3, max_msgs: int = 8) -> list[str]:
+    """Corps des messages récents du forum Boursorama (pour scoring IA)."""
+    try:
+        r = requests.get(
+            f"https://www.boursorama.com/bourse/forum/1rP{base}/",
+            headers=HEADERS, timeout=8,
+        )
+        if r.status_code != 200:
+            return []
+        threads = re.findall(rf'href="(/bourse/forum/1rP{base}/detail/[^"]+)"', r.text)
+        seen_threads = list(dict.fromkeys(threads))[:max_threads]
+        messages = []
+        for path in seen_threads:
+            try:
+                rd = requests.get(f"https://www.boursorama.com{path}",
+                                  headers=HEADERS, timeout=8)
+                if rd.status_code != 200:
+                    continue
+                bodies = re.findall(r'class="c-message__text[^"]*"[^>]*>(.*?)</',
+                                    rd.text, re.DOTALL)
+                for b in bodies:
+                    txt = " ".join(re.sub(r"<[^>]+>", " ", b).split())
+                    if len(txt) > 20 and txt not in messages:
+                        messages.append(txt[:300])
+                    if len(messages) >= max_msgs:
+                        return messages
+            except Exception:
+                continue
+        return messages
+    except Exception as e:
+        print(f"⚠️ Boursorama messages {base}: {e}")
+        return []
+
+
+def _score_french_texts(texts: list[str]) -> int | None:
+    """Score sentiment -100/+100 de textes français via le modèle IA économique."""
+    if not texts:
+        return None
+    try:
+        from ai_provider import get_provider
+        joined = "\n".join(f"- {t}" for t in texts[:10])
+        raw = get_provider().complete_cheap(
+            "Voici des messages de forum boursier sur une action. "
+            "Note le sentiment global des investisseurs de -100 (très bearish) "
+            "à +100 (très bullish). Réponds UNIQUEMENT avec le nombre entier, rien d'autre.\n\n"
+            f"{joined}",
+            max_tokens=8,
+        )
+        m = re.search(r"-?\d+", raw)
+        if m:
+            return max(-100, min(100, int(m.group())))
+    except Exception as e:
+        print(f"⚠️ Score sentiment FR: {e}")
+    return None
+
+
 def get_social_sentiment(ticker: str) -> str:
     """
     Sentiment social composite : StockTwits + Reddit + Boursorama (valeurs .PA).
 
     - Score -100 (très bearish) à +100 (très bullish) combinant les tags
-      StockTwits et l'analyse VADER des textes anglais (messages + titres Reddit).
+      StockTwits, l'analyse VADER des textes anglais (messages + titres Reddit)
+      et un scoring IA des messages français Boursorama (valeurs .PA).
     - Vélocité : compare le volume de messages au dernier passage pour
       détecter les pics d'activité (souvent plus prédictifs que le sentiment).
     """
@@ -344,15 +401,17 @@ def get_social_sentiment(ticker: str) -> str:
     except Exception as e:
         print(f"⚠️ Reddit {ticker}: {e}")
 
-    # ── Boursorama (valeurs Euronext Paris) ───────────────────────────────────
+    # ── Boursorama (valeurs Euronext Paris) : titres + scoring IA des corps ──
+    fr_score = None
     if ticker.upper().endswith(".PA"):
         bourso = _boursorama_titles(base)
         if bourso:
             volume += len(bourso)
             lines.append("Forum Boursorama (titres récents) :")
             lines.extend(f"  • {t}" for t in bourso)
+            fr_score = _score_french_texts(_boursorama_messages(base))
 
-    # ── Score composite : tags StockTwits (60%) + VADER textes anglais (40%) ──
+    # ── Score composite : tags StockTwits + VADER (anglais) + IA (français) ──
     vader_score = None
     if en_texts:
         try:
@@ -362,10 +421,10 @@ def get_social_sentiment(ticker: str) -> str:
         except Exception as e:
             print(f"⚠️ VADER {ticker}: {e}")
 
-    if tag_score is not None and vader_score is not None:
-        composite = round(tag_score * 0.6 + vader_score * 0.4)
-    else:
-        composite = tag_score if tag_score is not None else vader_score
+    # Pondération : tags 3 / VADER 2 / IA français 2 (composants absents ignorés)
+    parts = [(s, w) for s, w in ((tag_score, 3), (vader_score, 2), (fr_score, 2))
+             if s is not None]
+    composite = round(sum(s * w for s, w in parts) / sum(w for _, w in parts)) if parts else None
 
     # ── Vélocité : volume vs dernier passage ──────────────────────────────────
     velocity = ""
