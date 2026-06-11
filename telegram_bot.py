@@ -222,6 +222,11 @@ def cmd_help(args, cid):
         "\n"
         "AIDE\n"
         "/tuto — guide pas a pas  |  /update — version\n"
+        "\n"
+        "GESTION DU BOT (terminal)\n"
+        "./bot.sh start|stop|restart|status|logs\n"
+        "./bot.sh update — maj en 1 commande\n"
+        "./bot.sh autostart — relance auto au boot\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         cid,
     )
@@ -874,17 +879,20 @@ def _tuto_install(cid):
     send(
         "Installation — Etape 4 : Lancer\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "  venv/bin/python3 main.py\n"
+        "  ./bot.sh start\n"
         "\n"
-        "Le bot envoie un message de confirmation.\n"
-        "Envoie /start pour verifier.\n"
+        "Le bot tourne en arriere-plan — tu peux\n"
+        "fermer le terminal. Envoie /start ici\n"
+        "pour verifier.\n"
         "\n"
-        "En arriere-plan (reste actif apres fermeture\n"
-        "du terminal) :\n"
-        "  venv/bin/python3 main.py > tradingbot.log 2>&1 &\n"
+        "Recommande — demarrage auto au boot du Mac/PC\n"
+        "+ relance automatique apres un crash :\n"
+        "  ./bot.sh autostart\n"
         "\n"
-        "Voir les logs :\n"
-        "  tail -f tradingbot.log",
+        "Autres commandes :\n"
+        "  ./bot.sh status   → tourne ou pas ?\n"
+        "  ./bot.sh logs     → logs en direct\n"
+        "  ./bot.sh stop     → arreter",
         cid,
     )
 
@@ -1056,12 +1064,19 @@ def _tuto_update(cid):
     send(
         "Mettre a jour le bot\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "1. Recupere les nouveautes :\n"
-        "   git pull origin main\n"
+        "Une seule commande dans le terminal :\n"
+        "   ./bot.sh update\n"
+        "(git pull + dependances + redemarrage)\n"
         "\n"
-        "2. Relance le bot :\n"
-        "   pkill -f main.py\n"
-        "   venv/bin/python3 main.py > tradingbot.log 2>&1 &\n"
+        "Gestion du bot au quotidien :\n"
+        "   ./bot.sh start|stop|restart|status|logs\n"
+        "\n"
+        "Demarrage auto au boot + relance apres crash :\n"
+        "   ./bot.sh autostart\n"
+        "\n"
+        "⚠️ Avec autostart actif, ne JAMAIS utiliser\n"
+        "pkill — toujours ./bot.sh stop ou restart\n"
+        "(sinon double instance du bot).\n"
         "\n"
         "Voir ce qui a change :\n"
         "   git log --oneline -10\n"
