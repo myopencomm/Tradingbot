@@ -39,3 +39,6 @@ bot_state.json
 bd_*.png
 *.png
 PLAYWRIGHT_STRATEGY.md
+
+# Cache sentiment social (données dérivées, régénéré à chaque run)
+sentiment_cache.json

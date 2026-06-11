@@ -153,6 +153,32 @@ def get_intraday_range(ticker: str, hours: int = 4) -> dict:
         return {}
 
 
+def get_vix() -> dict:
+    """Niveau du VIX + variation 1 jour, avec lecture qualitative.
+
+    Retourne {"level": float, "change_pct": float, "label": str} ou {}.
+    """
+    try:
+        hist = yf.Ticker("^VIX").history(period="5d").dropna(subset=["Close"])
+        if len(hist) < 2:
+            return {}
+        current = float(hist["Close"].iloc[-1])
+        prev    = float(hist["Close"].iloc[-2])
+        chg     = ((current - prev) / prev) * 100
+        if current < 15:
+            label = "marché calme (risk-on)"
+        elif current < 20:
+            label = "volatilité normale"
+        elif current < 30:
+            label = "marché nerveux (prudence)"
+        else:
+            label = "panique / forte aversion au risque"
+        return {"level": round(current, 1), "change_pct": round(chg, 1), "label": label}
+    except Exception as e:
+        print(f"⚠️ VIX error: {e}")
+        return {}
+
+
 def get_quote(ticker: str) -> dict:
     """Retourne prix dans la devise native du ticker, avec devise détectée.
 

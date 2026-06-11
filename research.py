@@ -2,9 +2,23 @@
 Recherche web via DuckDuckGo HTML (requests pur — pas de clé API).
 Adapte la langue des requêtes au marché du ticker.
 """
+import json
 import re
 import requests
 from datetime import datetime
+from pathlib import Path
+
+# Cache volume de messages par ticker pour détecter les pics d'activité
+_SENTIMENT_CACHE = Path(__file__).parent / "sentiment_cache.json"
+
+_vader = None
+
+def _get_vader():
+    global _vader
+    if _vader is None:
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        _vader = SentimentIntensityAnalyzer()
+    return _vader
 
 def _current_period() -> str:
     """Retourne 'juin 2026' ou 'june 2026' selon la langue."""
@@ -72,6 +86,36 @@ def _snippets(results: list[dict], max_chars: int = 500) -> list[str]:
     ]
 
 
+def _fear_greed() -> dict:
+    """CNN Fear & Greed index (0-100). Retourne {"score": int, "rating": str} ou {}."""
+    try:
+        r = requests.get(
+            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+            headers=HEADERS, timeout=8,
+        )
+        if r.status_code == 200:
+            fg = r.json().get("fear_and_greed", {})
+            score = fg.get("score")
+            if score is not None:
+                return {"score": round(score), "rating": fg.get("rating", "")}
+    except Exception as e:
+        print(f"⚠️ Fear&Greed error: {e}")
+    return {}
+
+
+def market_mood() -> str:
+    """Ligne sentiment marché temps réel : VIX + Fear & Greed."""
+    import prices
+    parts = []
+    vix = prices.get_vix()
+    if vix:
+        parts.append(f"VIX {vix['level']} ({vix['change_pct']:+}% 1j) — {vix['label']}")
+    fg = _fear_greed()
+    if fg:
+        parts.append(f"Fear & Greed {fg['score']}/100 ({fg['rating']})")
+    return " | ".join(parts)
+
+
 def market_context() -> str:
     """Contexte macro + marchés mondiaux pour le briefing IA."""
     p = _current_period()
@@ -86,7 +130,9 @@ def market_context() -> str:
     snippets = []
     for q, lang in queries_fr:
         snippets += _snippets(_search(q, max_results=3, lang=lang))
-    return "\n".join(snippets[:15]) or "Données web indisponibles."
+    mood = market_mood()
+    mood_line = f"SENTIMENT MARCHÉ TEMPS RÉEL : {mood}\n" if mood else ""
+    return mood_line + ("\n".join(snippets[:15]) or "Données web indisponibles.")
 
 
 def research_stock(ticker: str, company_name: str = "") -> str:
@@ -177,25 +223,71 @@ def market_catalysts() -> str:
     return "\n".join(snippets[:20]) or "Aucune donnée catalyseurs disponible."
 
 
+def _load_sentiment_cache() -> dict:
+    try:
+        if _SENTIMENT_CACHE.exists():
+            return json.loads(_SENTIMENT_CACHE.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _save_sentiment_cache(cache: dict) -> None:
+    try:
+        _SENTIMENT_CACHE.write_text(json.dumps(cache))
+    except Exception:
+        pass
+
+
+def _boursorama_titles(base: str, max_items: int = 5) -> list[str]:
+    """Titres récents du forum Boursorama pour une valeur Euronext Paris."""
+    try:
+        r = requests.get(
+            f"https://www.boursorama.com/bourse/forum/1rP{base}/",
+            headers=HEADERS, timeout=8,
+        )
+        if r.status_code != 200:
+            return []
+        titles = re.findall(
+            rf'href="/bourse/forum/1rP{base}/detail/[^"]+"[^>]*>\s*([^<]{{5,120}})',
+            r.text,
+        )
+        clean = []
+        for t in titles:
+            t = " ".join(t.split())
+            if t and t not in clean:
+                clean.append(t)
+            if len(clean) >= max_items:
+                break
+        return clean
+    except Exception as e:
+        print(f"⚠️ Boursorama {base}: {e}")
+        return []
+
+
 def get_social_sentiment(ticker: str) -> str:
     """
-    Sentiment social via StockTwits (gratuit, sans clé) + Reddit JSON API.
-    Retourne un résumé texte injecté dans les prompts /research et /scan.
+    Sentiment social composite : StockTwits + Reddit + Boursorama (valeurs .PA).
 
-    StockTwits : fonctionne bien pour les US stocks et quelques stocks FR majeurs.
-    Reddit : r/stocks, r/investing, r/wallstreetbets — surtout pertinent US.
+    - Score -100 (très bearish) à +100 (très bullish) combinant les tags
+      StockTwits et l'analyse VADER des textes anglais (messages + titres Reddit).
+    - Vélocité : compare le volume de messages au dernier passage pour
+      détecter les pics d'activité (souvent plus prédictifs que le sentiment).
     """
-    # Ticker base sans suffixe (EXENS.PA → EXENS, ILMN → ILMN)
     base = ticker.upper().split(".")[0]
+    is_fr = ticker.upper().endswith((".PA", ".BR", ".AS"))
     lines = []
+    en_texts: list[str] = []   # textes anglais à scorer avec VADER
+    tag_score = None           # score issu des tags Bullish/Bearish StockTwits
+    volume = 0
 
     # ── StockTwits ────────────────────────────────────────────────────────────
     try:
         st_url = f"https://api.stocktwits.com/api/2/streams/symbol/{base}.json"
         r = requests.get(st_url, headers=HEADERS, timeout=6)
         if r.status_code == 200:
-            data = r.json()
-            messages = data.get("messages", [])
+            messages = r.json().get("messages", [])
+            volume += len(messages)
 
             def _st_sentiment(m):
                 ent = m.get("entities") or {}
@@ -205,16 +297,19 @@ def get_social_sentiment(ticker: str) -> str:
             bearish = sum(1 for m in messages if _st_sentiment(m) == "Bearish")
             total   = bullish + bearish
             if total > 0:
-                bull_pct = round(bullish / total * 100)
+                bull_pct  = round(bullish / total * 100)
+                tag_score = (bull_pct - 50) * 2  # 0% bull → -100, 100% bull → +100
                 lines.append(f"StockTwits ({len(messages)} msgs) : {bull_pct}% bullish / {100-bull_pct}% bearish")
-                for m in messages[:5]:
-                    sent = _st_sentiment(m) or ""
-                    body = m.get("body", "").replace("\n", " ")[:120]
-                    if body:
-                        tag = f"[{sent}] " if sent else ""
-                        lines.append(f"  • {tag}{body}")
-            elif messages:
-                lines.append(f"StockTwits : {len(messages)} messages récents, sentiment non tagué")
+            for m in messages[:15]:
+                body = m.get("body", "").replace("\n", " ")
+                if body:
+                    en_texts.append(body)
+            for m in messages[:3]:
+                sent = _st_sentiment(m) or ""
+                body = m.get("body", "").replace("\n", " ")[:120]
+                if body:
+                    tag = f"[{sent}] " if sent else ""
+                    lines.append(f"  • {tag}{body}")
     except Exception as e:
         print(f"⚠️ StockTwits {ticker}: {e}")
 
@@ -222,6 +317,8 @@ def get_social_sentiment(ticker: str) -> str:
     try:
         reddit_headers = {**HEADERS, "User-Agent": "TradingBot/1.0 (research tool)"}
         subreddits = ["stocks", "investing", "wallstreetbets"]
+        if is_fr:
+            subreddits += ["vosfinances", "EuropeFIRE"]
         reddit_lines = []
         for sub in subreddits:
             r = requests.get(
@@ -237,12 +334,66 @@ def get_social_sentiment(ticker: str) -> str:
                 title = d.get("title", "")[:100]
                 score = d.get("score", 0)
                 if title and score > 5:
+                    volume += 1
                     reddit_lines.append(f"  • r/{sub} (+{score}) {title}")
+                    if sub not in ("vosfinances",):  # VADER = anglais uniquement
+                        en_texts.append(title)
         if reddit_lines:
-            lines.append(f"Reddit (7 derniers jours) :")
+            lines.append("Reddit (7 derniers jours) :")
             lines.extend(reddit_lines[:5])
     except Exception as e:
         print(f"⚠️ Reddit {ticker}: {e}")
+
+    # ── Boursorama (valeurs Euronext Paris) ───────────────────────────────────
+    if ticker.upper().endswith(".PA"):
+        bourso = _boursorama_titles(base)
+        if bourso:
+            volume += len(bourso)
+            lines.append("Forum Boursorama (titres récents) :")
+            lines.extend(f"  • {t}" for t in bourso)
+
+    # ── Score composite : tags StockTwits (60%) + VADER textes anglais (40%) ──
+    vader_score = None
+    if en_texts:
+        try:
+            analyzer  = _get_vader()
+            compounds = [analyzer.polarity_scores(t)["compound"] for t in en_texts]
+            vader_score = round(sum(compounds) / len(compounds) * 100)
+        except Exception as e:
+            print(f"⚠️ VADER {ticker}: {e}")
+
+    if tag_score is not None and vader_score is not None:
+        composite = round(tag_score * 0.6 + vader_score * 0.4)
+    else:
+        composite = tag_score if tag_score is not None else vader_score
+
+    # ── Vélocité : volume vs dernier passage ──────────────────────────────────
+    velocity = ""
+    cache = _load_sentiment_cache()
+    prev = cache.get(base, {})
+    prev_volume = prev.get("volume", 0)
+    if prev_volume and volume:
+        ratio = volume / prev_volume
+        if ratio >= 2:
+            velocity = f" | ⚠️ volume x{ratio:.1f} vs dernier check — pic d'activité"
+        elif ratio <= 0.5:
+            velocity = f" | volume en baisse ({ratio:.1f}x)"
+    cache[base] = {"volume": volume, "score": composite,
+                   "date": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    _save_sentiment_cache(cache)
+
+    # ── Assemblage ────────────────────────────────────────────────────────────
+    if composite is not None:
+        if composite >= 30:
+            label = "bullish"
+        elif composite <= -30:
+            label = "bearish"
+        else:
+            label = "neutre"
+        header = f"SCORE SENTIMENT : {composite:+d}/100 ({label}){velocity}"
+        lines.insert(0, header)
+    elif velocity:
+        lines.insert(0, f"SENTIMENT : volume seul disponible{velocity}")
 
     return "\n".join(lines) if lines else "Sentiment social : aucune donnée disponible."
 
