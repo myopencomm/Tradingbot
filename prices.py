@@ -153,6 +153,34 @@ def get_intraday_range(ticker: str, hours: int = 4) -> dict:
         return {}
 
 
+def get_price_context(ticker: str) -> dict:
+    """Position dans le range 52 semaines + performances.
+
+    Sert à détecter les « couteaux qui tombent » : un titre proche de son
+    plus bas annuel après une forte baisse, où les objectifs analystes
+    sont souvent en retard sur la réalité.
+    """
+    try:
+        hist = yf.Ticker(ticker).history(period="1y").dropna(subset=["Close"])
+        if len(hist) < 30:
+            return {}
+        closes = hist["Close"]
+        cur = float(closes.iloc[-1])
+        lo  = float(closes.min())
+        hi  = float(closes.max())
+        out = {
+            "perf_1y":       round((cur / float(closes.iloc[0]) - 1) * 100, 1),
+            "from_52w_low":  round((cur / lo - 1) * 100, 1),
+            "from_52w_high": round((cur / hi - 1) * 100, 1),
+        }
+        if len(closes) > 63:
+            out["perf_3m"] = round((cur / float(closes.iloc[-63]) - 1) * 100, 1)
+        return out
+    except Exception as e:
+        print(f"⚠️ Price context error {ticker}: {e}")
+        return {}
+
+
 def get_vix() -> dict:
     """Niveau du VIX + variation 1 jour, avec lecture qualitative.
 

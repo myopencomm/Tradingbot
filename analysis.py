@@ -22,6 +22,25 @@ en prix ET en % pour que l'ordre puisse être passé tel quel.
 Univers : Euronext Paris/Growth, Euronext Amsterdam/Bruxelles, NYSE, NASDAQ, LSE, Xetra — tout ce qu'on peut acheter sur Bourse Direct.
 Priorité au meilleur rapport risque/rendement, peu importe le marché."""
 
+ANALYSIS_RULES = f"""
+RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
+- RSI : survente = RSI < 30, surachat = RSI > 70. Entre 30 et 70 : NEUTRE —
+  ne jamais parler de « survente relative » pour un RSI à 40-50.
+- COUTEAU QUI TOMBE : si perf 1 an < -30% OU cours à moins de +15% du plus bas
+  52 semaines → risque HIGH obligatoire, et ACHAT uniquement avec un catalyseur
+  de RETOURNEMENT précis et daté. Des résultats trimestriels ordinaires ne
+  suffisent PAS à retourner un titre en chute.
+- OBJECTIFS ANALYSTES : cibles à 12 mois, souvent EN RETARD après une forte
+  baisse (les analystes abaissent progressivement). Ne JAMAIS utiliser un
+  objectif analyste comme TP ni comme preuve d'upside court terme — mention
+  indicative uniquement.
+- TP : doit être atteignable dans l'horizon du catalyseur (jours à semaines).
+  Plafond +{2 * DEFAULT_TP_PCT:.0f}% sauf événement binaire daté (OPA en cours,
+  décision FDA). Une mégacap ne fait pas +50% sur des résultats trimestriels.
+- SENTIMENT SOCIAL : signal d'appoint — jamais un argument principal d'achat.
+- En cas de doute → EXCLUS. Mieux vaut zéro opportunité qu'une mauvaise.
+"""
+
 TICKER_RULES = """
 RÈGLES ABSOLUES — TICKERS (format Yahoo Finance) :
 - Euronext Paris / Growth : suffixe .PA (ex: AIR.PA, GNFT.PA)
@@ -221,6 +240,7 @@ MISSION
 
                 tech   = prices.get_technicals(t)
                 funds  = prices.get_fundamentals(t)
+                pctx   = prices.get_price_context(t)
                 yf_n   = prices.get_yf_news(t, max_items=4)
                 social = research.get_social_sentiment(t)
                 web    = research.research_stock(t)
@@ -232,6 +252,12 @@ MISSION
                         f"\nTECHNICALS : RSI {tech.get('rsi','N/A')} | "
                         f"Momentum {tech.get('momentum_1m','N/A'):+}% | "
                         f"Vol ratio {tech.get('vol_ratio','N/A')}x\n"
+                    )
+                if pctx:
+                    tech_b += (
+                        f"52 SEMAINES : perf 1 an {pctx['perf_1y']:+}% | "
+                        f"+{pctx['from_52w_low']}% vs plus bas | "
+                        f"{pctx['from_52w_high']}% vs plus haut\n"
                     )
                 funds_b = ""
                 fl = []
@@ -248,6 +274,7 @@ MISSION
                 ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
                          f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
                 val_prompt = f"""{TRADER_SYSTEM}
+{ANALYSIS_RULES}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
@@ -439,6 +466,7 @@ def research_ticker(send_fn, ticker: str, question: str = "") -> None:
         catalysts = research.search_catalysts(real_ticker)
         tech      = prices.get_technicals(real_ticker)
         funds     = prices.get_fundamentals(real_ticker)
+        pctx      = prices.get_price_context(real_ticker)
         yf_news   = prices.get_yf_news(real_ticker)
         social    = research.get_social_sentiment(real_ticker)
 
@@ -452,6 +480,13 @@ def research_ticker(send_fn, ticker: str, question: str = "") -> None:
                 f"- RSI 14j : {rsi}\n"
                 f"- Momentum 1 mois : {mom:+}%\n"
                 f"- Volume ratio : {vol}x moyenne 20j\n"
+            )
+        if pctx:
+            tech_block += (
+                f"- Performance 1 an : {pctx['perf_1y']:+}%"
+                + (f" | 3 mois : {pctx['perf_3m']:+}%" if "perf_3m" in pctx else "") + "\n"
+                f"- Range 52 semaines : +{pctx['from_52w_low']}% vs plus bas, "
+                f"{pctx['from_52w_high']}% vs plus haut\n"
             )
 
         funds_lines = []
@@ -530,6 +565,7 @@ DÉCISION
             social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
             question_block = f"\nQUESTION SPÉCIFIQUE : {question}" if question else ""
             prompt = f"""{TRADER_SYSTEM}
+{ANALYSIS_RULES}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_block}
@@ -669,10 +705,21 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
         for t, current_price in valid_candidates[:4]:
             tech   = prices.get_technicals(t)
             funds  = prices.get_fundamentals(t)
+            pctx   = prices.get_price_context(t)
             yf_news = prices.get_yf_news(t, max_items=4)
             web    = research.research_stock(t)
             cats   = research.search_catalysts(t)
             social = research.get_social_sentiment(t)
+
+            pctx_block = ""
+            if pctx:
+                pctx_block = (
+                    f"\nCONTEXTE 52 SEMAINES\n"
+                    f"- Performance 1 an : {pctx['perf_1y']:+}%"
+                    + (f" | 3 mois : {pctx['perf_3m']:+}%" if "perf_3m" in pctx else "") + "\n"
+                    f"- Cours actuel : +{pctx['from_52w_low']}% au-dessus du plus bas 52s, "
+                    f"{pctx['from_52w_high']}% vs plus haut 52s\n"
+                )
 
             tech_block = ""
             if tech:
@@ -702,13 +749,14 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
             ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
                      f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
             validate_prompt = f"""{TRADER_SYSTEM}
+{ANALYSIS_RULES}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
 AUJOURD'HUI : {today_str}
 TICKER ANALYSÉ : {t} — JE NE DÉTIENS PAS CETTE ACTION. CASH DISPONIBLE : {cash}€.
 Cours actuel : {current_price}
-{tech_block}{funds_block}{news_b}{social_b}
+{pctx_block}{tech_block}{funds_block}{news_b}{social_b}
 
 RECHERCHE WEB
 {web}
@@ -752,8 +800,16 @@ NOM SOCIETE ({t})
                     sl_v = float(sl_m.group(1).replace(",", "."))
                     tp_v = float(tp_m.group(1).replace(",", "."))
                     if sl_v < current_price < tp_v:
+                        # Plafond mécanique : un TP au-delà de 2x l'objectif
+                        # minimum est hors horizon court terme (objectif 12 mois
+                        # pris pour un TP) — on le ramène au plafond.
+                        tp_cap = round(current_price * (1 + 2 * DEFAULT_TP_PCT / 100), 2)
+                        capped = ""
+                        if tp_v > tp_cap:
+                            capped = f" — TP IA {tp_v}€ hors horizon, plafonné"
+                            tp_v = tp_cap
                         tp_pct = (tp_v / current_price - 1) * 100
-                        stretch = f" (TP +{tp_pct:.0f}%)" if tp_pct >= 11 else ""
+                        stretch = f" (TP +{tp_pct:.0f}%{capped})" if tp_pct >= 11 or capped else ""
                         val += (
                             f"\n   puis protection : /ordre vendre {t} {qty_sugg} "
                             f"expert {sl_v} {tp_v}{stretch}"
