@@ -56,7 +56,7 @@ Tout se passe dans Telegram. Bourse Direct reste votre seul point d'exécution �
 | **Bourse Direct** | Compte actif — vous passez les ordres manuellement |
 | **Dépendances système** | Aucune — tout est installé via `pip` |
 
-**Stabilité en production :** le bot tourne en arrière-plan (polling Telegram, scheduler). Il est stable sur un Mac allumé en permanence ou un serveur Linux. Pas de gestion automatique des redémarrages après crash — prévoir `systemd` ou `launchd` pour un usage continu.
+**Stabilité en production :** le bot tourne en arrière-plan (polling Telegram, scheduler). Il est stable sur un Mac allumé en permanence ou un serveur Linux. Pour un usage continu, `./bot.sh autostart` installe un service `launchd`/`systemd` qui le relance au boot et après un crash.
 
 ### Installer Python et Git (macOS)
 
@@ -216,7 +216,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 
 > **Pourquoi `venv/bin/python3` et pas juste `python3` ?** Ça garantit que vous utilisez le Python du venv avec toutes les librairies installées, même si vous n'avez pas activé l'environnement. Plus fiable, surtout pour relancer le bot depuis un script ou un terminal fraîchement ouvert.
 
-> ⚠️ **Lancé ainsi, le bot s'arrête si vous fermez la fenêtre de terminal.** Pour qu'il tourne en continu sans garder le terminal ouvert, voir [Lancer en tâche de fond](#lancer-en-tâche-de-fond) (une seule commande avec `nohup`).
+> ⚠️ **Lancé ainsi, le bot s'arrête si vous fermez la fenêtre de terminal.** Pour un usage durable, utilisez plutôt `./bot.sh start` (arrière-plan) et `./bot.sh autostart` (relance auto au boot et après crash) — voir [Lancer en tâche de fond](#lancer-en-tâche-de-fond).
 
 ---
 
@@ -553,12 +553,10 @@ Ce fichier est injecté automatiquement dans chaque prompt IA (`/morning`, `/sca
 ## Mettre à jour le bot
 
 ```bash
-git pull origin main
-pkill -f "main.py"
-PYTHONUNBUFFERED=1 venv/bin/python3 main.py > tradingbot.log 2>&1 &
+./bot.sh update
 ```
 
-Vérifiez les nouveautés dans le [CHANGELOG](#changelog) ou via `/update` dans Telegram.
+Une seule commande : `git pull` + installation des nouvelles dépendances + redémarrage. Vérifiez ensuite les nouveautés dans le [CHANGELOG](#changelog) ou via `/update` dans Telegram.
 
 > **Tip :** `git log --oneline -10` affiche les 10 derniers commits pour voir ce qui a changé.
 
@@ -567,6 +565,8 @@ Vérifiez les nouveautés dans le [CHANGELOG](#changelog) ou via `/update` dans 
 ## Changelog
 
 ### 2026-06-11
+- **`bot.sh`** : script de gestion — `start/stop/restart/status/logs/update` + `autostart` (service launchd/systemd : démarrage au boot, relance auto après crash)
+- **Fix `/update`** : fonctionne désormais sur toute machine (chemin du projet dérivé de l'installation, plus de chemin codé en dur)
 - **Menu de commandes Telegram** : les 28 commandes apparaissent dans le menu natif (bouton bas-gauche de l'app)
 - **Indicateur « écrit… »** : les trois points s'affichent pendant tous les traitements (analyses IA, fetch des cours, ordres Playwright)
 - **Sentiment social composite** : score -100/+100 par ticker (tags StockTwits + VADER sur textes anglais + scoring IA des messages Boursorama pour les valeurs .PA) + détection des pics de volume entre deux checks
@@ -610,7 +610,7 @@ Les prix proviennent de Yahoo Finance via `yfinance` (données différées de 15
 En mode Playwright, le bot utilise l'API interne de Bourse Direct pour envoyer des ordres réels. Il demande toujours une double confirmation : `/ordre ...` affiche le récapitulatif + frais, puis `/oui` envoie l'ordre. Aucun ordre n'est envoyé sans validation explicite.
 
 **Stabilité**
-Pas de gestion de crash automatique. Pour un usage continu, configurez un superviseur de processus (`systemd`, `launchd`, `supervisor`).
+Pour un usage continu, activez `./bot.sh autostart` (service `launchd` sur macOS, `systemd` sur Linux) : démarrage au boot + relance automatique après crash. Sans ça, un crash laisse le bot arrêté jusqu'à relance manuelle.
 
 ---
 
@@ -624,21 +624,29 @@ Pas de gestion de crash automatique. Pour un usage continu, configurez un superv
 
 ## Lancer en tâche de fond
 
-Pour que le bot continue à tourner après avoir fermé votre terminal :
+Le script `bot.sh` (fourni à la racine du projet) gère tout :
 
 ```bash
-# Lancer en arrière-plan (logs dans tradingbot.log)
-nohup venv/bin/python3 main.py > tradingbot.log 2>&1 &
-
-# Vérifier qu'il tourne
-ps aux | grep main.py
-
-# Lire les logs en direct
-tail -f tradingbot.log
-
-# Arrêter le bot
-pkill -f "main.py"
+./bot.sh start        # démarre en arrière-plan — le terminal peut être fermé
+./bot.sh stop         # arrête le bot
+./bot.sh restart      # redémarre (après une modif de .env par exemple)
+./bot.sh status       # tourne ou pas ? + dernières lignes du log
+./bot.sh logs         # logs en direct (Ctrl+C pour quitter)
+./bot.sh update       # git pull + dépendances + redémarrage
 ```
+
+### Démarrage automatique au boot (recommandé)
+
+Pour que le bot survive aux redémarrages de l'ordinateur et se relance tout seul après un crash :
+
+```bash
+./bot.sh autostart      # installe un service launchd (macOS) ou systemd (Linux)
+./bot.sh unautostart    # le désactive
+```
+
+Une fois l'autostart actif, plus besoin d'y penser : l'ordinateur redémarre → le bot revient. **Utilisez toujours `./bot.sh stop`/`restart`** (et non `pkill`) : le service relancerait automatiquement un bot tué à la main, ce qui peut créer une double instance.
+
+> ⚠️ L'ordinateur doit rester **allumé et non suspendu** pour les checks de 9h/12h/15h/17h. Sur Mac : Réglages Système → Économie d'énergie → empêcher la suspension automatique. Sur un serveur Linux distant : `sudo loginctl enable-linger $USER` pour que le service survive à la déconnexion SSH.
 
 ---
 
