@@ -592,15 +592,17 @@ def cmd_annuler(args, cid):
 
 def cmd_update(args, cid):
     import subprocess
+    import os
+    project_dir = os.path.dirname(os.path.abspath(__file__))
     try:
         local_hash = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
-            cwd="/Users/yoksquare/TradingBot", text=True
+            cwd=project_dir, text=True
         ).strip()
         local_short = local_hash[:7]
         local_info = subprocess.check_output(
             ["git", "log", "-1", "--format=%ad %s", "--date=format:%d/%m/%Y"],
-            cwd="/Users/yoksquare/TradingBot", text=True
+            cwd=project_dir, text=True
         ).strip()
 
         # Vérifie le dernier commit sur GitHub
