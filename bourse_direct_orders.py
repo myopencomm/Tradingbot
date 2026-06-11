@@ -145,13 +145,20 @@ def create_order(page, ticker: str, side: str, qty: int,
         print(f"[BD Orders] Ticker inconnu : {ticker} — ajouter dans TICKER_MAP")
         return None
 
-    # validityDate ISO 8601 requise si validity != day ; sinon jour courant
+    # end_of_year n'existe que sur Euronext Paris (cf. PLAYWRIGHT_STRATEGY.md :
+    # « Fin d'année, XPAR only ») — sur les autres places BD renvoie un 400
+    # « validityDate : format incorrect ». Fallback validité jour.
+    if validity == "end_of_year" and info["mic"] != "XPAR":
+        print(f"[BD Orders] validity end_of_year indisponible sur {info['mic']} → day")
+        validity = "day"
+
+    # validityDate ISO 8601 : jour courant si validity=day (confirmé live)
     from datetime import datetime, timedelta
     validity_date = None
     if validity in ("end_of_year",):
         validity_date = f"{datetime.now().year}-12-31T00:00:00.000Z"
     elif validity == "day":
-        validity_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000Z")
+        validity_date = datetime.now().strftime("%Y-%m-%dT00:00:00.000Z")
 
     payload = {
         "login":          BD_LOGIN.upper(),          # MAJUSCULES (confirmé live)
