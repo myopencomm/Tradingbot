@@ -42,6 +42,48 @@ def send(text: str, chat_id: str = None) -> bool:
         return False
 
 
+# ─── Indicateur « écrit… » (trois points) ────────────────────────────────────
+
+class _typing:
+    """Affiche « écrit… » dans Telegram tant que le bloc with est actif.
+
+    Telegram efface l'indicateur après ~5 s ou dès qu'un message est envoyé :
+    on le renvoie donc toutes les 4 s jusqu'à la fin du traitement.
+    """
+    def __init__(self, chat_id: str = None):
+        self.chat_id = chat_id or CHAT_ID
+        self._stop = threading.Event()
+
+    def __enter__(self):
+        if not TELEGRAM_TOKEN:
+            return self
+        def loop():
+            while not self._stop.is_set():
+                try:
+                    requests.post(
+                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction",
+                        json={"chat_id": self.chat_id, "action": "typing"},
+                        timeout=5,
+                    )
+                except Exception:
+                    pass
+                self._stop.wait(4)
+        threading.Thread(target=loop, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        return False
+
+
+def _run_long(cid, fn, *args, **kwargs):
+    """Exécute fn dans un thread avec l'indicateur « écrit… » jusqu'à la fin."""
+    def worker():
+        with _typing(cid):
+            fn(*args, **kwargs)
+    threading.Thread(target=worker, daemon=True).start()
+
+
 # ─── Menu de commandes (bouton bas-gauche Telegram) ──────────────────────────
 # Liste affichée dans le petit menu de l'app Telegram. Ordre = priorité d'usage.
 # Noms sans le slash, minuscules, [a-z0-9_], descriptions courtes.
@@ -401,7 +443,8 @@ def cmd_setup(args, cid):
 
 def cmd_stats(args, cid):
     send("Calcul des performances...", cid)
-    s = stats.get_stats()
+    with _typing(cid):
+        s = stats.get_stats()
     lines = [
         "PERFORMANCES — TradingBot",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -686,8 +729,9 @@ def cmd_syncmail(args, cid):
         return
     send("Verification Gmail Bourse Direct...", cid)
     import gmail_sync
-    notifications = gmail_sync.check_and_notify(GMAIL_USER, GMAIL_APP_PASSWORD)
-    messages = gmail_sync.format_notifications(notifications)
+    with _typing(cid):
+        notifications = gmail_sync.check_and_notify(GMAIL_USER, GMAIL_APP_PASSWORD)
+        messages = gmail_sync.format_notifications(notifications)
     if messages:
         for msg in messages:
             send(msg, cid)
@@ -697,12 +741,12 @@ def cmd_syncmail(args, cid):
 
 def cmd_morning(args, cid):
     send("Briefing en cours de generation...", cid)
-    threading.Thread(target=analysis.morning_briefing, args=(lambda m: send(m, cid),), daemon=True).start()
+    _run_long(cid, analysis.morning_briefing, lambda m: send(m, cid))
 
 
 def cmd_scan(args, cid):
     send("Scan en cours...", cid)
-    threading.Thread(target=analysis.scan_opportunities, args=(lambda m: send(m, cid),), daemon=True).start()
+    _run_long(cid, analysis.scan_opportunities, lambda m: send(m, cid))
 
 
 def cmd_research(args, cid):
@@ -719,11 +763,7 @@ def cmd_research(args, cid):
     question = " ".join(args[1:]) if len(args) > 1 else ""
     msg = f"Analyse de {ticker} en cours..." if not question else f"Analyse de {ticker} — '{question}'"
     send(msg, cid)
-    threading.Thread(
-        target=analysis.research_ticker,
-        args=(lambda m: send(m, cid), ticker, question),
-        daemon=True,
-    ).start()
+    _run_long(cid, analysis.research_ticker, lambda m: send(m, cid), ticker, question)
 
 
 def cmd_import(args, cid):
@@ -1132,7 +1172,7 @@ def cmd_sync(args, cid):
         except Exception as e:
             send(f"Erreur sync : {e}", cid)
 
-    threading.Thread(target=_do_sync, daemon=True).start()
+    _run_long(cid, _do_sync)
 
 
 # ─── Ordres Playwright ──────────────────────────────────────────────────────
@@ -1266,7 +1306,7 @@ def cmd_ordre(args, cid):
         except Exception as e:
             send(f"Erreur ordre : {e}", cid)
 
-    threading.Thread(target=_do_order, daemon=True).start()
+    _run_long(cid, _do_order)
 
 
 def cmd_oui(args, cid):
@@ -1334,7 +1374,7 @@ def cmd_oui(args, cid):
         except Exception as e:
             send(f"Erreur envoi : {e}", cid)
 
-    threading.Thread(target=_do_send, daemon=True).start()
+    _run_long(cid, _do_send)
 
 
 def cmd_annuler_bd(args, cid):
@@ -1376,7 +1416,7 @@ def cmd_annuler_bd(args, cid):
         except Exception as e:
             send(f"Erreur annulation : {e}", cid)
 
-    threading.Thread(target=_do_cancel, daemon=True).start()
+    _run_long(cid, _do_cancel)
 
 
 def cmd_non(args, cid):
@@ -1489,10 +1529,7 @@ def _flush_photo_batch(cid: str):
     images = batch["images"]
     n = len(images)
     send(f"Analyse de {n} capture{'s' if n > 1 else ''} en cours...", cid)
-    threading.Thread(
-        target=lambda: send(analysis.import_screenshots(images), cid),
-        daemon=True,
-    ).start()
+    _run_long(cid, lambda: send(analysis.import_screenshots(images), cid))
 
 
 def _handle_photo(photos: list, cid: str):
