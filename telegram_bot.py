@@ -443,8 +443,7 @@ def cmd_setup(args, cid):
 
 def cmd_stats(args, cid):
     send("Calcul des performances...", cid)
-    with _typing(cid):
-        s = stats.get_stats()
+    s = stats.get_stats()
     lines = [
         "PERFORMANCES — TradingBot",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -729,9 +728,8 @@ def cmd_syncmail(args, cid):
         return
     send("Verification Gmail Bourse Direct...", cid)
     import gmail_sync
-    with _typing(cid):
-        notifications = gmail_sync.check_and_notify(GMAIL_USER, GMAIL_APP_PASSWORD)
-        messages = gmail_sync.format_notifications(notifications)
+    notifications = gmail_sync.check_and_notify(GMAIL_USER, GMAIL_APP_PASSWORD)
+    messages = gmail_sync.format_notifications(notifications)
     if messages:
         for msg in messages:
             send(msg, cid)
@@ -1497,7 +1495,10 @@ def _handle_message(message: dict):
     handler = COMMANDS.get(cmd)
     if handler:
         try:
-            handler(args, cid)
+            # « écrit… » pendant toute commande synchrone (ex: /status qui
+            # fetch les cours). Les handlers threadés gardent leur _run_long.
+            with _typing(cid):
+                handler(args, cid)
         except Exception as e:
             send(f"Erreur commande {cmd}: {e}", cid)
     else:
