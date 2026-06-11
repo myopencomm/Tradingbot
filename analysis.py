@@ -5,13 +5,13 @@ import portfolio
 import prices
 import research
 from ai_provider import get_provider, VISION_PROMPT
-from config import TRADING_CONTEXT_PATH
+from config import TRADING_CONTEXT_PATH, DEFAULT_SL_PCT, DEFAULT_TP_PCT
 
 PARIS = pytz.timezone("Europe/Paris")
 
 TRADER_SYSTEM = """Tu es un expert trader actif sur tous les marchés accessibles via Bourse Direct (France).
 Compte-titres ordinaire (CTO), horizon court à moyen terme (jours à quelques semaines).
-Règles strictes: stop-loss -10% sur PRU, objectif minimum +15%, pas de levier.
+Règles strictes: stop-loss -7% sur PRU, objectif minimum +10%, pas de levier.
 Univers : Euronext Paris/Growth, Euronext Amsterdam/Bruxelles, NYSE, NASDAQ, LSE, Xetra — tout ce qu'on peut acheter sur Bourse Direct.
 Priorité au meilleur rapport risque/rendement, peu importe le marché."""
 
@@ -250,7 +250,7 @@ CATALYSEURS : {cats}
 Signal ACHAT ou NEUTRE/ÉVITER ?
 Si NEUTRE/ÉVITER → réponds exactement : EXCLUS
 Si ACHAT → format :
-{t} — Entrée : {current_price}€  SL : X€ (-10%)  TP : X€ (+15%)
+{t} — Entrée : {current_price}€  SL : X€ (-7%)  TP : X€ (+10%)
 - Catalyseur : [événement précis + date après {today_str}]
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
@@ -533,7 +533,7 @@ CATALYSEURS IMMINENTS
 {question_block}
 Y a-t-il une opportunité d'entrée sur {ticker} ?
 Réponds directement à la question spécifique si elle est posée.
-Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-10%), TP (+15%), catalyseur principal, risque (LOW/MEDIUM/HIGH).
+Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-7%), TP (+10%), catalyseur principal, risque (LOW/MEDIUM/HIGH).
 Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=600))
@@ -706,7 +706,7 @@ RÈGLE : si tu donnerais NEUTRE ou ÉVITER dans un /research → réponds EXCLUS
 Si ACHAT : donne format exact :
 NOM SOCIETE ({t})
 - Marché : ...
-- Cours actuel : {current_price} | Entrée : X  SL : X (-10%)  TP : X (+15%)
+- Cours actuel : {current_price} | Entrée : X  SL : X (-7%)  TP : X (+10%)
 - Catalyseur : [événement précis + date après {today_str}]
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
@@ -847,8 +847,8 @@ def import_screenshots(images: list) -> str:
         try:
             pru = float(pos["pru"])
             qty = int(pos["qty"])
-            sl  = round(pru * 0.90, 2)
-            tp  = round(pru * 1.15, 2)
+            sl  = round(pru * (1 - DEFAULT_SL_PCT / 100), 2)
+            tp  = round(pru * (1 + DEFAULT_TP_PCT / 100), 2)
             portfolio.add_position(pos["name"], pos["ticker"], qty, pru, sl, tp)
             added.append(pos)
             warning = _breach_warning(pos["ticker"], pru, sl)
@@ -864,10 +864,10 @@ def import_screenshots(images: list) -> str:
         lines.append(f"Importé — {len(added)} nouvelle(s) position(s) :")
         for p in added:
             pru = p["pru"]
-            sl  = round(pru * 0.90, 2)
-            tp  = round(pru * 1.15, 2)
+            sl  = round(pru * (1 - DEFAULT_SL_PCT / 100), 2)
+            tp  = round(pru * (1 + DEFAULT_TP_PCT / 100), 2)
             lines.append(f"  + {p['name']} ({p['ticker']}) {p['qty']}t @ {pru}€ | SL {sl}€ | TP {tp}€")
-        lines.append("SL -10% et TP +15% appliques. Ajuste avec /sl ou /tp si besoin.")
+        lines.append(f"SL -{DEFAULT_SL_PCT:.0f}% et TP +{DEFAULT_TP_PCT:.0f}% appliques. Ajuste avec /sl ou /tp si besoin.")
         if breach_alerts:
             lines.append("\nAlertes sur positions importées :")
             lines.extend(breach_alerts)

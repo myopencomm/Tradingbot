@@ -5,7 +5,7 @@ Toutes les commandes sont disponibles depuis l'app iPhone/web.
 import requests
 import time
 import threading
-from config import TELEGRAM_TOKEN, CHAT_ID, GMAIL_USER, GMAIL_APP_PASSWORD
+from config import TELEGRAM_TOKEN, CHAT_ID, GMAIL_USER, GMAIL_APP_PASSWORD, DEFAULT_SL_PCT, DEFAULT_TP_PCT
 import portfolio
 import prices
 import analysis
@@ -150,7 +150,7 @@ def cmd_help(args, cid):
         "A) MODE CLASSIC — le bot ecrit les instructions,\n"
         "   TU les saisis toi-meme sur Bourse Direct :\n"
         "/setup TICKER QTE PRU\n"
-        "  → texte des 2 ordres protection (SL -10% + TP +15%)\n"
+        "  → texte des 2 ordres protection (SL -7% + TP +10%)\n"
         "    a poser apres un achat deja fait\n"
         "/buy TICKER QTE PRU\n"
         "  → texte d'1 ordre Expert (achat+SL+TP groupes)\n"
@@ -495,8 +495,8 @@ def cmd_attente(args, cid):
         ticker = args[1].upper()
         qty    = int(args[2])
         entry  = float(args[3].replace(",", "."))
-        sl     = float(args[4].replace(",", ".")) if len(args) > 4 else round(entry * 0.90, 4)
-        tp     = float(args[5].replace(",", ".")) if len(args) > 5 else round(entry * 1.15, 4)
+        sl     = float(args[4].replace(",", ".")) if len(args) > 4 else round(entry * (1 - DEFAULT_SL_PCT / 100), 4)
+        tp     = float(args[5].replace(",", ".")) if len(args) > 5 else round(entry * (1 + DEFAULT_TP_PCT / 100), 4)
     except (ValueError, IndexError):
         send("Format invalide.", cid)
         return

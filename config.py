@@ -29,8 +29,8 @@ GMAIL_USER         = os.getenv("GMAIL_USER", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 
 # Trading rules (overridable via .env)
-DEFAULT_SL_PCT = float(os.getenv("DEFAULT_SL_PCT", "10"))
-DEFAULT_TP_PCT = float(os.getenv("DEFAULT_TP_PCT", "15"))
+DEFAULT_SL_PCT = float(os.getenv("DEFAULT_SL_PCT", "7"))
+DEFAULT_TP_PCT = float(os.getenv("DEFAULT_TP_PCT", "10"))
 
 # Scheduler (Paris time, 24h format)
 CHECK_TIMES = ["09:00", "12:00", "15:00", "17:00"]
