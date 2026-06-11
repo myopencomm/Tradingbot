@@ -42,6 +42,60 @@ def send(text: str, chat_id: str = None) -> bool:
         return False
 
 
+# ─── Menu de commandes (bouton bas-gauche Telegram) ──────────────────────────
+# Liste affichée dans le petit menu de l'app Telegram. Ordre = priorité d'usage.
+# Noms sans le slash, minuscules, [a-z0-9_], descriptions courtes.
+
+BOT_COMMANDS = [
+    ("status",     "Voir mon portefeuille"),
+    ("cash",       "Cash dispo  |  /cash 1234 le definir"),
+    ("stats",      "Bilan : win rate, P&L, profit factor"),
+    ("morning",    "Briefing du jour (macro + positions + opps)"),
+    ("scan",       "Meilleures opportunites avec mon cash"),
+    ("research",   "Analyser une action — /research TICKER"),
+    ("add",        "Ajouter une position — TICKER QTE PRU SL TP"),
+    ("remove",     "Retirer une position — /remove TICKER"),
+    ("sl",         "Changer le stop-loss — /sl TICKER PRIX"),
+    ("tp",         "Changer le take-profit — /tp TICKER PRIX"),
+    ("vendu",      "Enregistrer une vente — /vendu NOM [PRIX]"),
+    ("close",      "Vente avec frais — TICKER QTE PRIX [FRAIS]"),
+    ("setup",      "Texte ordres protection SL+TP — TICKER QTE PRU"),
+    ("buy",        "Texte ordre Expert achat+SL+TP — TICKER QTE PRU"),
+    ("order",      "1 ordre simple (texte) — buy|sell TICKER QTE PRIX"),
+    ("attente",    "Ordre en attente, alerte au cours — NOM TICKER QTE PRIX"),
+    ("annuler",    "Annuler un ordre en attente (bot) — /annuler NOM"),
+    ("connect",    "Se connecter a Bourse Direct (code TOTP)"),
+    ("sync",       "Lire portefeuille + ordres reels depuis BD"),
+    ("ordre",      "Passer un ordre reel sur BD — acheter|vendre TICKER QTE ..."),
+    ("annuler_bd", "Annuler un ordre en cours sur BD — /annuler_bd TICKER"),
+    ("mode",       "Etat connexion BD"),
+    ("disconnect", "Repasser en mode Classic"),
+    ("syncmail",   "Detecter les ventes via emails BD"),
+    ("import",     "Guide import CSV"),
+    ("tuto",       "Guide pas a pas"),
+    ("update",     "Version du bot"),
+    ("help",       "Liste complete des commandes"),
+]
+
+
+def set_bot_commands() -> bool:
+    """Enregistre le menu de commandes Telegram (bouton bas-gauche)."""
+    if not TELEGRAM_TOKEN:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setMyCommands",
+            json={"commands": [{"command": c, "description": d} for c, d in BOT_COMMANDS]},
+            timeout=10,
+        )
+        ok = r.status_code == 200 and r.json().get("ok")
+        print("✅ Menu Telegram enregistre" if ok else f"⚠️ setMyCommands: {r.text[:120]}")
+        return bool(ok)
+    except Exception as e:
+        print(f"setMyCommands error: {e}")
+        return False
+
+
 # ─── Handlers de commandes ──────────────────────────────────────────────────
 
 def cmd_start(args, cid):
@@ -1556,6 +1610,7 @@ def _poll():
 
 
 def start_polling():
+    set_bot_commands()
     t = threading.Thread(target=_poll, daemon=True, name="telegram-poll")
     t.start()
     return t
