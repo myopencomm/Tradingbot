@@ -192,7 +192,7 @@ def cmd_help(args, cid):
         "A) MODE CLASSIC — le bot ecrit les instructions,\n"
         "   TU les saisis toi-meme sur Bourse Direct :\n"
         "/setup TICKER QTE PRU\n"
-        "  → texte des 2 ordres protection (SL -7% + TP +10%)\n"
+        f"  → texte des 2 ordres protection (SL -{DEFAULT_SL_PCT:.0f}% + TP +{DEFAULT_TP_PCT:.0f}%)\n"
         "    a poser apres un achat deja fait\n"
         "/buy TICKER QTE PRU\n"
         "  → texte d'1 ordre Expert (achat+SL+TP groupes)\n"

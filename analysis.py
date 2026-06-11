@@ -10,10 +10,13 @@ from config import (TRADING_CONTEXT_PATH, DEFAULT_SL_PCT, DEFAULT_TP_PCT,
 
 PARIS = pytz.timezone("Europe/Paris")
 
-TRADER_SYSTEM = """Tu es un expert trader actif sur tous les marchés accessibles via Bourse Direct (France).
+_SL = f"{DEFAULT_SL_PCT:.0f}"
+_TP = f"{DEFAULT_TP_PCT:.0f}"
+
+TRADER_SYSTEM = f"""Tu es un expert trader actif sur tous les marchés accessibles via Bourse Direct (France).
 Compte-titres ordinaire (CTO), horizon court à moyen terme (jours à quelques semaines).
-Règles strictes: stop-loss -7% sur PRU, objectif minimum +10%, pas de levier.
-TP STRETCH : +10% est un MINIMUM, pas un plafond. Si l'objectif analyste ou le
+Règles strictes: stop-loss -{_SL}% sur PRU, objectif minimum +{_TP}%, pas de levier.
+TP STRETCH : +{_TP}% est un MINIMUM, pas un plafond. Si l'objectif analyste ou le
 catalyseur justifie davantage, vise plus haut — et indique TOUJOURS le TP exact
 en prix ET en % pour que l'ordre puisse être passé tel quel.
 Univers : Euronext Paris/Growth, Euronext Amsterdam/Bruxelles, NYSE, NASDAQ, LSE, Xetra — tout ce qu'on peut acheter sur Bourse Direct.
@@ -258,7 +261,7 @@ Signal ACHAT ou NEUTRE/ÉVITER ?
 Si NEUTRE/ÉVITER → réponds exactement : EXCLUS
 Si le ticker viole une contrainte du contexte personnel → réponds exactement : EXCLUS
 Si ACHAT → format :
-{t} — Entrée : {current_price}€  SL : X€ (-7%)  TP : X€ (+X% — minimum +10%, plus si le potentiel le justifie)
+{t} — Entrée : {current_price}€  SL : X€ (-{_SL}%)  TP : X€ (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
 - Catalyseur : [événement précis + date après {today_str}]
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
@@ -541,7 +544,7 @@ CATALYSEURS IMMINENTS
 {question_block}
 Y a-t-il une opportunité d'entrée sur {ticker} ?
 Réponds directement à la question spécifique si elle est posée.
-Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-7%), TP (+10% minimum — plus haut si le potentiel le justifie, % exact obligatoire), catalyseur principal, risque (LOW/MEDIUM/HIGH).
+Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-{_SL}%), TP (+{_TP}% minimum — plus haut si le potentiel le justifie, % exact obligatoire), catalyseur principal, risque (LOW/MEDIUM/HIGH).
 Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=600))
@@ -719,7 +722,7 @@ RÈGLE : si le ticker viole une contrainte du contexte personnel → réponds EX
 Si ACHAT : donne format exact :
 NOM SOCIETE ({t})
 - Marché : ...
-- Cours actuel : {current_price} | Entrée : X  SL : X (-7%)  TP : X (+X% — minimum +10%, plus si le potentiel le justifie)
+- Cours actuel : {current_price} | Entrée : X  SL : X (-{_SL}%)  TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
 - Catalyseur : [événement précis + date après {today_str}]
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
