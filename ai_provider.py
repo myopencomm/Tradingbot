@@ -79,25 +79,33 @@ class OpenAIProvider(AIProvider):
         self.client = OpenAI(api_key=OPENAI_API_KEY)
         self.model = AI_MODEL or self.DEFAULT_MODEL
 
-    def complete(self, prompt: str, max_tokens: int = 800) -> str:
-        r = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-        )
+    def _chat(self, model: str, messages: list, max_tokens: int) -> str:
+        """Les modèles OpenAI récents (gpt-5, o-series) exigent
+        max_completion_tokens ; les anciens n'acceptent que max_tokens.
+        On tente le nouveau paramètre d'abord, fallback sur l'ancien."""
+        try:
+            r = self.client.chat.completions.create(
+                model=model, messages=messages,
+                max_completion_tokens=max_tokens,
+            )
+        except Exception as e:
+            if "max_completion_tokens" not in str(e):
+                raise
+            r = self.client.chat.completions.create(
+                model=model, messages=messages,
+                max_tokens=max_tokens,
+            )
         return r.choices[0].message.content
+
+    def complete(self, prompt: str, max_tokens: int = 800) -> str:
+        return self._chat(self.model, [{"role": "user", "content": prompt}], max_tokens)
 
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
         b64 = base64.standard_b64encode(image_bytes).decode()
-        r = self.client.chat.completions.create(
-            model="gpt-4o-mini",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ]}],
-        )
-        return r.choices[0].message.content
+        return self._chat("gpt-4o-mini", [{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ]}], 1000)
 
 
 class MistralProvider(AIProvider):
