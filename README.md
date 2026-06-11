@@ -216,6 +216,8 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 
 > **Pourquoi `venv/bin/python3` et pas juste `python3` ?** Ça garantit que vous utilisez le Python du venv avec toutes les librairies installées, même si vous n'avez pas activé l'environnement. Plus fiable, surtout pour relancer le bot depuis un script ou un terminal fraîchement ouvert.
 
+> ⚠️ **Lancé ainsi, le bot s'arrête si vous fermez la fenêtre de terminal.** Pour qu'il tourne en continu sans garder le terminal ouvert, voir [Lancer en tâche de fond](#lancer-en-tâche-de-fond) (une seule commande avec `nohup`).
+
 ---
 
 ## Fonctionnalités
@@ -229,7 +231,10 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Import CSV** | Envoyez l'export Bourse Direct — importe avec SL/TP par défaut |
 | **IA pluggable** | 5 providers : Groq, Gemini (gratuits), Anthropic, OpenAI, Mistral |
 | **Indicateurs techniques** | RSI 14j, momentum 1 mois, ratio volume — filtre avant analyse IA |
-| **Catalyseurs imminents** | Recherche résultats, contrats, OPA, rachats — signaux +15% rapides |
+| **Catalyseurs imminents** | Recherche résultats, contrats, OPA, rachats — signaux +10% et plus |
+| **Sentiment social composite** | Score -100/+100 par ticker : StockTwits, Reddit, forum Boursorama (IA), VADER + détection de pics de volume |
+| **Sentiment marché temps réel** | VIX + CNN Fear & Greed injectés dans chaque briefing |
+| **Menu de commandes Telegram** | Les 28 commandes dans le menu natif (bouton bas-gauche) |
 | **Sync Gmail Bourse Direct** | Détecte auto les emails "Finalisation de votre stratégie" et clôture les positions (IMAP, sans OAuth) |
 | **Recherche web gratuite** | DuckDuckGo + yfinance — aucune clé payante requise |
 | **Contexte personnel** | Fichier de contexte IA pour des conseils adaptés à votre situation |
@@ -295,6 +300,7 @@ TradingBot/
 |---|---|
 | `/status` | Portefeuille complet avec P&L temps réel, alertes SL/TP |
 | `/cash [montant]` | Voir ou mettre à jour le cash disponible |
+| `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor |
 
 ### Positions
 
@@ -310,7 +316,10 @@ TradingBot/
 | Commande | Description |
 |---|---|
 | `/setup TICKER QTY PRU` | Générer les instructions SL+TP à saisir après un achat |
+| `/buy TICKER QTY PRU` | Générer un ordre Expert complet (achat + SL + TP groupés) |
 | `/order buy\|sell TICKER QTY PRIX` | Générer une instruction d'ordre complète |
+| `/attente NOM TICKER QTY PRIX [SL TP]` | Ordre en attente : réserve le cash, alerte quand le cours est atteint |
+| `/annuler NOM` | Annuler un ordre en attente (côté bot) |
 
 ### Analyse IA
 
@@ -350,6 +359,7 @@ TradingBot/
 | `/ordre acheter TICKER QTE limite PRIX` | Achat à cours limité |
 | `/oui` | Confirmer et envoyer l'ordre en attente (irréversible) |
 | `/non` | Annuler l'ordre en attente |
+| `/annuler_bd TICKER` | Annuler un ordre en cours sur Bourse Direct |
 
 > **Format des tickers :** utilisez le format Yahoo Finance — `EXENS.PA`, `GNFT.PA`, `ILMN`, `BP.L`, `SAP.DE`. La conversion vers le format interne Bourse Direct est automatique.
 >
@@ -363,6 +373,7 @@ TradingBot/
 | `/import` | Guide import CSV Bourse Direct |
 | `/help` | Liste complète des commandes |
 | `/tuto` | Rappel des étapes de configuration |
+| `/update` | Afficher le commit en cours et la date de mise à jour |
 
 ---
 
@@ -547,13 +558,22 @@ pkill -f "main.py"
 PYTHONUNBUFFERED=1 venv/bin/python3 main.py > tradingbot.log 2>&1 &
 ```
 
-Vérifiez les nouveautés dans le [CHANGELOG](#changelog) ou via `/version` dans Telegram.
+Vérifiez les nouveautés dans le [CHANGELOG](#changelog) ou via `/update` dans Telegram.
 
 > **Tip :** `git log --oneline -10` affiche les 10 derniers commits pour voir ce qui a changé.
 
 ---
 
 ## Changelog
+
+### 2026-06-11
+- **Menu de commandes Telegram** : les 28 commandes apparaissent dans le menu natif (bouton bas-gauche de l'app)
+- **Indicateur « écrit… »** : les trois points s'affichent pendant tous les traitements (analyses IA, fetch des cours, ordres Playwright)
+- **Sentiment social composite** : score -100/+100 par ticker (tags StockTwits + VADER sur textes anglais + scoring IA des messages Boursorama pour les valeurs .PA) + détection des pics de volume entre deux checks
+- **Sentiment marché temps réel** : VIX et CNN Fear & Greed injectés dans le contexte macro de chaque briefing/scan
+- **Nouvelles règles par défaut** : SL -7% / TP +10% (au lieu de -10%/+15%) — le TP est un minimum, l'IA vise plus haut quand le potentiel le justifie et l'indique explicitement
+- **Fix** : les actions US n'affichent plus `nan` dans le briefing avant l'ouverture de Wall Street
+- **Fix** : `/research` sur une position détenue ne propose plus de conseils d'achat
 
 ### 2026-06-03
 - **`/ordre vendre|acheter`** : passage d'ordres réels sur Bourse Direct depuis Telegram — marché, limite, et Expert (SL+TP combiné). Flow : `/ordre ...` → recap + frais → `/oui` pour envoyer
@@ -596,8 +616,8 @@ Pas de gestion de crash automatique. Pour un usage continu, configurez un superv
 
 ## Règles de trading par défaut
 
-- **Stop-loss** : -10% sur PRU
-- **Take-profit** : +15% sur PRU
+- **Stop-loss** : -7% sur PRU
+- **Take-profit** : +10% sur PRU (minimum — l'IA peut viser plus haut si le potentiel le justifie)
 - Modifiables dans `.env` : `DEFAULT_SL_PCT` et `DEFAULT_TP_PCT`
 
 ---
