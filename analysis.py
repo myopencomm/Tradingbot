@@ -5,7 +5,8 @@ import portfolio
 import prices
 import research
 from ai_provider import get_provider, VISION_PROMPT
-from config import TRADING_CONTEXT_PATH, DEFAULT_SL_PCT, DEFAULT_TP_PCT
+from config import (TRADING_CONTEXT_PATH, DEFAULT_SL_PCT, DEFAULT_TP_PCT,
+                    POSITION_BUDGET_PCT, POSITION_BUDGET_MAX)
 
 PARIS = pytz.timezone("Europe/Paris")
 
@@ -170,6 +171,7 @@ def morning_briefing(send_fn) -> None:
             catalysts = research.market_catalysts()
             opps_mission = f"""
 2. Identifie 3 à 5 tickers CANDIDATS avec un catalyseur futur daté après le {today_str}.
+   IMPÉRATIF : chaque candidat doit respecter TOUTES les règles et contraintes du contexte personnel.
    Réponds UNIQUEMENT avec les tickers Yahoo Finance (ex: ALFRE.PA, MSFT), un par ligne.
    Ne donne AUCUN prix — juste les tickers.
 3. Risque global portefeuille : LOW / MEDIUM / HIGH"""
@@ -240,10 +242,12 @@ MISSION
                 social_b = f"\nSENTIMENT : {social}" if social and "aucune donnée" not in social else ""
                 news_b   = ("\nNEWS : " + " | ".join(n["title"] for n in yf_n[:3])) if yf_n else ""
 
+                ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
+                         f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
                 val_prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
-
+{ctx_v}
 AUJOURD'HUI : {today_str}. TICKER : {t}. COURS RÉEL : {current_price}€. CASH DISPO : {cash}€.
 {tech_b}{funds_b}{social_b}{news_b}
 
@@ -252,6 +256,7 @@ CATALYSEURS : {cats}
 
 Signal ACHAT ou NEUTRE/ÉVITER ?
 Si NEUTRE/ÉVITER → réponds exactement : EXCLUS
+Si le ticker viole une contrainte du contexte personnel → réponds exactement : EXCLUS
 Si ACHAT → format :
 {t} — Entrée : {current_price}€  SL : X€ (-7%)  TP : X€ (+X% — minimum +10%, plus si le potentiel le justifie)
 - Catalyseur : [événement précis + date après {today_str}]
@@ -607,6 +612,8 @@ TÂCHE EN 2 PARTIES :
 1. Pour chaque position en portefeuille : 1 ligne — MAINTENIR / SURVEILLER / VENDRE + raison.
 
 2. Identifie 3 à 5 tickers CANDIDATS avec un catalyseur futur daté APRÈS le {today_str}.
+   IMPÉRATIF : chaque candidat doit respecter TOUTES les règles et contraintes
+   du contexte personnel ci-dessus (secteurs exclus, critères sur le ticker, etc.).
 Réponds pour la partie 2 UNIQUEMENT avec les tickers, format Yahoo Finance, un par ligne.
 Exemple : GET.PA
           DSY.PA
@@ -689,10 +696,12 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
             news_b = ("\nACTUALITÉS\n" + "\n".join(news_lines)) if news_lines else ""
 
             social_b = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
+            ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
+                     f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
             validate_prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
-
+{ctx_v}
 AUJOURD'HUI : {today_str}
 TICKER ANALYSÉ : {t} — JE NE DÉTIENS PAS CETTE ACTION. CASH DISPONIBLE : {cash}€.
 Cours actuel : {current_price}
@@ -706,6 +715,7 @@ CATALYSEURS IMMINENTS
 
 Signal ACHAT ou NEUTRE/ÉVITER ?
 RÈGLE : si tu donnerais NEUTRE ou ÉVITER dans un /research → réponds EXCLUS en 1 mot.
+RÈGLE : si le ticker viole une contrainte du contexte personnel → réponds EXCLUS en 1 mot.
 Si ACHAT : donne format exact :
 NOM SOCIETE ({t})
 - Marché : ...
@@ -719,12 +729,16 @@ NOM SOCIETE ({t})
                 continue
             val = _validate_tickers(val)
 
-            # Feature scan→ordre : commande prête à l'emploi (quantité suggérée)
+            # Feature scan→ordre : sizing affiché + commande prête à l'emploi.
+            # Budget configurable via .env : POSITION_BUDGET_PCT / POSITION_BUDGET_MAX
             try:
-                budget = min(cash * 0.5, 800)  # sizing prudent par position
+                budget = min(cash * POSITION_BUDGET_PCT / 100, POSITION_BUDGET_MAX)
                 qty_sugg = max(1, int(budget / current_price)) if current_price else 1
+                cost = qty_sugg * current_price
                 val += (
-                    f"\n→ Passer l'ordre (mode Playwright) :\n"
+                    f"\n→ Taille suggérée : {qty_sugg} titres ≈ {cost:.0f}€ "
+                    f"({cost / cash * 100:.0f}% du cash)\n"
+                    f"→ Passer l'ordre (mode Playwright) :\n"
                     f"   /ordre acheter {t} {qty_sugg} limite {current_price}"
                 )
                 # Reprend le SL/TP conseillés par l'IA (TP stretch inclus) pour

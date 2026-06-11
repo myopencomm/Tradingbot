@@ -32,6 +32,10 @@ GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 DEFAULT_SL_PCT = float(os.getenv("DEFAULT_SL_PCT", "7"))
 DEFAULT_TP_PCT = float(os.getenv("DEFAULT_TP_PCT", "10"))
 
+# Sizing d'une nouvelle position : % du cash, plafonné en €
+POSITION_BUDGET_PCT = float(os.getenv("POSITION_BUDGET_PCT", "50"))
+POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "800"))
+
 # Scheduler (Paris time, 24h format)
 CHECK_TIMES = ["09:00", "12:00", "15:00", "17:00"]
 ANALYSIS_TIME = "09:05"

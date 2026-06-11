@@ -618,7 +618,15 @@ Pour un usage continu, activez `./bot.sh autostart` (service `launchd` sur macOS
 
 - **Stop-loss** : -7% sur PRU
 - **Take-profit** : +10% sur PRU (minimum — l'IA peut viser plus haut si le potentiel le justifie)
-- Modifiables dans `.env` : `DEFAULT_SL_PCT` et `DEFAULT_TP_PCT`
+- **Taille de position suggérée** (`/scan`) : 50% du cash, plafonné à 800€
+- Modifiables dans `.env` :
+
+```env
+DEFAULT_SL_PCT=7          # stop-loss en % sous le PRU
+DEFAULT_TP_PCT=10         # take-profit minimum en % au-dessus du PRU
+POSITION_BUDGET_PCT=50    # % du cash investi par nouvelle position
+POSITION_BUDGET_MAX=800   # plafond en € par position (à adapter à votre capital)
+```
 
 ---
 
