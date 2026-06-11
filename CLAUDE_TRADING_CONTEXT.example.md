@@ -1,46 +1,38 @@
 # CONTEXTE TRADING PERSONNEL
 
 > Copiez ce fichier vers CLAUDE_TRADING_CONTEXT.md et remplissez-le avec votre situation réelle.
-> Ce fichier est chargé à chaque analyse IA — plus il est précis, meilleurs sont les conseils.
-> Il est dans .gitignore : il ne sera jamais publié sur GitHub.
+> Ce fichier est chargé à chaque analyse IA. Il est dans .gitignore : jamais publié sur GitHub.
+
+## ⚠️ Règle d'or : n'y mettez QUE ce que le bot ne sait pas déjà
+
+Le bot injecte automatiquement dans chaque prompt IA :
+- **Vos positions, cash, SL/TP en temps réel** (depuis positions.json) — ne les recopiez PAS ici, une copie périmée contredirait les données live
+- **L'historique de vos trades** (trades_history.json, visible via /stats)
+- **Les règles chiffrées** (stop-loss, take-profit, univers de marchés — voir .env : DEFAULT_SL_PCT / DEFAULT_TP_PCT)
+
+Ce fichier sert au reste : votre objectif, vos règles personnelles, vos contraintes.
 
 ## OBJECTIF
 
 Décrivez votre situation et ce que vous cherchez à accomplir.
 
 Exemple : "Récupérer une moins-value latente de X€ sur compte CTO Bourse Direct.
-Trader uniquement avec le cash disponible. Horizon court terme (jours à semaines)."
-
-## POSITIONS ACTUELLES (hors portefeuille bot)
-
-Listez ici les positions que le bot ne surveille pas mais que l'IA doit connaître
-pour donner des conseils cohérents (ex : positions bloquées, longue durée, autres comptes).
-
-Exemple :
-- Illumina (ILMN) : 33 titres @ 317€ — position longue, on conserve
-- McPhy Energy : bloqué (liquidation judiciaire), hors trading
+Trader uniquement avec le cash disponible."
 
 ## RÈGLES PERSONNELLES
 
-Complétez ou surchargez les règles par défaut du bot.
+Ce que l'IA doit respecter et qui n'est pas dans le code.
 
 Exemple :
+- Position longue durée à CONSERVER même si le SL est franchi (ex : ILMN)
+- Positions bloquées à ignorer dans les décisions (ex : liquidation judiciaire)
 - Éviter les biotechs phase 1/2 (trop spéculatif)
-- Préférer les secteurs défense, énergie, industrie
 - Ne pas ouvrir plus de 3 positions simultanées
 - Cash minimum à conserver : 100€
+- Ne jamais considérer un trade comme exécuté sans ma confirmation explicite
 
-## CONTRAINTES
+## CONTRAINTES (optionnel)
 
 Exemple :
-- Bourse Direct uniquement (pas de courtier étranger)
 - Pas d'effet de levier
 - Pas d'actions hors Euronext / Euronext Growth sauf exception justifiée
-
-## HISTORIQUE RÉCENT (optionnel)
-
-Résumé des derniers trades pour que l'IA évite de reproposer les mêmes choses.
-
-Exemple :
-- 2CRSI : acheté 38.96€ / vendu 43.94€ = +141€ net ✅
-- NACON : vendu @ 0.208€ = -979€ (perte cristallisée) ✅
