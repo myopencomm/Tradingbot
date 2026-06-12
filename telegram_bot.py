@@ -95,7 +95,7 @@ BOT_COMMANDS = [
     ("morning",    "Briefing du jour (macro + positions + opps)"),
     ("scan",       "Meilleures opportunites avec mon cash"),
     ("research",   "Analyser une action — /research TICKER"),
-    ("add",        "Ajouter une position — TICKER QTE PRU SL TP"),
+    ("add",        "Acheter (deduit le cash) — TICKER QTE PRU SL TP"),
     ("remove",     "Retirer une position — /remove TICKER"),
     ("sl",         "Changer le stop-loss — /sl TICKER PRIX"),
     ("tp",         "Changer le take-profit — /tp TICKER PRIX"),
@@ -172,7 +172,7 @@ def cmd_help(args, cid):
         "/stats — bilan (win rate, P&L, profit factor)\n"
         "\n"
         "GERER MES POSITIONS (dans le bot)\n"
-        "/add TICKER QTE PRU SL TP — ajouter\n"
+        "/add TICKER QTE PRU SL TP — acheter (deduit le cash)\n"
         "/remove TICKER — retirer\n"
         "/sl TICKER PRIX — changer le stop-loss\n"
         "/tp TICKER PRIX — changer le take-profit\n"
@@ -369,13 +369,34 @@ def cmd_add(args, cid):
             (k for k, v in pending.items() if v.get("ticker") == ticker), None
         )
         had_pending = pending_key is not None
+        cost = round(qty * pru, 2)
         if had_pending:
+            # Cash déjà réservé à la pose de l'ordre — on ajuste juste l'écart
+            # entre le montant réservé et le coût réel d'exécution.
+            reserved = pending[pending_key].get("reserved_cash", 0)
             pending.pop(pending_key, None)
-            portfolio.save(data)
+            data["cash_available"] = round(data.get("cash_available", 0) + reserved - cost, 2)
+        else:
+            # Achat direct : on déduit le coût du cash disponible
+            data["cash_available"] = round(data.get("cash_available", 0) - cost, 2)
+        portfolio.save(data)
 
         portfolio.add_position(name, ticker, qty, pru, sl, tp)
+        new_cash = portfolio.get_cash()
         note = " (ordre en attente cloture)" if had_pending else ""
-        send(f"Position ajoutee: {name}{note}\n{qty}t @ PRU {pru}€ | SL {sl}€ | TP {tp}€", cid)
+        send(
+            f"Position ajoutee: {name}{note}\n"
+            f"{qty}t @ PRU {pru}€ | SL {sl}€ | TP {tp}€\n"
+            f"💰 Cash : -{cost}€ → {new_cash}€",
+            cid,
+        )
+        if new_cash < 0:
+            send(
+                f"⚠️ Cash negatif ({new_cash}€) — si cette position etait deja "
+                f"comptee dans ton cash (import d'une position existante), "
+                f"corrige avec /cash MONTANT_REEL.",
+                cid,
+            )
     except (ValueError, IndexError):
         send("Format invalide.\nEx: /add GNFT.PA 100 8.51 7.66 9.79", cid)
 
