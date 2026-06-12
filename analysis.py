@@ -507,6 +507,21 @@ def research_ticker(send_fn, ticker: str, question: str = "") -> None:
         # Utilise le ticker stocké (exact) pour toutes les requêtes de données
         real_ticker = held["ticker"] if held else ticker
 
+        # Fail-safe : ticker inconnu et non détenu → suggestions Yahoo au lieu
+        # d'une analyse complète sur un symbole qui ne cote pas
+        if not held and not prices.get_quote(real_ticker).get("price"):
+            sugg = prices.search_ticker(ticker, max_results=3)
+            if sugg:
+                lines = [f"❓ {ticker} ne cote pas sur Yahoo Finance. Tu cherchais peut-être :"]
+                for s in sugg:
+                    lines.append(f"  • {s['symbol']} — {s['name']} ({s['exchange']})")
+                lines.append(f"\nRelance : /research {sugg[0]['symbol']}")
+                send_fn("\n".join(lines))
+                return
+            send_fn(f"❓ {ticker} introuvable sur Yahoo Finance — vérifie le format "
+                    f"(.PA pour Paris, .DE pour Xetra, rien pour NYSE/NASDAQ).")
+            return
+
         web       = research.research_stock(real_ticker)
         catalysts = research.search_catalysts(real_ticker)
         tech      = prices.get_technicals(real_ticker)

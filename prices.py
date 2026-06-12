@@ -2,6 +2,7 @@ import math
 import time
 from datetime import datetime, timedelta
 import pytz
+import requests
 import yfinance as yf
 
 _PARIS = pytz.timezone("Europe/Paris")
@@ -151,6 +152,38 @@ def get_intraday_range(ticker: str, hours: int = 4) -> dict:
     except Exception as e:
         print(f"⚠️ Intraday range error {ticker}: {e}")
         return {}
+
+
+def search_ticker(query: str, max_results: int = 5) -> list[dict]:
+    """Recherche Yahoo Finance par nom de société ou ticker approximatif.
+
+    Permet le fail-safe /add LVMH → suggestion MC.PA.
+    Retourne [{"symbol", "name", "exchange"}] trié par pertinence Yahoo.
+    """
+    try:
+        r = requests.get(
+            "https://query2.finance.yahoo.com/v1/finance/search",
+            params={"q": query, "quotesCount": max_results * 2, "newsCount": 0},
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"},
+            timeout=8,
+        )
+        if r.status_code != 200:
+            return []
+        out = []
+        for q in r.json().get("quotes", []):
+            if q.get("quoteType") != "EQUITY":
+                continue
+            out.append({
+                "symbol":   q.get("symbol", ""),
+                "name":     q.get("shortname") or q.get("longname", ""),
+                "exchange": q.get("exchDisp") or q.get("exchange", ""),
+            })
+            if len(out) >= max_results:
+                break
+        return out
+    except Exception as e:
+        print(f"⚠️ Ticker search error {query}: {e}")
+        return []
 
 
 def get_price_context(ticker: str) -> dict:

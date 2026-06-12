@@ -330,6 +330,36 @@ def cmd_add(args, cid):
         tp     = float(args[4].replace(",", "."))
         name   = ticker.split(".")[0]
 
+        # Fail-safe newbie : si le ticker ne cote pas sur Yahoo, c'est
+        # probablement un nom de societe (LVMH, GOOGLE...). On cherche le
+        # vrai ticker et on prepare la commande corrigee — sans rien ajouter.
+        q = prices.get_quote(ticker)
+        if not q.get("price"):
+            if "." not in ticker:
+                sugg = prices.search_ticker(args[0], max_results=3)
+                if sugg:
+                    lines = [f"❓ {ticker} n'est pas un ticker Yahoo valide."]
+                    lines.append("Tu cherchais peut-etre :")
+                    for s in sugg:
+                        lines.append(f"  • {s['symbol']} — {s['name']} ({s['exchange']})")
+                    lines.append("")
+                    lines.append("Commande prete avec le 1er resultat :")
+                    lines.append(f"/add {sugg[0]['symbol']} {qty} {pru} {sl} {tp}")
+                    lines.append("")
+                    lines.append("Position NON ajoutee — verifie et relance.")
+                    send("\n".join(lines), cid)
+                    return
+                send(
+                    f"❓ {ticker} introuvable sur Yahoo Finance et aucune "
+                    f"suggestion.\nFormat : .PA pour Euronext Paris (ex: MC.PA), "
+                    f".DE pour Xetra, rien pour NYSE/NASDAQ.\nPosition NON ajoutee.",
+                    cid,
+                )
+                return
+            # Ticker avec suffixe de place : probablement une vraie valeur
+            # suspendue (ex: import GVN) — on ajoute avec avertissement.
+            send(f"⚠️ {ticker} ne renvoie aucune cotation (suspendu ?) — ajout quand meme.", cid)
+
         # Si un ordre en attente existait pour cette valeur, l'annuler sans rendre le cash
         # (le cash était déjà réservé = déjà déduit du disponible)
         # Recherche par nom exact OU par ticker (évite les écarts de nommage)
@@ -346,18 +376,6 @@ def cmd_add(args, cid):
         portfolio.add_position(name, ticker, qty, pru, sl, tp)
         note = " (ordre en attente cloture)" if had_pending else ""
         send(f"Position ajoutee: {name}{note}\n{qty}t @ PRU {pru}€ | SL {sl}€ | TP {tp}€", cid)
-
-        # Verifie que le ticker cote sur Yahoo — sinon /status affichera
-        # "introuvable" (ex: LVMH au lieu de MC.PA)
-        q = prices.get_quote(ticker)
-        if not q.get("price"):
-            send(
-                f"⚠️ {ticker} ne renvoie aucune cotation Yahoo Finance.\n"
-                f"Verifie le format : .PA pour Euronext Paris (LVMH → MC.PA),\n"
-                f".DE pour Xetra, rien pour NYSE/NASDAQ.\n"
-                f"Corriger : /remove {name} puis /add avec le bon ticker.",
-                cid,
-            )
     except (ValueError, IndexError):
         send("Format invalide.\nEx: /add GNFT.PA 100 8.51 7.66 9.79", cid)
 
