@@ -122,10 +122,18 @@ def _portfolio_snapshot() -> str:
                 f"SL {sym}{cfg['target_low']} | TP {sym}{cfg['target_high']}"
             )
         elif quote.get("status") in ("suspended", "error"):
-            lines.append(
-                f"  {name} ({cfg['ticker']}): ⛔ COURS SUSPENDU — non vendable (liquidation judiciaire ?) | "
-                f"PRU {cfg['entry_price']}€ | {cfg['qty']}t"
-            )
+            # Sans suffixe de place (.PA, .DE…), c'est plus probablement un
+            # ticker invalide qu'une vraie suspension (ex: LVMH au lieu de MC.PA)
+            if "." not in cfg["ticker"]:
+                lines.append(
+                    f"  {name} ({cfg['ticker']}): ❓ TICKER INTROUVABLE sur Yahoo — "
+                    f"format à vérifier (ex: LVMH → MC.PA) | PRU {cfg['entry_price']}€ | {cfg['qty']}t"
+                )
+            else:
+                lines.append(
+                    f"  {name} ({cfg['ticker']}): ⛔ COURS SUSPENDU — non vendable (liquidation judiciaire ?) | "
+                    f"PRU {cfg['entry_price']}€ | {cfg['qty']}t"
+                )
         else:
             lines.append(f"  {name}: prix indisponible | PRU {cfg['entry_price']}€ | {cfg['qty']}t")
 

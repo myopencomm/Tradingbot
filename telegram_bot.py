@@ -262,11 +262,19 @@ def cmd_status(args, cid):
                 f"  SL: {sym}{cfg['target_low']}  TP: {sym}{cfg['target_high']}"
             )
         elif q.get("status") in ("suspended", "error"):
-            lines.append(
-                f"{name} ({cfg['ticker']})\n"
-                f"  ⛔ COURS SUSPENDU — non vendable (liquidation judiciaire ?)\n"
-                f"  PRU: {cfg['entry_price']}€ | {cfg['qty']} titres"
-            )
+            if "." not in cfg["ticker"]:
+                lines.append(
+                    f"{name} ({cfg['ticker']})\n"
+                    f"  ❓ TICKER INTROUVABLE sur Yahoo — format a verifier\n"
+                    f"  (ex: LVMH → MC.PA) — corriger : /remove {name} puis /add\n"
+                    f"  PRU: {cfg['entry_price']}€ | {cfg['qty']} titres"
+                )
+            else:
+                lines.append(
+                    f"{name} ({cfg['ticker']})\n"
+                    f"  ⛔ COURS SUSPENDU — non vendable (liquidation judiciaire ?)\n"
+                    f"  PRU: {cfg['entry_price']}€ | {cfg['qty']} titres"
+                )
         else:
             lines.append(f"{name}: prix indisponible | PRU {cfg['entry_price']}€")
 
@@ -338,6 +346,18 @@ def cmd_add(args, cid):
         portfolio.add_position(name, ticker, qty, pru, sl, tp)
         note = " (ordre en attente cloture)" if had_pending else ""
         send(f"Position ajoutee: {name}{note}\n{qty}t @ PRU {pru}€ | SL {sl}€ | TP {tp}€", cid)
+
+        # Verifie que le ticker cote sur Yahoo — sinon /status affichera
+        # "introuvable" (ex: LVMH au lieu de MC.PA)
+        q = prices.get_quote(ticker)
+        if not q.get("price"):
+            send(
+                f"⚠️ {ticker} ne renvoie aucune cotation Yahoo Finance.\n"
+                f"Verifie le format : .PA pour Euronext Paris (LVMH → MC.PA),\n"
+                f".DE pour Xetra, rien pour NYSE/NASDAQ.\n"
+                f"Corriger : /remove {name} puis /add avec le bon ticker.",
+                cid,
+            )
     except (ValueError, IndexError):
         send("Format invalide.\nEx: /add GNFT.PA 100 8.51 7.66 9.79", cid)
 
