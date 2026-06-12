@@ -459,6 +459,35 @@ def research_ticker(send_fn, ticker: str, question: str = "") -> None:
                 held_name = pos_name
                 break
 
+        # Fallback flou : nom de société complet vs mnémonique abrégé
+        # (ex: /research EXOSENS → position EXENS, /research ILLUMINA → ILMN)
+        if not held and positions:
+            import difflib
+
+            def _subseq(short: str, long_: str) -> bool:
+                """Les lettres de short apparaissent dans l'ordre dans long_."""
+                it = iter(long_)
+                return all(ch in it for ch in short)
+
+            scores = {}
+            for pos_name, cfg in positions.items():
+                stored_base = cfg["ticker"].upper().split(".")[0]
+                score = max(
+                    difflib.SequenceMatcher(None, query_base, pos_name.upper()).ratio(),
+                    difflib.SequenceMatcher(None, query_base, stored_base).ratio(),
+                )
+                # Mnémonique (≥4 lettres) contenu en ordre dans le nom tapé
+                if (len(stored_base) >= 4 and len(query_base) > len(stored_base)
+                        and _subseq(stored_base, query_base)):
+                    score = max(score, 0.9)
+                scores[pos_name] = score
+            best = max(scores, key=scores.get)
+            if scores[best] >= 0.75:
+                held      = positions[best]
+                held_name = best
+                send_fn(f"ℹ️ {ticker} interprété comme ta position {best} "
+                        f"({positions[best]['ticker']})")
+
         # Utilise le ticker stocké (exact) pour toutes les requêtes de données
         real_ticker = held["ticker"] if held else ticker
 
