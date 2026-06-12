@@ -34,9 +34,15 @@ RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
   baisse (les analystes abaissent progressivement). Ne JAMAIS utiliser un
   objectif analyste comme TP ni comme preuve d'upside court terme — mention
   indicative uniquement.
-- TP : doit être atteignable dans l'horizon du catalyseur (jours à semaines).
+- TP : doit être atteignable dans l'horizon du trade (jours à semaines).
   Plafond +{2 * DEFAULT_TP_PCT:.0f}% sauf événement binaire daté (OPA en cours,
   décision FDA). Une mégacap ne fait pas +50% sur des résultats trimestriels.
+- TRADE MOMENTUM : l'absence de catalyseur daté n'est PAS un motif d'exclusion.
+  Si tendance haussière confirmée — perf 3 mois positive ET momentum 1 mois
+  positif ET RSI entre 40 et 70 — c'est une thèse ACHAT VALIDE de plein droit :
+  TP +{DEFAULT_TP_PCT:.0f}% à +{1.5 * DEFAULT_TP_PCT:.0f}%, risque MEDIUM minimum,
+  précise le niveau technique qui invalide la thèse (support/SL).
+  Jamais sur un couteau qui tombe.
 - SENTIMENT SOCIAL : signal d'appoint — jamais un argument principal d'achat.
 - En cas de doute → EXCLUS. Mieux vaut zéro opportunité qu'une mauvaise.
 """
@@ -192,7 +198,9 @@ def morning_briefing(send_fn) -> None:
         if cash >= 1000:
             catalysts = research.market_catalysts()
             opps_mission = f"""
-2. Identifie 3 à 5 tickers CANDIDATS avec un catalyseur futur daté après le {today_str}.
+2. Identifie 3 à 6 tickers CANDIDATS de deux types :
+   A) CATALYSEUR : événement futur daté après le {today_str}.
+   B) MOMENTUM : tendance haussière établie rendant +10% atteignable sans événement.
    IMPÉRATIF : chaque candidat doit respecter TOUTES les règles et contraintes du contexte personnel.
    Réponds UNIQUEMENT avec les tickers Yahoo Finance (ex: ALFRE.PA, MSFT), un par ligne.
    Ne donne AUCUN prix — juste les tickers.
@@ -289,7 +297,7 @@ Si NEUTRE/ÉVITER → réponds exactement : EXCLUS
 Si le ticker viole une contrainte du contexte personnel → réponds exactement : EXCLUS
 Si ACHAT → format :
 {t} — Entrée : {current_price}€  SL : X€ (-{_SL}%)  TP : X€ (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
-- Catalyseur : [événement précis + date après {today_str}]
+- Thèse : [CATALYSEUR : événement + date après {today_str}] OU [MOMENTUM : tendance + niveau qui invalide]
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
                 val = _strip_markdown(ai.complete(val_prompt, max_tokens=200))
@@ -679,7 +687,10 @@ TÂCHE EN 2 PARTIES :
 
 1. Pour chaque position en portefeuille : 1 ligne — MAINTENIR / SURVEILLER / VENDRE + raison.
 
-2. Identifie 3 à 5 tickers CANDIDATS avec un catalyseur futur daté APRÈS le {today_str}.
+2. Identifie 3 à 6 tickers CANDIDATS de deux types :
+   A) CATALYSEUR : événement futur daté APRÈS le {today_str} (résultats, OPA, FDA, contrat).
+   B) MOMENTUM : tendance haussière établie (hausse sur 3 mois, volumes sains)
+      rendant +10% atteignable SANS événement particulier.
    IMPÉRATIF : chaque candidat doit respecter TOUTES les règles et contraintes
    du contexte personnel ci-dessus (secteurs exclus, critères sur le ticker, etc.).
 Réponds pour la partie 2 UNIQUEMENT avec les tickers, format Yahoo Finance, un par ligne.
@@ -800,7 +811,8 @@ Si ACHAT : donne format exact :
 NOM SOCIETE ({t})
 - Marché : ...
 - Cours actuel : {current_price} | Entrée : X  SL : X (-{_SL}%)  TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
-- Catalyseur : [événement précis + date après {today_str}]
+- Thèse : [CATALYSEUR : événement précis + date après {today_str}]
+  OU [MOMENTUM : tendance + niveau technique qui invalide la thèse — cf. règles]
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
 
