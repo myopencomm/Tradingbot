@@ -3,6 +3,7 @@ import pytz
 import portfolio
 import prices
 import orders
+from config import TP_ALERTS
 
 PARIS = pytz.timezone("Europe/Paris")
 
@@ -87,10 +88,17 @@ def check_positions(send_fn) -> None:
         high4h = rng.get("high", price)
         low4h  = rng.get("low",  price)
 
+        # Réarme l'alerte TP quand le cours est repassé sous le seuil
+        if cfg.get("tp_breach_notified") and high4h < cfg["target_high"]:
+            portfolio.mark_tp_breach(name, False)
+
         if high4h >= cfg["target_high"]:
-            alerts.append({"type": "TP", "name": name, "cfg": cfg,
-                           "price": price, "trigger": high4h,
-                           "change": change_pct, "pnl": pnl, "sym": sym})
+            # Une seule notif par franchissement (anti-spam, comme le SL) ;
+            # le flag se réarme quand le cours repasse sous le TP.
+            if TP_ALERTS and not cfg.get("tp_breach_notified", False):
+                alerts.append({"type": "TP", "name": name, "cfg": cfg,
+                               "price": price, "trigger": high4h,
+                               "change": change_pct, "pnl": pnl, "sym": sym})
         elif low4h <= cfg["target_low"]:
             if not cfg.get("sl_breach_notified", False):
                 alerts.append({"type": "SL_BREACH", "name": name, "cfg": cfg,
@@ -118,8 +126,12 @@ def check_positions(send_fn) -> None:
                 f"Cours actuel: {sym}{a['price']} ({a['change']:+.2f}%)\n"
                 f"P&L: {sym}{a['pnl']:+.0f}\n\n"
                 + orders.take_profit(cfg["ticker"], cfg["qty"], cfg["target_high"])
-                + "\n\n💡 Vente conseillée. Confirme sur Bourse Direct."
+                + f"\n\n💡 Niveau atteint — vendre, ou relever le TP si la thèse"
+                  f"\nreste haussière : /research {cfg['ticker']} pour trancher."
+                  f"\n(Alerte unique. /tp {cfg['ticker']} PRIX pour relever |"
+                  f"\nTP_ALERTS=off dans .env pour désactiver ces alertes)"
             )
+            portfolio.mark_tp_breach(a["name"])
         elif a["type"] == "SL_BREACH":
             msg = (
                 f"🚨 STOP-LOSS DÉPASSÉ — {a['name']}\n\n"

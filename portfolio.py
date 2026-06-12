@@ -122,6 +122,14 @@ def mark_sl_breach(name: str):
         save(data)
 
 
+def mark_tp_breach(name: str, notified: bool = True):
+    """Marque/réinitialise l'alerte TP atteint — une seule notif par franchissement."""
+    data = load()
+    if name.upper() in data.get("positions", {}):
+        data["positions"][name.upper()]["tp_breach_notified"] = notified
+        save(data)
+
+
 def update_tp(name: str, price: float):
     data = load()
     if name.upper() in data.get("positions", {}):

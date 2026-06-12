@@ -36,6 +36,10 @@ DEFAULT_TP_PCT = float(os.getenv("DEFAULT_TP_PCT", "10"))
 POSITION_BUDGET_PCT = float(os.getenv("POSITION_BUDGET_PCT", "50"))
 POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "800"))
 
+# Alertes TP automatiques : "on" (défaut) ou "off" pour les stratégies
+# qui laissent courir les gagnants sur avis IA
+TP_ALERTS = os.getenv("TP_ALERTS", "on").strip().lower() not in ("off", "false", "0", "no")
+
 # Scheduler (Paris time, 24h format)
 CHECK_TIMES = ["09:00", "12:00", "15:00", "17:00"]
 ANALYSIS_TIME = "09:05"

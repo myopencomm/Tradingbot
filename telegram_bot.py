@@ -255,11 +255,15 @@ def cmd_status(args, cid):
             sl_tag = " ⚠️ SL DÉPASSÉ" if price < cfg["target_low"] else ""
             tp_tag = " ⚠️ TP DÉPASSÉ" if price > cfg["entry_price"] * 1.25 else ""
             sym    = prices.currency_symbol(q.get("currency", "EUR"))
+            cur_tag = ""
+            if q.get("currency", "EUR") != "EUR" and abs(chg) > 80:
+                cur_tag = (f"\n  ❗ Perf aberrante — PRU dans la mauvaise devise ?"
+                           f"\n  (/remove {name} puis /add avec PRU/SL/TP en {q['currency']})")
             lines.append(
                 f"{name} ({cfg['ticker']})\n"
                 f"  Prix: {sym}{price} ({arrow}{chg:.2f}%) | P&L: {sym}{pnl:+.0f}{sl_tag}{tp_tag}\n"
                 f"  PRU: {sym}{cfg['entry_price']} | {cfg['qty']} titres\n"
-                f"  SL: {sym}{cfg['target_low']}  TP: {sym}{cfg['target_high']}"
+                f"  SL: {sym}{cfg['target_low']}  TP: {sym}{cfg['target_high']}{cur_tag}"
             )
         elif q.get("status") in ("suspended", "error"):
             if "." not in cfg["ticker"]:
@@ -390,6 +394,19 @@ def cmd_add(args, cid):
             f"💰 Cash : -{cost}€ → {new_cash}€",
             cid,
         )
+
+        # Garde-fou devise : un titre cote en USD avec un PRU saisi en EUR
+        # fausse toutes les perfs et déclenche de fausses alertes TP
+        cur = q.get("currency", "EUR")
+        if cur != "EUR" and q.get("price"):
+            csym = prices.currency_symbol(cur)
+            warn = (f"⚠️ {ticker} cote en {cur} — PRU, SL et TP doivent etre "
+                    f"saisis en {cur} (cours actuel : {csym}{q['price']}).")
+            if abs(pru / q["price"] - 1) > 0.5:
+                warn += (f"\n❗ Ton PRU ({pru}) est tres eloigne du cours "
+                         f"({csym}{q['price']}) — PRU saisi en EUR ?\n"
+                         f"Corriger : /remove {name} puis /add en {cur}.")
+            send(warn, cid)
         if new_cash < 0:
             send(
                 f"⚠️ Cash negatif ({new_cash}€) — si cette position etait deja "

@@ -116,10 +116,12 @@ def _portfolio_snapshot() -> str:
             chg  = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
             pnl  = (price - cfg["entry_price"]) * cfg["qty"]
             sym  = prices.currency_symbol(quote.get("currency", "EUR"))
+            cur_tag = (" | ⚠️ perf aberrante, PRU probablement dans la mauvaise devise — ignorer ce P&L"
+                       if quote.get("currency", "EUR") != "EUR" and abs(chg) > 80 else "")
             lines.append(
                 f"  {name} ({cfg['ticker']}): {sym}{price} ({chg:+.2f}%) | "
                 f"PRU {sym}{cfg['entry_price']} | {cfg['qty']}t | P&L {sym}{pnl:+.0f} | "
-                f"SL {sym}{cfg['target_low']} | TP {sym}{cfg['target_high']}"
+                f"SL {sym}{cfg['target_low']} | TP {sym}{cfg['target_high']}{cur_tag}"
             )
         elif quote.get("status") in ("suspended", "error"):
             # Sans suffixe de place (.PA, .DE…), c'est plus probablement un
