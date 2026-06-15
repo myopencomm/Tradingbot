@@ -11,6 +11,7 @@ positions.json
 trades_history.json
 CLAUDE_TRADING_CONTEXT.md
 CLAUDE.md
+macro_analysis.md
 
 # Python
 __pycache__/

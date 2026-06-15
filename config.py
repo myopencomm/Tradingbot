@@ -22,6 +22,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Paths
 POSITIONS_PATH = BASE_DIR / "positions.json"
 TRADING_CONTEXT_PATH = BASE_DIR / "CLAUDE_TRADING_CONTEXT.md"
+MACRO_ANALYSIS_PATH  = BASE_DIR / "macro_analysis.md"
 HISTORY_PATH = BASE_DIR / "trades_history.json"
 
 # Gmail IMAP — sync automatique ordres Bourse Direct (optionnel)

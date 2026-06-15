@@ -5,7 +5,8 @@ import portfolio
 import prices
 import research
 from ai_provider import get_provider, VISION_PROMPT
-from config import (TRADING_CONTEXT_PATH, DEFAULT_SL_PCT, DEFAULT_TP_PCT,
+from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
+                    DEFAULT_SL_PCT, DEFAULT_TP_PCT,
                     POSITION_BUDGET_PCT, POSITION_BUDGET_MAX)
 
 PARIS = pytz.timezone("Europe/Paris")
@@ -76,31 +77,6 @@ RÈGLES DE FORMAT STRICTES — message Telegram mobile :
 - Maximum 25 lignes au total — va à l'essentiel
 """
 
-# Distillé de l'analyse macro sectorielle 2026-06-15 (rapport Maxence)
-SECTOR_INTELLIGENCE = """
-MACRO SECTORIELLE 2026 — VENTS PORTEURS STRUCTURELS
-À qualification technique égale, favorise les candidats dans ces secteurs.
-
-TRÈS FORT d'ici fin 2026 :
-- IA & infrastructure de calcul (GPU/ASIC, HBM, data centers, agents IA, inference)
-- Electricité & réseaux (transformateurs, câbles HT, stockage batterie, nucléaire, refroidissement DC)
-- Défense & drones (munitions, contre-drones, guerre électronique, cyber militaire, satellites)
-- Semi-conducteurs (mémoire HBM, packaging avancé CoWoS, équipements lithographie)
-
-FORT d'ici fin 2026 :
-- Cybersécurité (IAM/identité, XDR/SIEM, zero trust, sécurité agents IA, OT/ICS industriel)
-- Santé productive (GLP-1/métabolisme, robotique chirurgicale, diagnostic IA, medtech efficiente)
-- Minerais critiques (cuivre transversal +++, uranium, terres rares — forte cyclicité, favorise low-cost)
-
-LOGIQUE "GOULET D'ÉTRANGLEMENT" : le vrai gagnant n'est pas toujours le secteur vedette.
-Si l'IA explose → électricité, transformateurs, HBM, refroidissement, optique sont porteurs.
-Si la défense explose → munitions, composants électroniques, capteurs, drones bon marché.
-→ Cherche l'acteur qui résout LA contrainte rare, pas le plus médiatisé.
-
-CRITÈRE ROBUSTESSE : l'acheteur est-il forcé d'acheter ? (sécurité nationale, conformité
-réglementaire, contrainte physique, productivité mesurable) → demande structurelle = risque réduit.
-"""
-
 import re
 
 def _strip_markdown(text: str) -> str:
@@ -119,6 +95,22 @@ def _trading_context() -> str:
     try:
         if TRADING_CONTEXT_PATH.exists():
             return TRADING_CONTEXT_PATH.read_text(encoding="utf-8")
+    except Exception:
+        pass
+    return ""
+
+
+def _macro_context() -> str:
+    """Charge l'analyse macro sectorielle si macro_analysis.md existe (document daté, mis à jour par l'utilisateur)."""
+    try:
+        if MACRO_ANALYSIS_PATH.exists():
+            content = MACRO_ANALYSIS_PATH.read_text(encoding="utf-8")
+            mtime = datetime.fromtimestamp(MACRO_ANALYSIS_PATH.stat().st_mtime).strftime("%d/%m/%Y")
+            return (
+                f"\n--- ANALYSE MACRO SECTORIELLE (rédigée/mise à jour le {mtime}) ---\n"
+                f"{content}\n"
+                f"--- FIN ANALYSE MACRO (point dans le temps — peut être obsolète) ---\n"
+            )
     except Exception:
         pass
     return ""
@@ -244,9 +236,10 @@ def morning_briefing(send_fn) -> None:
             catalysts = ""
             opps_mission = f"\n2. Risque global : LOW / MEDIUM / HIGH\n(Cash {cash}€ insuffisant pour nouvelles positions)"
 
+        macro_ctx = _macro_context() if cash >= 1000 else ""
         prompt1 = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
-{SECTOR_INTELLIGENCE if cash >= 1000 else ""}
+{macro_ctx}
 AUJOURD'HUI : {today_str}
 RÈGLE CATALYSEURS : événements futurs uniquement, datés après le {today_str}.
 {ctx_block}
@@ -718,10 +711,11 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
         news_block = ("\nNEWS RÉCENTES POSITIONS\n" + "\n".join(positions_news)) if positions_news else ""
 
         # ── Passe 1 : positions + candidats (tickers uniquement) ─────────────
+        macro_ctx = _macro_context()
         pass1_prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
-{SECTOR_INTELLIGENCE}
+{macro_ctx}
 AUJOURD'HUI : {today_str}
 {ctx_block}
 {snapshot}
