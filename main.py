@@ -13,6 +13,41 @@ def _market_day() -> bool:
     return datetime.now().weekday() < 5  # 0=lundi … 4=vendredi
 
 
+def _weekly_version_check():
+    """Vérifie silencieusement si une mise à jour est dispo sur GitHub. Envoie une notif si en retard."""
+    import subprocess
+    from config import BASE_DIR
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", "--quiet"],
+            cwd=str(BASE_DIR), capture_output=True, timeout=20
+        )
+        local = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(BASE_DIR), capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "rev-parse", "origin/main"],
+            cwd=str(BASE_DIR), capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        if not local or not remote or local == remote:
+            return
+        behind = subprocess.run(
+            ["git", "rev-list", "--count", f"{local}..{remote}"],
+            cwd=str(BASE_DIR), capture_output=True, text=True, timeout=5
+        ).stdout.strip()
+        nb = behind if behind.isdigit() else "?"
+        telegram_bot.send(
+            f"🔄 MISE À JOUR DISPONIBLE\n\n"
+            f"{nb} commit(s) de retard sur la version officielle.\n\n"
+            f"Pour mettre à jour :\n"
+            f"./bot.sh update\n\n"
+            f"(Vérification automatique chaque lundi)"
+        )
+    except Exception as e:
+        print(f"[version check] erreur silencieuse: {e}")
+
+
 def _auto_gmail_check():
     if not _market_day() or not GMAIL_USER or not GMAIL_APP_PASSWORD:
         return
@@ -40,7 +75,8 @@ def run_scheduler():
         lambda: analysis.monthly_breach_review(telegram_bot.send)
         if _market_day() and datetime.now().day == 1 else None
     )
-    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 (heure Paris)")
+    schedule.every().monday.at("09:20").do(_weekly_version_check)
+    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 | Version: lundi 09:20 (heure Paris)")
     while True:
         schedule.run_pending()
         time.sleep(30)

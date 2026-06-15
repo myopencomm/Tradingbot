@@ -76,6 +76,31 @@ RÈGLES DE FORMAT STRICTES — message Telegram mobile :
 - Maximum 25 lignes au total — va à l'essentiel
 """
 
+# Distillé de l'analyse macro sectorielle 2026-06-15 (rapport Maxence)
+SECTOR_INTELLIGENCE = """
+MACRO SECTORIELLE 2026 — VENTS PORTEURS STRUCTURELS
+À qualification technique égale, favorise les candidats dans ces secteurs.
+
+TRÈS FORT d'ici fin 2026 :
+- IA & infrastructure de calcul (GPU/ASIC, HBM, data centers, agents IA, inference)
+- Electricité & réseaux (transformateurs, câbles HT, stockage batterie, nucléaire, refroidissement DC)
+- Défense & drones (munitions, contre-drones, guerre électronique, cyber militaire, satellites)
+- Semi-conducteurs (mémoire HBM, packaging avancé CoWoS, équipements lithographie)
+
+FORT d'ici fin 2026 :
+- Cybersécurité (IAM/identité, XDR/SIEM, zero trust, sécurité agents IA, OT/ICS industriel)
+- Santé productive (GLP-1/métabolisme, robotique chirurgicale, diagnostic IA, medtech efficiente)
+- Minerais critiques (cuivre transversal +++, uranium, terres rares — forte cyclicité, favorise low-cost)
+
+LOGIQUE "GOULET D'ÉTRANGLEMENT" : le vrai gagnant n'est pas toujours le secteur vedette.
+Si l'IA explose → électricité, transformateurs, HBM, refroidissement, optique sont porteurs.
+Si la défense explose → munitions, composants électroniques, capteurs, drones bon marché.
+→ Cherche l'acteur qui résout LA contrainte rare, pas le plus médiatisé.
+
+CRITÈRE ROBUSTESSE : l'acheteur est-il forcé d'acheter ? (sécurité nationale, conformité
+réglementaire, contrainte physique, productivité mesurable) → demande structurelle = risque réduit.
+"""
+
 import re
 
 def _strip_markdown(text: str) -> str:
@@ -221,7 +246,7 @@ def morning_briefing(send_fn) -> None:
 
         prompt1 = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
-
+{SECTOR_INTELLIGENCE if cash >= 1000 else ""}
 AUJOURD'HUI : {today_str}
 RÈGLE CATALYSEURS : événements futurs uniquement, datés après le {today_str}.
 {ctx_block}
@@ -696,7 +721,7 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
         pass1_prompt = f"""{TRADER_SYSTEM}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
-
+{SECTOR_INTELLIGENCE}
 AUJOURD'HUI : {today_str}
 {ctx_block}
 {snapshot}
