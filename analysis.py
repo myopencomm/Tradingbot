@@ -225,12 +225,14 @@ def morning_briefing(send_fn) -> None:
         if cash >= 1000:
             catalysts = research.market_catalysts()
             opps_mission = f"""
-2. Identifie 3 à 6 tickers CANDIDATS de deux types :
-   A) CATALYSEUR : événement futur daté après le {today_str}.
-   B) MOMENTUM : tendance haussière établie rendant +10% atteignable sans événement.
-   IMPÉRATIF : chaque candidat doit respecter TOUTES les règles et contraintes du contexte personnel.
-   Réponds UNIQUEMENT avec les tickers Yahoo Finance (ex: ALFRE.PA, MSFT), un par ligne.
-   Ne donne AUCUN prix — juste les tickers.
+2. Identifie 6 à 10 tickers CANDIDATS de deux types (tous marchés Bourse Direct) :
+   A) CATALYSEUR : événement futur daté après le {today_str} (résultats, OPA, FDA, contrat).
+   B) MOMENTUM : tendance haussière sur 3+ mois rendant +{_TP}% atteignable.
+   Propose LARGEMENT — ne pré-filtre pas, la validation technique (RSI, couteau qui tombe,
+   tendance) sera faite ensuite avec les données réelles. Seules exclusions à ce stade :
+   les secteurs ou valeurs explicitement bannis dans le contexte personnel.
+   Réponds UNIQUEMENT avec les tickers Yahoo Finance, un par ligne (ex: ALFRE.PA, MSFT).
+   Ne donne AUCUN prix, AUCUNE explication — juste les tickers.
 3. Risque global portefeuille : LOW / MEDIUM / HIGH"""
         else:
             catalysts = ""
@@ -260,13 +262,14 @@ MISSION
 
         # ── Passe 2 : validation des candidats avec prix réels ───────────────
         opportunities = []
+        rejected_morning = []
         if cash >= 1000:
             # Extrait les tickers candidats (lignes courtes en majuscules)
             held_tickers = {cfg["ticker"].upper()
                             for cfg in portfolio.load().get("positions", {}).values()}
             raw_tickers = _extract_tickers(pass1)
 
-            for t in raw_tickers[:5]:
+            for t in raw_tickers[:10]:
                 if t.upper() in held_tickers:
                     continue
                 q = prices.get_quote(t)
@@ -321,15 +324,17 @@ RECHERCHE WEB : {web}
 CATALYSEURS : {cats}
 
 Signal ACHAT ou NEUTRE/ÉVITER ?
-Si NEUTRE/ÉVITER → réponds exactement : EXCLUS
-Si le ticker viole une contrainte du contexte personnel → réponds exactement : EXCLUS
+Si NEUTRE/ÉVITER → réponds : EXCLUS — [raison en 5 mots max]
+Si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
 Si ACHAT → format :
 {t} — Entrée : {current_price}€  SL : X€ (-{_SL}%)  TP : X€ (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
 - Thèse : [CATALYSEUR : événement + date après {today_str}] OU [MOMENTUM : tendance + niveau qui invalide]
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
-                val = _strip_markdown(ai.complete(val_prompt, max_tokens=200))
+                val = _strip_markdown(ai.complete(val_prompt, max_tokens=250))
                 if val.strip().upper().startswith("EXCLU"):
+                    reason = val.strip().split("—", 1)[1].strip()[:60] if "—" in val else "écarté"
+                    rejected_morning.append(f"- {t} : {reason}")
                     continue
                 val = _validate_tickers(val)
                 opportunities.append(val)
@@ -346,7 +351,11 @@ Si ACHAT → format :
         if opportunities:
             msg += "\n\nOPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities)
         elif cash >= 1000:
-            msg += "\n\nAucune opportunité ne passe le filtre technique aujourd'hui."
+            no_opp = "Aucun candidat validé aujourd'hui."
+            if rejected_morning:
+                no_opp += "\n\nAnalysés et écartés :\n" + "\n".join(rejected_morning)
+            no_opp += "\n\n→ /scan pour relancer | /research TICKER pour un avis ciblé."
+            msg += "\n\n" + no_opp
         send_fn(msg)
 
     except Exception as e:
@@ -677,7 +686,7 @@ def _extract_tickers(text: str) -> list[str]:
     """Extrait les tickers format Yahoo Finance d'un texte (ex: GET.PA, MSFT, BP.L)."""
     import re
     return list(dict.fromkeys(re.findall(
-        r'\b([A-Z]{1,6}(?:\.[A-Z]{1,3})?)\b', text
+        r'\b([A-Z]{2,8}(?:\.[A-Z]{1,3})?)\b', text
     )))
 
 
@@ -731,19 +740,19 @@ TÂCHE EN 2 PARTIES :
 
 1. Pour chaque position en portefeuille : 1 ligne — MAINTENIR / SURVEILLER / VENDRE + raison.
 
-2. Identifie 3 à 6 tickers CANDIDATS de deux types :
+2. Identifie 6 à 10 tickers CANDIDATS de deux types (tous marchés Bourse Direct) :
    A) CATALYSEUR : événement futur daté APRÈS le {today_str} (résultats, OPA, FDA, contrat).
-   B) MOMENTUM : tendance haussière établie (hausse sur 3 mois, volumes sains)
-      rendant +10% atteignable SANS événement particulier.
-   IMPÉRATIF : chaque candidat doit respecter TOUTES les règles et contraintes
-   du contexte personnel ci-dessus (secteurs exclus, critères sur le ticker, etc.).
+   B) MOMENTUM : tendance haussière sur 3+ mois rendant +{_TP}% atteignable.
+   Propose LARGEMENT — ne pré-filtre pas. La validation technique (RSI, couteau qui tombe,
+   tendance) sera faite ensuite avec les données réelles. Seule exclusion dès maintenant :
+   valeurs/secteurs explicitement bannis dans le contexte personnel.
 Réponds pour la partie 2 UNIQUEMENT avec les tickers, format Yahoo Finance, un par ligne.
 Exemple : GET.PA
           DSY.PA
           MSFT
 Ne donne PAS de prix, pas d'analyse — juste les tickers."""
 
-        pass1 = _strip_markdown(ai.complete(pass1_prompt, max_tokens=400))
+        pass1 = _strip_markdown(ai.complete(pass1_prompt, max_tokens=600))
 
         # Sépare l'analyse positions de la liste de tickers
         lines = pass1.strip().splitlines()
@@ -768,7 +777,7 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
         # Filtre : uniquement les tickers Yahoo Finance valides (prix disponible)
         held_tickers = {cfg["ticker"].upper() for cfg in portfolio.load().get("positions", {}).values()}
         valid_candidates = []
-        for t in raw_tickers[:6]:
+        for t in raw_tickers[:12]:
             if t.upper() in held_tickers:
                 continue
             q = prices.get_quote(t)
@@ -780,13 +789,15 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
             send_fn(
                 f"🔍 SCAN OPPORTUNITÉS\n\n"
                 f"POSITIONS\n{portfolio_summary}\n\n"
-                f"Aucun candidat avec catalyseur futur vérifiable identifié aujourd'hui.\n\n"
+                f"Aucun candidat avec prix disponible identifié aujourd'hui.\n"
+                f"→ Essaie /research TICKER pour une analyse ciblée.\n\n"
                 f"💰 Cash: {cash}€"
             )
             return
 
         opportunities = []
-        for t, current_price in valid_candidates[:4]:
+        rejected = []
+        for t, current_price in valid_candidates[:6]:
             tech   = prices.get_technicals(t)
             funds  = prices.get_fundamentals(t)
             pctx   = prices.get_price_context(t)
@@ -849,8 +860,8 @@ CATALYSEURS IMMINENTS
 {cats}
 
 Signal ACHAT ou NEUTRE/ÉVITER ?
-RÈGLE : si tu donnerais NEUTRE ou ÉVITER dans un /research → réponds EXCLUS en 1 mot.
-RÈGLE : si le ticker viole une contrainte du contexte personnel → réponds EXCLUS en 1 mot.
+RÈGLE : si tu donnerais NEUTRE ou ÉVITER dans un /research → réponds : EXCLUS — [raison 5 mots max]
+RÈGLE : si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
 Si ACHAT : donne format exact :
 NOM SOCIETE ({t})
 - Marché : ...
@@ -860,8 +871,10 @@ NOM SOCIETE ({t})
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
 
-            val = _strip_markdown(ai.complete(validate_prompt, max_tokens=250))
+            val = _strip_markdown(ai.complete(validate_prompt, max_tokens=300))
             if val.strip().upper().startswith("EXCLU"):
+                reason = val.strip().split("—", 1)[1].strip()[:70] if "—" in val else "écarté"
+                rejected.append(f"- {t} : {reason}")
                 continue
             val = _validate_tickers(val)
 
@@ -909,10 +922,11 @@ NOM SOCIETE ({t})
         if opportunities:
             result_parts.append("OPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities))
         else:
-            result_parts.append(
-                "Aucun candidat ne passe le filtre technique aujourd'hui.\n"
-                "Attendre un meilleur point d'entrée ou de nouveaux catalyseurs."
-            )
+            no_opp = "Aucun candidat ne passe le filtre technique aujourd'hui."
+            if rejected:
+                no_opp += "\n\nAnalysés et écartés :\n" + "\n".join(rejected)
+            no_opp += "\n\n→ /research TICKER pour un avis ciblé sur un titre précis."
+            result_parts.append(no_opp)
 
         send_fn(f"🔍 SCAN OPPORTUNITÉS\n\n" + "\n\n".join(result_parts) + f"\n\n💰 Cash: {cash}€")
 
