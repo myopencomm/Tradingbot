@@ -307,6 +307,10 @@ MISSION
                 if fl:
                     funds_b = "\n" + " | ".join(fl) + "\n"
 
+                company_name = funds.get("name", t)
+                company_sector = funds.get("sector", "")
+                company_label = f"{company_name} ({t})" + (f" — {company_sector}" if company_sector else "")
+
                 social_b = f"\nSENTIMENT : {social}" if social and "aucune donnée" not in social else ""
                 news_b   = ("\nNEWS : " + " | ".join(n["title"] for n in yf_n[:3])) if yf_n else ""
 
@@ -317,7 +321,7 @@ MISSION
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
-AUJOURD'HUI : {today_str}. TICKER : {t}. COURS RÉEL : {current_price}€. CASH DISPO : {cash}€.
+AUJOURD'HUI : {today_str}. SOCIÉTÉ : {company_label}. COURS RÉEL : {current_price}€. CASH DISPO : {cash}€.
 {tech_b}{funds_b}{social_b}{news_b}
 
 RECHERCHE WEB : {web}
@@ -327,14 +331,15 @@ Signal ACHAT ou NEUTRE/ÉVITER ?
 Si NEUTRE/ÉVITER → réponds : EXCLUS — [raison en 5 mots max]
 Si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
 Si ACHAT → format :
-{t} — Entrée : {current_price}€  SL : X€ (-{_SL}%)  TP : X€ (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
+{company_name} ({t}){(" — " + company_sector) if company_sector else ""} — Entrée : {current_price}€  SL : X€ (-{_SL}%)  TP : X€ (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
 - Thèse : [CATALYSEUR : événement + date après {today_str}] OU [MOMENTUM : tendance + niveau qui invalide]
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
                 val = _strip_markdown(ai.complete(val_prompt, max_tokens=250))
                 if val.strip().upper().startswith("EXCLU"):
                     reason = val.strip().split("—", 1)[1].strip()[:60] if "—" in val else "écarté"
-                    rejected_morning.append(f"- {t} : {reason}")
+                    label = f"{company_name} ({t})" if company_name != t else t
+                    rejected_morning.append(f"- {label} : {reason}")
                     continue
                 val = _validate_tickers(val)
                 opportunities.append(val)
@@ -840,6 +845,10 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
             news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
             news_b = ("\nACTUALITÉS\n" + "\n".join(news_lines)) if news_lines else ""
 
+            company_name = funds.get("name", t)
+            company_sector = funds.get("sector", "")
+            company_label = f"{company_name} ({t})" + (f" — {company_sector}" if company_sector else "")
+
             social_b = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
             ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
                      f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
@@ -849,7 +858,7 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
 {FORMAT_TELEGRAM}
 {ctx_v}
 AUJOURD'HUI : {today_str}
-TICKER ANALYSÉ : {t} — JE NE DÉTIENS PAS CETTE ACTION. CASH DISPONIBLE : {cash}€.
+SOCIÉTÉ ANALYSÉE : {company_label} — JE NE DÉTIENS PAS. CASH DISPONIBLE : {cash}€.
 Cours actuel : {current_price}
 {pctx_block}{tech_block}{funds_block}{news_b}{social_b}
 
@@ -863,8 +872,7 @@ Signal ACHAT ou NEUTRE/ÉVITER ?
 RÈGLE : si tu donnerais NEUTRE ou ÉVITER dans un /research → réponds : EXCLUS — [raison 5 mots max]
 RÈGLE : si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
 Si ACHAT : donne format exact :
-NOM SOCIETE ({t})
-- Marché : ...
+{company_name} ({t}){(" — " + company_sector) if company_sector else ""}
 - Cours actuel : {current_price} | Entrée : X  SL : X (-{_SL}%)  TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
 - Thèse : [CATALYSEUR : événement précis + date après {today_str}]
   OU [MOMENTUM : tendance + niveau technique qui invalide la thèse — cf. règles]
@@ -874,7 +882,8 @@ NOM SOCIETE ({t})
             val = _strip_markdown(ai.complete(validate_prompt, max_tokens=300))
             if val.strip().upper().startswith("EXCLU"):
                 reason = val.strip().split("—", 1)[1].strip()[:70] if "—" in val else "écarté"
-                rejected.append(f"- {t} : {reason}")
+                label = f"{company_name} ({t})" if company_name != t else t
+                rejected.append(f"- {label} : {reason}")
                 continue
             val = _validate_tickers(val)
 

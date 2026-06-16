@@ -44,6 +44,13 @@ def get_fundamentals(ticker: str) -> dict:
         info = t.info or {}
         result = {}
 
+        name = info.get("longName") or info.get("shortName") or ""
+        if name:
+            result["name"] = name
+        sector = info.get("sector") or info.get("industry") or ""
+        if sector:
+            result["sector"] = sector
+
         target = info.get("targetMeanPrice") or info.get("targetMedianPrice")
         if target:
             result["analyst_target"] = round(float(target), 2)
