@@ -283,3 +283,55 @@ def get_quote(ticker: str) -> dict:
         print(f"⚠️ Quote error {ticker}: {e}")
         return {"ticker": ticker, "price": None, "currency": "EUR",
                 "change_pct": None, "status": "error"}
+
+
+def get_chart_image(ticker: str, period: str = "3mo") -> bytes | None:
+    """
+    Génère un graphique chandeliers (MM20, MM50, volume) et retourne les bytes JPEG.
+    Utilisé pour l'analyse technique vision IA.
+    """
+    try:
+        import io
+        import matplotlib
+        matplotlib.use("Agg")  # backend non-interactif (pas de fenêtre)
+        import matplotlib.pyplot as plt
+        import mplfinance as mpf
+        from PIL import Image
+
+        hist = yf.Ticker(ticker).history(period=period)
+        hist = hist.dropna(subset=["Close"])
+        if len(hist) < 10:
+            return None
+
+        # Style sombre lisible par la vision IA
+        style = mpf.make_mpf_style(
+            base_mpf_style="nightclouds",
+            gridstyle=":",
+            gridcolor="#333333",
+        )
+
+        png_buf = io.BytesIO()
+        mpf.plot(
+            hist,
+            type="candle",
+            style=style,
+            volume=True,
+            mav=(20, 50),
+            mavcolors=["#00bfff", "#ff9900"],
+            title=f"\n{ticker} — {period}",
+            figsize=(10, 6),
+            savefig=dict(fname=png_buf, dpi=100, bbox_inches="tight"),
+        )
+        plt.close("all")
+
+        # Conversion PNG → JPEG (compatible avec tous les providers vision)
+        png_buf.seek(0)
+        img = Image.open(png_buf).convert("RGB")
+        jpg_buf = io.BytesIO()
+        img.save(jpg_buf, format="JPEG", quality=85)
+        jpg_buf.seek(0)
+        return jpg_buf.read()
+
+    except Exception as e:
+        print(f"⚠️ Chart error {ticker}: {e}")
+        return None

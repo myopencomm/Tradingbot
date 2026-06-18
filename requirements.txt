@@ -19,3 +19,6 @@ Pillow>=10.0.0                   # requis pour Gemini vision
 # Import CSV portefeuille
 pandas>=2.0.0
 vaderSentiment
+
+# Graphiques chandeliers pour analyse technique vision
+mplfinance>=0.12.0

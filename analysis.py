@@ -100,6 +100,27 @@ def _trading_context() -> str:
     return ""
 
 
+def _analyze_chart(ticker: str, ai) -> str:
+    """Génère un graphique chandeliers et l'envoie au modèle vision. Retourne l'analyse en texte."""
+    try:
+        image_bytes = prices.get_chart_image(ticker)
+        if not image_bytes:
+            return ""
+        prompt = (
+            "Analyse ce graphique en chandeliers japonais (3 mois, MM20 bleue, MM50 orange, volume).\n"
+            "Réponds en 4 lignes MAX, texte brut, sans markdown :\n"
+            "- Tendance : haussière / baissière / range (court terme 1-2 semaines et moyen terme 1-3 mois)\n"
+            "- Patterns de chandeliers récents significatifs (si aucun : sans pattern clair)\n"
+            "- Niveaux clés visibles : support principal et résistance principale en prix\n"
+            "- Signal technique global : POSITIF / NEUTRE / NÉGATIF — justification en 5 mots"
+        )
+        result = ai.complete_with_image(prompt, image_bytes)
+        return result.strip()
+    except Exception as e:
+        print(f"[chart vision] {ticker}: {e}")
+        return ""
+
+
 def _macro_context() -> str:
     """Charge l'analyse macro sectorielle si macro_analysis.md existe (document daté, mis à jour par l'utilisateur)."""
     try:
@@ -311,8 +332,10 @@ MISSION
                 company_sector = funds.get("sector", "")
                 company_label = f"{company_name} ({t})" + (f" — {company_sector}" if company_sector else "")
 
-                social_b = f"\nSENTIMENT : {social}" if social and "aucune donnée" not in social else ""
-                news_b   = ("\nNEWS : " + " | ".join(n["title"] for n in yf_n[:3])) if yf_n else ""
+                social_b  = f"\nSENTIMENT : {social}" if social and "aucune donnée" not in social else ""
+                news_b    = ("\nNEWS : " + " | ".join(n["title"] for n in yf_n[:3])) if yf_n else ""
+                chart_txt = _analyze_chart(t, ai)
+                chart_b   = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
 
                 ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
                          f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
@@ -322,8 +345,7 @@ MISSION
 {FORMAT_TELEGRAM}
 {ctx_v}
 AUJOURD'HUI : {today_str}. SOCIÉTÉ : {company_label}. COURS RÉEL : {current_price}€. CASH DISPO : {cash}€.
-{tech_b}{funds_b}{social_b}{news_b}
-
+{tech_b}{funds_b}{social_b}{news_b}{chart_b}
 RECHERCHE WEB : {web}
 CATALYSEURS : {cats}
 
@@ -608,6 +630,9 @@ def research_ticker(send_fn, ticker: str, question: str = "") -> None:
             news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
             news_block = "\nACTUALITÉS RÉCENTES (Yahoo Finance)\n" + "\n".join(news_lines)
 
+        chart_txt   = _analyze_chart(real_ticker, ai)
+        chart_block = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
+
         if held:
             quote = prices.get_quote(held["ticker"])
             price = quote.get("price", "?")
@@ -629,8 +654,7 @@ MA POSITION
 - PRU : {sym}{held['entry_price']} | {held['qty']} titres | P&L : {sym}{pnl:+.0f}
 - SL actuel : {sym}{held['target_low']} (marge : {pct_to_sl:.1f}%)
 - TP actuel : {sym}{held['target_high']} (potentiel restant : {pct_to_tp:.1f}%)
-{tech_block}{funds_block}{news_block}{social_block}
-
+{tech_block}{funds_block}{news_block}{social_block}{chart_block}
 RECHERCHE WEB
 {web}
 
@@ -664,8 +688,7 @@ DÉCISION
 {FORMAT_TELEGRAM}
 {ctx_block}
 TICKER ANALYSÉ : {ticker} — JE NE DÉTIENS PAS CETTE ACTION.
-{tech_block}{funds_block}{news_block}{social_block}
-
+{tech_block}{funds_block}{news_block}{social_block}{chart_block}
 RECHERCHE WEB
 {web}
 
@@ -849,7 +872,9 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
             company_sector = funds.get("sector", "")
             company_label = f"{company_name} ({t})" + (f" — {company_sector}" if company_sector else "")
 
-            social_b = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
+            social_b  = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
+            chart_txt = _analyze_chart(t, ai)
+            chart_b   = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
             ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
                      f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
             validate_prompt = f"""{TRADER_SYSTEM}
@@ -860,7 +885,7 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
 AUJOURD'HUI : {today_str}
 SOCIÉTÉ ANALYSÉE : {company_label} — JE NE DÉTIENS PAS. CASH DISPONIBLE : {cash}€.
 Cours actuel : {current_price}
-{pctx_block}{tech_block}{funds_block}{news_b}{social_b}
+{pctx_block}{tech_block}{funds_block}{news_b}{social_b}{chart_b}
 
 RECHERCHE WEB
 {web}
