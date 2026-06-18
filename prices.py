@@ -128,8 +128,11 @@ def get_technicals(ticker: str) -> dict:
         rs      = gain / loss
         rsi     = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
         mom_1m  = round(float((closes.iloc[-1] / closes.iloc[-22] - 1) * 100), 1)
-        vol_avg = float(volumes.iloc[-20:].mean())
-        vol_r   = round(float(volumes.iloc[-1]) / vol_avg, 2) if vol_avg else None
+        # Utilise le dernier jour complet (iloc[-2]) pour éviter le volume
+        # partiel intraday qui fausse le ratio (ex: 0.07x à 10h du matin)
+        vol_last = float(volumes.iloc[-2])
+        vol_avg  = float(volumes.iloc[-21:-1].mean())
+        vol_r    = round(vol_last / vol_avg, 2) if vol_avg else None
         return {"rsi": rsi, "momentum_1m": mom_1m, "vol_ratio": vol_r}
     except Exception as e:
         print(f"⚠️ Technicals error {ticker}: {e}")

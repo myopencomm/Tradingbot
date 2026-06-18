@@ -487,7 +487,7 @@ Cash disponible : {cash}€ (insuffisant pour nouvelle position directe)
 def _validate_tickers(text: str) -> str:
     """Extrait les tickers du texte IA et avertit pour ceux non reconnus par yfinance."""
     import yfinance as yf
-    found = re.findall(r'\(([A-Z0-9]{2,8}(?:\.[A-Z]{1,3})?)\)', text)
+    found = re.findall(r'\(([A-Z][A-Z0-9]{1,7}(?:\.[A-Z]{1,3})?)\)', text)
     bad = []
     for t in set(found):
         try:
