@@ -130,6 +130,14 @@ def mark_tp_breach(name: str, notified: bool = True):
         save(data)
 
 
+def mark_sl_proche(name: str, notified: bool = True):
+    """Marque/réinitialise l'alerte SL proche — évite le spam à chaque check."""
+    data = load()
+    if name.upper() in data.get("positions", {}):
+        data["positions"][name.upper()]["sl_proche_notified"] = notified
+        save(data)
+
+
 def update_tp(name: str, price: float):
     data = load()
     if name.upper() in data.get("positions", {}):

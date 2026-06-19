@@ -92,9 +92,11 @@ def check_positions(send_fn) -> None:
         if cfg.get("tp_breach_notified") and high4h < cfg["target_high"]:
             portfolio.mark_tp_breach(name, False)
 
+        # Réarme l'alerte SL proche quand le cours remonte au-dessus du seuil + marge
+        if cfg.get("sl_proche_notified") and price > cfg["target_low"] * 1.08:
+            portfolio.mark_sl_proche(name, False)
+
         if high4h >= cfg["target_high"]:
-            # Une seule notif par franchissement (anti-spam, comme le SL) ;
-            # le flag se réarme quand le cours repasse sous le TP.
             if TP_ALERTS and not cfg.get("tp_breach_notified", False):
                 alerts.append({"type": "TP", "name": name, "cfg": cfg,
                                "price": price, "trigger": high4h,
@@ -105,9 +107,12 @@ def check_positions(send_fn) -> None:
                                "price": price, "trigger": low4h,
                                "change": change_pct, "pnl": pnl, "sym": sym})
         elif low4h <= cfg["target_low"] * 1.05:
-            alerts.append({"type": "SL_PROCHE", "name": name, "cfg": cfg,
-                           "price": price, "trigger": low4h,
-                           "change": change_pct, "pnl": pnl, "sym": sym})
+            # Anti-spam : une seule alerte par épisode d'approche du SL.
+            # Se réarme quand le cours remonte à +8% au-dessus du SL.
+            if not cfg.get("sl_proche_notified", False):
+                alerts.append({"type": "SL_PROCHE", "name": name, "cfg": cfg,
+                               "price": price, "trigger": low4h,
+                               "change": change_pct, "pnl": pnl, "sym": sym})
 
     sent_any = False
     for a in alerts:
@@ -147,13 +152,16 @@ def check_positions(send_fn) -> None:
             continue
         else:
             msg = (
-                f"⚠️ STOP-LOSS PROCHE — {a['name']}\n\n"
-                f"Low 4h: {sym}{trigger} — Seuil SL: {sym}{cfg['target_low']}\n"
-                f"Cours actuel: {sym}{a['price']} ({a['change']:+.2f}%)\n"
-                f"P&L: {sym}{a['pnl']:+.0f}\n\n"
-                f"Vérifier que l'ordre stop est actif sur Bourse Direct.\n\n"
-                + orders.stop_loss(cfg["ticker"], cfg["qty"], cfg["target_low"])
+                f"⚠️ SL PROCHE — {a['name']} (alerte unique par épisode)\n\n"
+                f"Low 4h : {sym}{trigger} — Seuil SL : {sym}{cfg['target_low']}\n"
+                f"Cours actuel : {sym}{a['price']} ({a['change']:+.2f}%) | P&L : {sym}{a['pnl']:+.0f}\n\n"
+                f"Vérifie que ta protection est active sur Bourse Direct :\n\n"
+                + orders.expert_protection(
+                    cfg["ticker"], cfg["qty"],
+                    cfg["target_low"], cfg["target_high"]
+                )
             )
+            portfolio.mark_sl_proche(a["name"])
         send_fn(msg)
         sent_any = True
 

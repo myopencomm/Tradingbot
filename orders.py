@@ -167,3 +167,28 @@ def expert_take_profit_buy(ticker: str, qty: int, buy_price: float, sl_pct: floa
         f"⚠️ Ordres Experts = SBF 120 et certains ETFs uniquement.\n"
         f"   Si non disponible pour ce titre → /setup {ticker} {qty} {buy_price}"
     )
+
+
+def expert_protection(ticker: str, qty: int, sl_price: float, tp_price: float,
+                      account: str = "CTO") -> str:
+    """Ordre Expert Take Profit côté VENTE : protège une position ouverte avec SL + TP combinés."""
+    sl_pct = round((1 - sl_price / tp_price) * 100)  # indicatif seulement
+    sep = "━" * 34
+    return (
+        f"🔴 ORDRE EXPERT — PROTECTION POSITION\n"
+        f"{sep}\n"
+        f"App  → Bourse → Passer un ordre → EXPERTS → Take Profit\n"
+        f"Site → Ordres → Passer un ordre → Ordres Experts → Take Profit\n"
+        f"{sep}\n"
+        f"📌 Valeur    : {ticker}\n"
+        f"💼 Compte    : {account}\n"
+        f"📊 Sens      : Vente\n"
+        f"🔢 Quantité  : {qty} titres\n"
+        f"🛡 Seuil SL  : {sl_price}€  (vente au marché si cours ≤ seuil)\n"
+        f"🎯 Limite TP : {tp_price}€  (vente limitée si cours ≥ limite)\n"
+        f"📅 Validité  : Durée max\n"
+        f"{sep}\n"
+        f"⚡ Un seul ordre suffit — BD annule l'autre quand l'un s'exécute.\n"
+        f"⚠️ Ordres Experts = SBF 120 et certains ETFs uniquement.\n"
+        f"   Si indisponible → passer SL et TP séparément."
+    )
