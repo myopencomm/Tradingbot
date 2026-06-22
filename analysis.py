@@ -444,8 +444,39 @@ Pour chaque position :
         send_fn(f"⚠️ Erreur revue mensuelle: {e}")
 
 
+def _fetch_candidate_prices(tickers: list[str]) -> str:
+    """Récupère cours réel + techniques pour une liste de tickers candidats au swap."""
+    lines = []
+    for t in tickers:
+        quote = prices.get_quote(t)
+        price = quote.get("price")
+        if not price:
+            lines.append(f"- {t} : cours indisponible (ticker incorrect ?)")
+            continue
+        sym = prices.currency_symbol(quote.get("currency", "EUR"))
+        chg = quote.get("change_pct", 0)
+        tech = prices.get_technicals(t)
+        tech_str = ""
+        if tech:
+            rsi = tech.get("rsi")
+            mom = tech.get("momentum_1m")
+            vol = tech.get("vol_ratio")
+            parts = []
+            if rsi is not None:
+                parts.append(f"RSI {rsi}")
+            if mom is not None:
+                parts.append(f"mom1m {mom:+.1f}%")
+            if vol is not None:
+                parts.append(f"vol {vol:.2f}x")
+            if parts:
+                tech_str = f" | {', '.join(parts)}"
+        lines.append(f"- {t} : {sym}{price} ({chg:+.2f}% J-1){tech_str}")
+    return "\n".join(lines) if lines else "Aucun cours récupéré."
+
+
 def weekly_swap_analysis(send_fn) -> None:
-    """Analyse hebdomadaire : vaut-il mieux vendre une position pour en acheter une autre ?"""
+    """Analyse hebdomadaire en 2 étapes : d'abord identification des tickers candidats,
+    puis fetch des cours réels avant de générer l'analyse complète avec les vrais prix."""
     print(f"[{datetime.now(PARIS).strftime('%Y-%m-%d %H:%M:%S')}] Analyse swap hebdo...")
     try:
         ai = get_provider()
@@ -456,7 +487,45 @@ def weekly_swap_analysis(send_fn) -> None:
         ctx = _trading_context()
         ctx_block = f"\n--- CONTEXTE PERSONNEL ---\n{ctx}\n" if ctx else ""
 
-        prompt = f"""{TRADER_SYSTEM}
+        # ÉTAPE 1 — identifier les tickers candidats (sans prix, sans SL/TP)
+        step1_prompt = f"""{TRADER_SYSTEM}
+{ctx_block}
+PORTEFEUILLE
+{snapshot}
+
+CONTEXTE MARCHÉ
+{macro}
+
+MISSION ÉTAPE 1 — IDENTIFICATION UNIQUEMENT
+Cash disponible : {cash}€
+
+Analyse les positions. Identifie :
+A) La ou les positions à swapper (momentum faible, proche SL, thesis invalidée).
+B) 1 à 2 tickers Euronext candidats à l'achat en remplacement — tickers Yahoo Finance exacts uniquement.
+
+Réponds UNIQUEMENT dans ce format, sans analyse ni commentaire :
+VENDRE: TICKER_A
+ACHETER: TICKER_B
+ACHETER: TICKER_C (optionnel)
+RAISON_VENTE: [1 ligne]
+RAISON_ACHAT_B: [1 ligne]"""
+
+        step1 = ai.complete(step1_prompt, max_tokens=200).strip()
+        print(f"[swap step1] {step1}")
+
+        # Extraction des tickers candidats à l'achat
+        buy_tickers = re.findall(r'ACHETER\s*:\s*([A-Z][A-Z0-9]{0,7}(?:\.[A-Z]{1,3})?)', step1)
+        if not buy_tickers:
+            # Fallback : pas de candidat identifié
+            send_fn(f"🔄 ANALYSE SWAP — {datetime.now(PARIS).strftime('%d/%m/%Y')}\n\n{step1}\n\n⚠️ Aucun ticker candidat extrait — relance manuelle si besoin.")
+            return
+
+        # ÉTAPE 2 — fetch cours réels pour les candidats
+        candidates_data = _fetch_candidate_prices(buy_tickers)
+        print(f"[swap step2 prices] {candidates_data}")
+
+        # ÉTAPE 3 — analyse complète avec cours réels injectés
+        step2_prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {ctx_block}
 PORTEFEUILLE
@@ -465,17 +534,24 @@ PORTEFEUILLE
 CONTEXTE MARCHÉ
 {macro}
 
+COURS RÉELS EN TEMPS RÉEL — CANDIDATS AU SWAP (source Yahoo Finance, prix du jour) :
+{candidates_data}
+
 MISSION — ANALYSE DE ROTATION HEBDOMADAIRE
-Cash disponible : {cash}€ (insuffisant pour nouvelle position directe)
+Cash disponible : {cash}€
 
-1. Identifie la ou les positions les moins prometteuses à court terme (momentum faible, proche SL, thesis invalidée).
-2. Propose 1-2 alternatives Euronext avec meilleur potentiel court terme.
-3. Pour chaque swap envisagé :
-   - Vendre : TICKER_A — raison en 1 ligne
-   - Acheter : TICKER_B — entrée / SL / TP — raison
-4. Conclusion : vaut-il mieux attendre ou swapper ?"""
+Pré-sélection issue de l'analyse : {step1}
 
-        result = _strip_markdown(ai.complete(prompt, max_tokens=800))
+Maintenant rédige l'analyse complète :
+1. Position(s) à vendre — raison en 1 ligne
+2. Pour chaque candidat achat (en te basant UNIQUEMENT sur les cours réels ci-dessus) :
+   - Entrée : utilise le cours réel fourni ± 0.5% max (jamais un prix de mémoire)
+   - SL : -{_SL}% du cours réel
+   - TP : +{_TP}% minimum du cours réel (plus si catalyseur fort)
+   - Raison du choix
+3. Conclusion : swapper maintenant ou attendre ?"""
+
+        result = _strip_markdown(ai.complete(step2_prompt, max_tokens=800))
         date = datetime.now(PARIS).strftime("%d/%m/%Y")
         send_fn(f"🔄 ANALYSE SWAP — {date}\n\n{result}")
 
