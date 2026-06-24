@@ -105,9 +105,12 @@ def sync(page, send_fn) -> bool:
     # Les ordres BD (Take Profit, Stop Loss) reflètent les vraies protections
     # placées. On aligne target_low (Seuil/SL) et target_high (Profit/TP) dessus.
     orders = bd.get("orders", [])
-    if orders:
+    # Seuls les ordres actifs ("En cours") sont affichés et synchronisés.
+    # Les ordres annulés/exécutés sont déjà filtrés par bourse_direct_reader.
+    active_orders = [o for o in orders if o.get("statut") == "En cours"]
+    if active_orders:
         lines.append("\nORDRES EN COURS SUR BD")
-        for o in orders:
+        for o in active_orders:
             typ    = o.get("type", "?")
             sens   = o.get("sens", "")
             seuil  = o.get("seuil")
@@ -123,7 +126,7 @@ def sync(page, send_fn) -> bool:
                 detail.append(f"TP {profit}€")
             lines.append(f"  {o.get('name','?')} : {sens} {typ} {' | '.join(detail)} ({statut})")
 
-            # Met à jour la position locale correspondante
+            # Met à jour la position locale correspondante (seulement si elle existe)
             lk = _match_local(o_ticker, o_name)
             if lk:
                 pos_cfg = data["positions"][lk]

@@ -258,11 +258,15 @@ def _parse_order(text: str) -> dict | None:
     if m_qty:
         order["qty_exec"] = int(m_qty.group(1))
         order["qty_total"] = int(m_qty.group(2))
-    # Statut
+    # Statut — un ordre Take Profit a un statut par partie (Seuil + Profit).
+    # Si "En cours" apparaît au moins une fois, l'ordre est encore actif.
+    # Si uniquement "Annulé"/"Exécuté" : l'ordre est clôturé → on ignore.
     if "En cours" in flat:
         order["statut"] = "En cours"
+    elif "Annulé" in flat or "Annule" in flat:
+        return None  # ordre annulé → ignoré
     elif "Exécuté" in flat or "Execute" in flat:
-        order["statut"] = "Exécuté"
+        return None  # ordre exécuté (clôturé) → ignoré
 
     return order
 
