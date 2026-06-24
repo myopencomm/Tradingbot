@@ -874,7 +874,14 @@ def cmd_morning(args, cid):
     _run_long(cid, analysis.morning_briefing, lambda m: send(m, cid))
 
 
+_scan_lock = threading.Lock()
+
+
 def cmd_scan(args, cid):
+    if not _scan_lock.acquire(blocking=False):
+        send("Scan déjà en cours, patiente...", cid)
+        return
+
     prog_id = send_editable("🔍 Scan en cours...", cid)
 
     def progress_fn(ticker: str, idx: int, total: int):
@@ -884,7 +891,13 @@ def cmd_scan(args, cid):
         delete_message(prog_id, cid)
         send(text, cid)
 
-    _run_long(cid, analysis.scan_opportunities, send_final, progress_fn=progress_fn)
+    def _run():
+        try:
+            analysis.scan_opportunities(send_final, progress_fn=progress_fn)
+        finally:
+            _scan_lock.release()
+
+    _run_long(cid, _run)
 
 
 def cmd_research(args, cid):
@@ -1799,12 +1812,15 @@ def _poll():
                 params=params, timeout=35,
             ).json()
             for upd in data.get("result", []):
+                # Avance l'offset AVANT de traiter pour éviter le double-envoi
+                # si le handler crash ou si Telegram redelivre après un timeout.
+                offset = upd["update_id"] + 1
                 if "message" in upd:
                     _handle_message(upd["message"])
-                offset = upd["update_id"] + 1
         except Exception as e:
             print(f"Polling error: {e}")
             time.sleep(5)
+            # offset conservé intentionnellement — on reprend là où on s'était arrêté
 
 
 def start_polling():
