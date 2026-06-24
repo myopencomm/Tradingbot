@@ -156,73 +156,95 @@ def _api_post(page, endpoint: str, payload: dict) -> dict | None:
 
 # ── Étape 1 : créer l'ordre (validation + calcul des frais) ──────────────────
 
+def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
+    """
+    Convertit la saisie utilisateur en (validity, validityDate) pour l'API BD.
+
+    Valeurs acceptées :
+      "seance"       → day (séance du jour)
+      "max"          → end_of_year sur XPAR, revocation ailleurs
+      "revocation"   → GTC (bonne pour annulation)
+      "DD/MM/YYYY"   → date précise (type "date")
+      autres         → transmis tels quels (end_of_year, day…)
+
+    Retourne (validity_api, validityDate_iso | None).
+    """
+    from datetime import datetime
+    import re
+
+    s = (validity_str or "max").strip().lower()
+
+    if s == "seance":
+        return "day", datetime.now().strftime("%Y-%m-%dT00:00:00.000Z")
+    if s == "max":
+        if mic == "XPAR":
+            return "end_of_year", f"{datetime.now().year}-12-31T00:00:00.000Z"
+        return "revocation", None
+    if s == "revocation":
+        return "revocation", None
+    if re.match(r"\d{2}/\d{2}/\d{4}$", s):
+        d = datetime.strptime(s, "%d/%m/%Y")
+        return "date", d.strftime("%Y-%m-%dT00:00:00.000Z")
+    # Valeur brute (end_of_year, day…)
+    if s == "end_of_year":
+        if mic != "XPAR":
+            return "revocation", None
+        return "end_of_year", f"{datetime.now().year}-12-31T00:00:00.000Z"
+    if s == "day":
+        from datetime import datetime
+        return "day", datetime.now().strftime("%Y-%m-%dT00:00:00.000Z")
+    return s, None
+
+
 def create_order(page, ticker: str, side: str, qty: int,
                  order_type: str = "market",
                  limit_price: float = None,
                  stop_price:  float = None,
-                 validity:    str   = "end_of_year",
+                 validity:    str   = "max",
                  smart:       dict  = None) -> dict | None:
     """
-    Crée un ordre sur BD — étape de validation.
-    L'ordre n'est PAS encore envoyé au marché.
+    Crée un ordre sur BD — étape de validation (non envoyé).
 
-    Retourne le dict de réponse BD (contient order_id, fees, messages)
-    ou None si erreur.
-
-    Paramètres :
-      ticker     : ticker yfinance (ex: "EXENS.PA", "ILMN")
-      side       : "buy" | "sell"
-      order_type : "market" | "limit" | "stop" | "stop_limit" | "best_limit" | "meta"
-      limit_price: prix limite (TP pour ordre Expert)
-      stop_price : seuil de déclenchement (SL pour ordre Expert)
-      validity   : "day" | "revocation" | "end_of_year"
-      smart      : dict pour ordre Expert (voir create_expert_order)
+    ticker     : ticker yfinance (ex: "TTE.PA", "ILMN")
+    side       : "buy" | "sell"
+    order_type : "market" | "limit" | "meta" (expert)
+    limit_price: prix d'entrée pour achat limité ou Expert achat
+    stop_price : seuil de déclenchement stop
+    validity   : "seance" | "max" | "revocation" | "DD/MM/YYYY"
+    smart      : dict SL/TP pour ordre Expert (généré par les helpers)
     """
     info = get_ticker_info(ticker)
     if not info:
         print(f"[BD Orders] Ticker inconnu : {ticker} — ajouter dans TICKER_MAP")
         return None
 
-    # end_of_year n'existe que sur Euronext Paris (cf. PLAYWRIGHT_STRATEGY.md :
-    # « Fin d'année, XPAR only ») — sur les autres places BD renvoie un 400
-    # « validityDate : format incorrect ». Fallback validité jour.
-    if validity == "end_of_year" and info["mic"] != "XPAR":
-        print(f"[BD Orders] validity end_of_year indisponible sur {info['mic']} → day")
-        validity = "day"
-
-    # validityDate ISO 8601 : jour courant si validity=day (confirmé live)
-    from datetime import datetime, timedelta
-    validity_date = None
-    if validity in ("end_of_year",):
-        validity_date = f"{datetime.now().year}-12-31T00:00:00.000Z"
-    elif validity == "day":
-        validity_date = datetime.now().strftime("%Y-%m-%dT00:00:00.000Z")
+    validity_api, validity_date = parse_validity(validity, info["mic"])
 
     payload = {
-        "login":          BD_LOGIN.upper(),          # MAJUSCULES (confirmé live)
-        "mic":            info["mic"],
-        "ticker":         info["bd_ticker"],          # mnémonique SANS préfixe E:
-        "currency":       info["currency"],
-        "quantity":       str(qty),                   # string (confirmé live)
-        "portfolio":      BD_ACCOUNT,
-        "type":           order_type,
-        "side":           side,
-        "validity":       validity,
-        "validityDate":   validity_date,
-        "settlement":     "cash",
-        "limit":          limit_price,
-        "stop":           stop_price,
+        "login":           BD_LOGIN.upper(),
+        "mic":             info["mic"],
+        "ticker":          info["bd_ticker"],
+        "currency":        info["currency"],
+        "quantity":        str(qty),
+        "portfolio":       BD_ACCOUNT,
+        "type":            order_type,
+        "side":            side,
+        "validity":        validity_api,
+        "validityDate":    validity_date,
+        "settlement":      "cash",
+        "limit":           limit_price,
+        "stop":            stop_price,
         "position_effect": "open" if side == "buy" else "close",
-        "globex":         False,
-        "comment":        None,
-        "brokerage":      None,
+        "globex":          False,
+        "comment":         None,
+        "brokerage":       None,
     }
 
     if smart:
         payload["nature"] = "smart"
-        if side == "sell" and smart.get("strategy") == "take_profit":
-            payload["type"] = "meta"
-        payload["smart"] = smart
+        # type "meta" requis pour tous les ordres Expert (achat ou vente)
+        payload["type"]   = "meta"
+        payload["smart"]  = smart
 
     result = _api_post(page, "/order/create", payload)
     if not result:
@@ -301,13 +323,11 @@ def execute_strategy(page, order_id: str) -> dict | None:
 # ── Helpers ordre Expert (Take Profit + Stop Loss combinés) ──────────────────
 
 def create_expert_order(page, ticker: str, qty: int,
-                        stop_loss: float, take_profit: float) -> dict | None:
+                        stop_loss: float, take_profit: float,
+                        validity: str = "max") -> dict | None:
     """
-    Crée un ordre Expert Take Profit (SL + TP en un seul ordre).
-    Correspond aux ordres 'Vente transmise au marché (Cpt EQT)' dans BD.
-
-    Retourne les données de l'ordre créé (non encore envoyé).
-    Appeler execute_strategy(page, order_id) pour confirmer.
+    Ordre Expert VENTE : protège une position existante avec SL+TP combinés.
+    Appeler execute_strategy(page, order_id) pour confirmer l'envoi.
     """
     smart = {
         "strategy":    "take_profit",
@@ -317,14 +337,36 @@ def create_expert_order(page, ticker: str, qty: int,
     }
     return create_order(
         page, ticker, side="sell", qty=qty,
-        order_type="meta", smart=smart,
-        validity="end_of_year",
+        order_type="meta", smart=smart, validity=validity,
+    )
+
+
+def create_expert_buy_order(page, ticker: str, qty: int,
+                            entry_price: float,
+                            stop_loss: float, take_profit: float,
+                            validity: str = "max") -> dict | None:
+    """
+    Ordre Expert ACHAT : achat à cours limité + SL/TP activés dès l'exécution.
+    Permet d'entrer en position ET de placer la protection en un seul ordre.
+    Appeler execute_strategy(page, order_id) pour confirmer l'envoi.
+    """
+    smart = {
+        "strategy":    "take_profit",
+        "stop_loss":   stop_loss,
+        "take_profit": take_profit,
+        "variation":   None,
+    }
+    return create_order(
+        page, ticker, side="buy", qty=qty,
+        order_type="meta", limit_price=entry_price,
+        smart=smart, validity=validity,
     )
 
 
 def format_order_summary(order_data: dict, ticker: str, side: str,
                          qty: int, order_type: str,
-                         limit_price: float = None, stop_price: float = None) -> str:
+                         limit_price: float = None, stop_price: float = None,
+                         validity: str = "max", sl: float = None, tp: float = None) -> str:
     """Formate un résumé lisible de l'ordre créé pour confirmation Telegram."""
     order_id = order_data.get("id") or order_data.get("order_id", "?")
 
@@ -345,13 +387,31 @@ def format_order_summary(order_data: dict, ticker: str, side: str,
     }
     type_fr = type_map.get(order_type, order_type)
 
+    # Libellé validité lisible
+    validity_labels = {
+        "seance":      "Séance",
+        "max":         "Durée max",
+        "revocation":  "Bonne pour annulation",
+        "end_of_year": "Fin d'année",
+        "day":         "Séance",
+    }
+    import re as _re
+    validity_fr = validity_labels.get(validity.lower() if validity else "max", validity or "Durée max")
+    if validity and _re.match(r"\d{2}/\d{2}/\d{4}", validity):
+        validity_fr = f"Jusqu'au {validity}"
+
     lines = [
         f"{side_fr} {qty}x {ticker}",
-        f"Type : {type_fr}",
+        f"Type     : {type_fr}",
+        f"Validité : {validity_fr}",
     ]
     if limit_price:
-        lines.append(f"Limite : {limit_price}{sym}")
-    if stop_price:
+        lines.append(f"Entrée : {limit_price}{sym}")
+    if sl:
+        lines.append(f"SL     : {sl}{sym}")
+    if tp:
+        lines.append(f"TP     : {tp}{sym}")
+    elif stop_price:
         lines.append(f"Seuil  : {stop_price}{sym}")
     if montant is not None:
         lines.append(f"Montant prévu : {montant}{sym}  (frais BD ajoutés à l'exécution)")

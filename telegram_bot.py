@@ -1293,10 +1293,11 @@ def cmd_connect(args, cid):
             send(
                 "Mode Playwright actif\n"
                 "Connecte a Bourse Direct\n\n"
-                "ORDRES\n"
-                "/ordre acheter TICKER QTE limite PRIX\n"
-                "/ordre acheter TICKER QTE marche\n"
-                "/ordre vendre TICKER QTE expert SL TP\n"
+                "ORDRES (validite optionnelle : seance | max | JJ/MM/AAAA)\n"
+                "/ordre acheter TICKER QTE expert ENTREE SL TP [validite]\n"
+                "/ordre acheter TICKER QTE limite PRIX [validite]\n"
+                "/ordre acheter TICKER QTE marche [validite]\n"
+                "/ordre vendre TICKER QTE expert SL TP [validite]\n"
                 "/oui — confirmer l'ordre affiché\n"
                 "/non — annuler l'ordre affiché\n"
                 "/annuler_bd TICKER — annuler un ordre en cours sur BD\n\n"
@@ -1363,13 +1364,27 @@ def _check_playwright_ready(cid) -> bool:
     return True
 
 
+def _parse_validity_arg(args, start_idx: int) -> str:
+    """Extrait le dernier argument optionnel de validité s'il est présent."""
+    import re
+    if len(args) > start_idx:
+        v = args[start_idx].strip()
+        if v.lower() in ("seance", "max", "revocation") or re.match(r"\d{2}/\d{2}/\d{4}$", v):
+            return v
+    return "max"
+
+
 def cmd_ordre(args, cid):
     """
-    /ordre vendre TICKER QTE marche
-    /ordre vendre TICKER QTE limite PRIX
-    /ordre vendre TICKER QTE expert SL TP
-    /ordre acheter TICKER QTE marche
-    /ordre acheter TICKER QTE limite PRIX
+    Syntaxe :
+    /ordre vendre TICKER QTE expert SL TP [validite]
+    /ordre vendre TICKER QTE limite PRIX [validite]
+    /ordre vendre TICKER QTE marche [validite]
+    /ordre acheter TICKER QTE expert ENTREE SL TP [validite]
+    /ordre acheter TICKER QTE limite PRIX [validite]
+    /ordre acheter TICKER QTE marche [validite]
+
+    Validite (optionnel, defaut=max) : seance | max | revocation | JJ/MM/AAAA
     """
     global _pending_order
     if not _check_playwright_ready(cid):
@@ -1377,24 +1392,26 @@ def cmd_ordre(args, cid):
     if len(args) < 4:
         send(
             "Usage :\n"
-            "/ordre vendre TICKER QTE marche\n"
-            "/ordre vendre TICKER QTE limite PRIX\n"
-            "/ordre vendre TICKER QTE expert SL TP\n"
-            "/ordre acheter TICKER QTE marche\n"
-            "/ordre acheter TICKER QTE limite PRIX\n"
-            "Ex: /ordre vendre EXENS.PA 17 expert 56.7 72.45",
+            "/ordre vendre TICKER QTE expert SL TP [validite]\n"
+            "/ordre vendre TICKER QTE limite PRIX [validite]\n"
+            "/ordre acheter TICKER QTE expert ENTREE SL TP [validite]\n"
+            "/ordre acheter TICKER QTE limite PRIX [validite]\n"
+            "/ordre acheter TICKER QTE marche [validite]\n\n"
+            "Validite : seance | max (defaut) | revocation | JJ/MM/AAAA\n"
+            "Ex: /ordre acheter TTE.PA 3 expert 54.2 49 61 max\n"
+            "Ex: /ordre vendre AIR.PA 1 expert 170 235 seance",
             cid,
         )
         return
 
-    sens      = args[0].lower()
-    ticker    = args[1].upper()
+    sens     = args[0].lower()
+    ticker   = args[1].upper()
     try:
-        qty   = int(args[2])
+        qty  = int(args[2])
     except ValueError:
         send("Quantite invalide.", cid)
         return
-    type_arg  = args[3].lower()
+    type_arg = args[3].lower()
 
     if sens not in ("vendre", "acheter"):
         send("Sens invalide : vendre ou acheter.", cid)
@@ -1404,7 +1421,6 @@ def cmd_ordre(args, cid):
 
     import bourse_direct_orders as bd_orders
 
-    # Vérifie que le ticker est résolvable
     info = bd_orders.get_ticker_info(ticker)
     if not info:
         send(f"Ticker {ticker} non reconnu.", cid)
@@ -1415,41 +1431,65 @@ def cmd_ordre(args, cid):
     def _do_order():
         global _pending_order
         try:
-            if type_arg == "expert":
+            if type_arg == "expert" and side == "sell":
+                # VENTE expert : SL + TP sur position existante
                 if len(args) < 6:
-                    send("Expert requiert SL et TP : /ordre vendre TICKER QTE expert SL TP", cid)
+                    send("Expert vente : /ordre vendre TICKER QTE expert SL TP [validite]", cid)
                     return
-                sl = float(args[4].replace(",", "."))
-                tp = float(args[5].replace(",", "."))
+                sl       = float(args[4].replace(",", "."))
+                tp       = float(args[5].replace(",", "."))
+                validity = _parse_validity_arg(args, 6)
                 order_data = playwright_session.run(
-                    lambda page: bd_orders.create_expert_order(page, ticker, qty, sl, tp)
+                    lambda page: bd_orders.create_expert_order(page, ticker, qty, sl, tp, validity)
                 )
                 is_expert = True
                 summary   = bd_orders.format_order_summary(
                     order_data or {}, ticker, side, qty, "meta",
-                    limit_price=tp, stop_price=sl
+                    validity=validity, sl=sl, tp=tp,
+                )
+            elif type_arg == "expert" and side == "buy":
+                # ACHAT expert : entrée à cours limité + SL/TP intégrés
+                if len(args) < 7:
+                    send("Expert achat : /ordre acheter TICKER QTE expert ENTREE SL TP [validite]", cid)
+                    return
+                entree   = float(args[4].replace(",", "."))
+                sl       = float(args[5].replace(",", "."))
+                tp       = float(args[6].replace(",", "."))
+                validity = _parse_validity_arg(args, 7)
+                order_data = playwright_session.run(
+                    lambda page: bd_orders.create_expert_buy_order(
+                        page, ticker, qty, entree, sl, tp, validity)
+                )
+                is_expert = True
+                summary   = bd_orders.format_order_summary(
+                    order_data or {}, ticker, side, qty, "meta",
+                    limit_price=entree, validity=validity, sl=sl, tp=tp,
                 )
             elif type_arg == "limite":
                 if len(args) < 5:
-                    send("Limite requiert un prix : /ordre vendre TICKER QTE limite PRIX", cid)
+                    send("Limite requiert un prix : /ordre acheter TICKER QTE limite PRIX [validite]", cid)
                     return
-                prix = float(args[4].replace(",", "."))
+                prix     = float(args[4].replace(",", "."))
+                validity = _parse_validity_arg(args, 5)
                 order_data = playwright_session.run(
                     lambda page: bd_orders.create_order(
-                        page, ticker, side, qty, order_type="limit", limit_price=prix)
+                        page, ticker, side, qty, order_type="limit",
+                        limit_price=prix, validity=validity)
                 )
                 is_expert = False
                 summary   = bd_orders.format_order_summary(
-                    order_data or {}, ticker, side, qty, "limit", limit_price=prix
+                    order_data or {}, ticker, side, qty, "limit",
+                    limit_price=prix, validity=validity,
                 )
             else:  # marche
+                validity = _parse_validity_arg(args, 4)
                 order_data = playwright_session.run(
                     lambda page: bd_orders.create_order(
-                        page, ticker, side, qty, order_type="market")
+                        page, ticker, side, qty, order_type="market", validity=validity)
                 )
                 is_expert = False
                 summary   = bd_orders.format_order_summary(
-                    order_data or {}, ticker, side, qty, "market"
+                    order_data or {}, ticker, side, qty, "market", validity=validity,
                 )
 
             if not order_data:
