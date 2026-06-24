@@ -903,12 +903,13 @@ def _extract_tickers(text: str) -> list[str]:
     )))
 
 
-def scan_opportunities(send_fn, ticker: str = None) -> None:
+def scan_opportunities(send_fn, ticker: str = None, progress_fn=None) -> None:
     """
     Scanner pro en 3 étapes :
     - Étape 0 : filtre quantitatif parallèle sur ~100 actions réelles (RSI/momentum/volume)
     - Étape 1 : analyse IA des positions + context marché
     - Étape 2 : validation IA complète des top 8 candidats filtrés
+    progress_fn(ticker, idx, total) — appelé avant chaque analyse IA individuelle.
     """
     try:
         if ticker:
@@ -1021,8 +1022,13 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
         rejected = []
         catalysts_global = research.market_catalysts()
 
-        for item in top_candidates:
+        for _scan_idx, item in enumerate(top_candidates):
             t = item["ticker"]
+            if progress_fn:
+                try:
+                    progress_fn(t, _scan_idx + 1, len(top_candidates))
+                except Exception:
+                    pass
             q = prices.get_quote(t)
             current_price = q.get("price")
             if not current_price:

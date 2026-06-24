@@ -42,6 +42,55 @@ def send(text: str, chat_id: str = None) -> bool:
         return False
 
 
+def send_editable(text: str, chat_id: str = None) -> int | None:
+    """Envoie un message et retourne son message_id (pour édition/suppression)."""
+    if not TELEGRAM_TOKEN:
+        return None
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": chat_id or CHAT_ID, "text": text},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json().get("result", {}).get("message_id")
+    except Exception as e:
+        print(f"Telegram send_editable error: {e}")
+    return None
+
+
+def edit_message(msg_id: int, text: str, chat_id: str = None) -> bool:
+    """Édite un message existant (max 4096 chars, Telegram ignore si identique)."""
+    if not TELEGRAM_TOKEN or not msg_id:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText",
+            json={"chat_id": chat_id or CHAT_ID, "message_id": msg_id, "text": text},
+            timeout=10,
+        )
+        return r.status_code == 200
+    except Exception as e:
+        print(f"Telegram edit error: {e}")
+    return False
+
+
+def delete_message(msg_id: int, chat_id: str = None) -> bool:
+    """Supprime un message Telegram (typiquement un message de progression)."""
+    if not TELEGRAM_TOKEN or not msg_id:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage",
+            json={"chat_id": chat_id or CHAT_ID, "message_id": msg_id},
+            timeout=10,
+        )
+        return r.status_code == 200
+    except Exception as e:
+        print(f"Telegram delete error: {e}")
+    return False
+
+
 # ─── Indicateur « écrit… » (trois points) ────────────────────────────────────
 
 class _typing:
@@ -826,8 +875,16 @@ def cmd_morning(args, cid):
 
 
 def cmd_scan(args, cid):
-    send("Scan en cours...", cid)
-    _run_long(cid, analysis.scan_opportunities, lambda m: send(m, cid))
+    prog_id = send_editable("🔍 Scan en cours...", cid)
+
+    def progress_fn(ticker: str, idx: int, total: int):
+        edit_message(prog_id, f"🔍 Analyse {ticker}... ({idx}/{total})", cid)
+
+    def send_final(text: str):
+        delete_message(prog_id, cid)
+        send(text, cid)
+
+    _run_long(cid, analysis.scan_opportunities, send_final, progress_fn=progress_fn)
 
 
 def cmd_research(args, cid):
