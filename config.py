@@ -41,6 +41,9 @@ POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "800"))
 # qui laissent courir les gagnants sur avis IA
 TP_ALERTS = os.getenv("TP_ALERTS", "on").strip().lower() not in ("off", "false", "0", "no")
 
+# Trailing stop : seuil % au-dessus du PRU pour déclencher le relevé du SL au PRU
+BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "5"))
+
 # Scheduler (Paris time, 24h format)
 CHECK_TIMES = ["09:00", "12:00", "15:00", "17:00"]
 ANALYSIS_TIME = "09:05"

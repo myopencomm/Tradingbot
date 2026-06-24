@@ -3,7 +3,7 @@ import pytz
 import portfolio
 import prices
 import orders
-from config import TP_ALERTS
+from config import TP_ALERTS, BREAKEVEN_THRESHOLD
 
 PARIS = pytz.timezone("Europe/Paris")
 
@@ -96,6 +96,10 @@ def check_positions(send_fn) -> None:
         if cfg.get("sl_proche_notified") and price > cfg["target_low"] * 1.08:
             portfolio.mark_sl_proche(name, False)
 
+        # Réarme l'alerte breakeven si le SL a finalement été relevé au PRU
+        if cfg.get("breakeven_notified") and cfg["target_low"] >= cfg["entry_price"]:
+            portfolio.mark_breakeven(name, False)
+
         if high4h >= cfg["target_high"]:
             if TP_ALERTS and not cfg.get("tp_breach_notified", False):
                 alerts.append({"type": "TP", "name": name, "cfg": cfg,
@@ -113,6 +117,16 @@ def check_positions(send_fn) -> None:
                 alerts.append({"type": "SL_PROCHE", "name": name, "cfg": cfg,
                                "price": price, "trigger": low4h,
                                "change": change_pct, "pnl": pnl, "sym": sym})
+
+        # Trailing stop : quand la position atteint +BREAKEVEN_THRESHOLD% au-dessus du PRU,
+        # propose (et enregistre) un relevé du SL au PRU — zéro perte garanti.
+        entry = cfg["entry_price"]
+        if (change_pct >= BREAKEVEN_THRESHOLD
+                and cfg["target_low"] < entry
+                and not cfg.get("breakeven_notified", False)):
+            alerts.append({"type": "BREAKEVEN", "name": name, "cfg": cfg,
+                           "price": price, "trigger": price,
+                           "change": change_pct, "pnl": pnl, "sym": sym})
 
     sent_any = False
     for a in alerts:
@@ -150,6 +164,19 @@ def check_positions(send_fn) -> None:
             portfolio.mark_sl_breach(a["name"])
             sent_any = True
             continue
+        elif a["type"] == "BREAKEVEN":
+            entry = cfg["entry_price"]
+            # Met à jour target_low au PRU dans positions.json immédiatement
+            portfolio.update_sl(a["name"], entry)
+            portfolio.mark_breakeven(a["name"])
+            msg = (
+                f"🔒 TRAILING STOP — {a['name']}\n\n"
+                f"Position à {a['change']:+.1f}% au-dessus du PRU ({sym}{entry})\n"
+                f"SL relevé automatiquement au PRU dans le bot.\n"
+                f"P&L garanti ≥ 0 si exécuté.\n\n"
+                f"Place le nouvel ordre expert protection (SL = PRU) :\n\n"
+                + orders.expert_protection(cfg["ticker"], cfg["qty"], entry, cfg["target_high"])
+            )
         else:
             msg = (
                 f"⚠️ SL PROCHE — {a['name']} (alerte unique par épisode)\n\n"
