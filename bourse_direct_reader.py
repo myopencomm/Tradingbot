@@ -253,10 +253,11 @@ def _parse_order(text: str) -> dict | None:
     if m_name:
         order["name"] = m_name.group(1).strip()
 
-    # Sens — "(Achat|Vente)(CPT)" ou standalone
-    m = re.search(r'(Achat|Vente)\s*\(([A-Z]+)\)', flat)
-    if m:
-        order["sens"] = m.group(1)
+    # Sens — dans un bloc consolidé plusieurs ordres coexistent (ex: Achat exécuté
+    # + Vente en cours). On prend le DERNIER match = l'ordre actif le plus récent.
+    sens_matches = re.findall(r'(Achat|Vente)\s*\([A-Z]+\)', flat)
+    if sens_matches:
+        order["sens"] = sens_matches[-1]
     else:
         if re.search(r'\bVente\b', flat):
             order["sens"] = "Vente"
@@ -269,15 +270,20 @@ def _parse_order(text: str) -> dict | None:
             order["type"] = t
             break
 
-    # Seuil (SL) — variantes : "Seuil 57.20 €", "Stop 57.20 €"
-    m_seuil = (re.search(r'Seuil\s*([\d\s.,]+)\s*€', flat)
-               or re.search(r'Stop\s+([\d\s.,]+)\s*€', flat))
+    # Seuil (SL) — on cherche d'abord "Seuil X € En cours" (partie active),
+    # pas "Seuil X € Annulé" (partie annulée d'un ancien ordre dans le même bloc).
+    m_seuil = (re.search(r'Seuil\s*([\d.,]+)\s*€\s*En cours', flat)
+               or re.search(r'Stop\s+([\d.,]+)\s*€\s*En cours', flat)
+               or re.search(r'Seuil\s*([\d.,]+)\s*€', flat)
+               or re.search(r'Stop\s+([\d.,]+)\s*€', flat))
     if m_seuil:
         order["seuil"] = _parse_float(m_seuil.group(1))
 
-    # Profit (TP) — variantes : "Profit 72.90 €", "Limite 72.90 €"
-    m_profit = (re.search(r'Profit\s*([\d\s.,]+)\s*€', flat)
-                or re.search(r'Limite\s+([\d\s.,]+)\s*€', flat))
+    # Profit (TP) — idem : priorité à "Profit X € En cours"
+    m_profit = (re.search(r'Profit\s*([\d.,]+)\s*€\s*En cours', flat)
+                or re.search(r'Limite\s+([\d.,]+)\s*€\s*En cours', flat)
+                or re.search(r'Profit\s*([\d.,]+)\s*€', flat)
+                or re.search(r'Limite\s+([\d.,]+)\s*€', flat))
     if m_profit:
         order["profit"] = _parse_float(m_profit.group(1))
 
