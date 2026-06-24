@@ -884,16 +884,18 @@ def cmd_scan(args, cid):
 
     prog_id = send_editable("🔍 Scan en cours...", cid)
 
-    def progress_fn(ticker: str, idx: int, total: int):
-        edit_message(prog_id, f"🔍 Analyse {ticker}... ({idx}/{total})", cid)
+    def update_fn(text: str):
+        # Édite le message de progression en place
+        edit_message(prog_id, text, cid)
 
     def send_final(text: str):
+        # Supprime le message de progression puis envoie le résultat final
         delete_message(prog_id, cid)
         send(text, cid)
 
     def _run():
         try:
-            analysis.scan_opportunities(send_final, progress_fn=progress_fn)
+            analysis.scan_opportunities(send_final, update_fn=update_fn)
         finally:
             _scan_lock.release()
 

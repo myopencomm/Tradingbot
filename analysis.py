@@ -903,14 +903,22 @@ def _extract_tickers(text: str) -> list[str]:
     )))
 
 
-def scan_opportunities(send_fn, ticker: str = None, progress_fn=None) -> None:
+def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=None) -> None:
     """
     Scanner pro en 3 étapes :
     - Étape 0 : filtre quantitatif parallèle sur ~100 actions réelles (RSI/momentum/volume)
     - Étape 1 : analyse IA des positions + context marché
     - Étape 2 : validation IA complète des top 8 candidats filtrés
-    progress_fn(ticker, idx, total) — appelé avant chaque analyse IA individuelle.
+
+    update_fn(text) — édite un message de progression en place (optionnel).
+    Si fourni, tous les messages intermédiaires + ticker passent par update_fn.
+    Le send_fn est réservé à l'envoi du résultat final.
     """
+    # Compat : progress_fn ancienne API → update_fn
+    if progress_fn and not update_fn:
+        _pf = progress_fn
+        update_fn = lambda text: _pf(text.split("Analyse ")[-1].split("...")[0] if "Analyse " in text else text, 0, 0)
+    _upd = update_fn if update_fn else send_fn
     try:
         if ticker:
             return research_ticker(send_fn, ticker)
@@ -940,7 +948,7 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None) -> None:
         }
         scan_mode = REGIME_SCAN_MODE.get(regime, "standard")
 
-        send_fn(
+        _upd(
             f"{emoji} {regime_summary}\n"
             f"Mode scan : {scan_mode}\n\n"
             f"Analyse quantitative de {len(SCAN_UNIVERSE)} actions... (~30 sec)"
@@ -985,7 +993,7 @@ Donner : MAINTENIR / RÉDUIRE EXPOSITION / VENDRE — raison en 5 mots."""
             return
 
         rel_label = " · force relative vs indice" if regime == "CORRECTION" else ""
-        send_fn(
+        _upd(
             f"✅ {len(screened)} titres passent les filtres.\n"
             f"Analyse IA des top {min(8, len(screened))}"
             f"{rel_label}..."
@@ -1024,11 +1032,10 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 
         for _scan_idx, item in enumerate(top_candidates):
             t = item["ticker"]
-            if progress_fn:
-                try:
-                    progress_fn(t, _scan_idx + 1, len(top_candidates))
-                except Exception:
-                    pass
+            try:
+                _upd(f"🔍 Analyse {t}... ({_scan_idx + 1}/{len(top_candidates)})")
+            except Exception:
+                pass
             q = prices.get_quote(t)
             current_price = q.get("price")
             if not current_price:
