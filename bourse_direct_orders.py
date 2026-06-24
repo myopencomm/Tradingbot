@@ -231,7 +231,10 @@ def create_order(page, ticker: str, side: str, qty: int,
         print(f"[BD Orders] create_order HTTP {result.get('status')} : {result.get('data')}")
         return None
 
-    return result.get("data")
+    data = result.get("data")
+    # Log complet pour découvrir la structure réelle de la réponse BD
+    print(f"[BD Orders] create_order OK : {json.dumps(data)[:600]}")
+    return data
 
 
 # ── Étape 2 : confirmer l'envoi (irréversible) ───────────────────────────────
@@ -323,7 +326,14 @@ def format_order_summary(order_data: dict, ticker: str, side: str,
                          qty: int, order_type: str,
                          limit_price: float = None, stop_price: float = None) -> str:
     """Formate un résumé lisible de l'ordre créé pour confirmation Telegram."""
-    fees = order_data.get("fees", {}).get("total", {}).get("amount", "?")
+    # La réponse BD peut mettre les frais sous plusieurs chemins
+    fees_raw = (
+        order_data.get("fees", {}).get("total", {}).get("amount")
+        or order_data.get("commission")
+        or order_data.get("totalFees")
+        or order_data.get("frais")
+        or "?"
+    )
     order_id = order_data.get("id") or order_data.get("order_id", "?")
 
     side_fr  = "ACHAT" if side == "buy" else "VENTE"
@@ -344,7 +354,7 @@ def format_order_summary(order_data: dict, ticker: str, side: str,
         lines.append(f"Limite : {limit_price}€")
     if stop_price:
         lines.append(f"Seuil  : {stop_price}€")
-    lines.append(f"Frais  : {fees}€")
+    lines.append(f"Frais  : {fees_raw}€")
     lines.append(f"Ref BD : {order_id}")
 
     return "\n".join(lines)
