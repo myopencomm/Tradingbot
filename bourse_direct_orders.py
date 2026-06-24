@@ -23,8 +23,35 @@ BD_LOGIN    = os.getenv("BD_LOGIN", "")
 # Numéro de compte CTO — donnée personnelle, à mettre dans .env (BD_ACCOUNT)
 BD_ACCOUNT  = os.getenv("BD_ACCOUNT", "")
 
-# Token CSRF statique extrait du bundle ordertrade.bundle.js
-_CSRF = "OWY4NmQwODE4ODRjN2Q2NTlhMmZlYWEwYzU1YWQwMTVhM2JmNGYxYjJiMGI4MjJjZDE1ZDMGYwMGEwOA=="
+# Token CSRF — extrait dynamiquement de la session Playwright si possible,
+# sinon fallback sur la valeur statique du bundle ordertrade.bundle.js.
+_CSRF_STATIC = "OWY4NmQwODE4ODRjN2Q2NTlhMmZlYWEwYzU1YWQwMTVhM2JmNGYxYjJiMGI4MjJjZDE1ZDMGYwMGEwOA=="
+
+
+def _get_csrf(page) -> str:
+    """
+    Tente d'extraire le token CSRF depuis la page BD (meta tag, cookie XSRF, global JS).
+    Retourne le token statique du bundle en fallback.
+    """
+    try:
+        token = page.evaluate("""() => {
+            // 1. Meta tag
+            const meta = document.querySelector('meta[name="csrf-token"], meta[name="_token"]');
+            if (meta && meta.content) return meta.content;
+            // 2. Cookie XSRF-TOKEN (standard Angular/Laravel)
+            const xsrf = document.cookie.split(';').map(c => c.trim())
+                .find(c => c.startsWith('XSRF-TOKEN=') || c.startsWith('csrf='));
+            if (xsrf) return xsrf.split('=').slice(1).join('=');
+            // 3. Globals JS injectés par BD
+            if (window._csrf) return window._csrf;
+            if (window.csrf_token) return window.csrf_token;
+            return null;
+        }""")
+        if token:
+            return token
+    except Exception:
+        pass
+    return _CSRF_STATIC
 
 # ── Mapping yfinance ticker → données BD ─────────────────────────────────────
 # mic       : Market Identifier Code (XPAR=Euronext Paris, XNAS=NASDAQ, XNYS=NYSE...)
@@ -90,29 +117,40 @@ def register_ticker(yf_ticker: str, bd_ticker: str, mic: str, currency: str):
 
 # ── Appel API interne (via fetch Playwright avec cookies de session) ──────────
 
+# Dernière réponse brute — permet au caller de logguer/afficher l'erreur
+_last_raw: dict = {}
+
+
 def _api_post(page, endpoint: str, payload: dict) -> dict | None:
     """
     POST sur hub/trading via fetch() dans le contexte Playwright.
     Les cookies de session BD sont transmis automatiquement.
+    Passe le payload via argument JS (évite les problèmes d'échappement).
     """
-    url         = BD_API_BASE + endpoint
-    payload_str = json.dumps(payload)
-    result = page.evaluate(f"""async () => {{
-        try {{
-            const resp = await fetch({json.dumps(url)}, {{
-                method: 'POST',
-                headers: {{'Content-Type': 'application/json'}},
-                body: JSON.stringify({payload_str}),
-                credentials: 'include'
-            }});
-            const text = await resp.text();
-            let data;
-            try {{ data = JSON.parse(text); }} catch(e) {{ data = {{raw: text}}; }}
-            return {{ok: resp.ok, status: resp.status, data}};
-        }} catch(e) {{
-            return {{ok: false, error: e.toString()}};
-        }}
-    }}""")
+    global _last_raw
+    url = BD_API_BASE + endpoint
+    result = page.evaluate(
+        """async ([url, payload]) => {
+            try {
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                    credentials: 'include'
+                });
+                const text = await resp.text();
+                let data;
+                try { data = JSON.parse(text); } catch(e) { data = {raw: text}; }
+                return {ok: resp.ok, status: resp.status, data};
+            } catch(e) {
+                return {ok: false, status: 0, error: e.toString()};
+            }
+        }""",
+        [url, payload],
+    )
+    _last_raw = result or {}
+    if result and not result.get("ok"):
+        print(f"[BD Orders] {endpoint} HTTP {result.get('status')} : {json.dumps(result.get('data', {}))[:400]}")
     return result
 
 
@@ -208,7 +246,7 @@ def send_order(page, order_id: str) -> dict | None:
     payload = {
         "order_id": order_id,
         "login":    BD_LOGIN.upper(),
-        "csrf":     _CSRF,
+        "csrf":     _get_csrf(page),
     }
     result = _api_post(page, "/order/send", payload)
     if not result:
@@ -227,7 +265,7 @@ def cancel_order(page, order_id: str) -> dict | None:
     payload = {
         "order_id": order_id,
         "login":    BD_LOGIN.upper(),
-        "csrf":     _CSRF,
+        "csrf":     _get_csrf(page),
     }
     result = _api_post(page, "/order/cancel", payload)
     if not result:
@@ -246,7 +284,7 @@ def execute_strategy(page, order_id: str) -> dict | None:
     payload = {
         "order_id": order_id,
         "login":    BD_LOGIN.upper(),
-        "csrf":     _CSRF,
+        "csrf":     _get_csrf(page),
     }
     result = _api_post(page, "/order/execute/strategy", payload)
     if not result:

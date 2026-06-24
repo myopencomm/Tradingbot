@@ -1343,8 +1343,8 @@ def cmd_ordre(args, cid):
                 order_data = playwright_session.run(
                     lambda page: bd_orders.create_expert_order(page, ticker, qty, sl, tp)
                 )
-                is_expert  = True
-                summary    = bd_orders.format_order_summary(
+                is_expert = True
+                summary   = bd_orders.format_order_summary(
                     order_data or {}, ticker, side, qty, "meta",
                     limit_price=tp, stop_price=sl
                 )
@@ -1357,8 +1357,8 @@ def cmd_ordre(args, cid):
                     lambda page: bd_orders.create_order(
                         page, ticker, side, qty, order_type="limit", limit_price=prix)
                 )
-                is_expert  = False
-                summary    = bd_orders.format_order_summary(
+                is_expert = False
+                summary   = bd_orders.format_order_summary(
                     order_data or {}, ticker, side, qty, "limit", limit_price=prix
                 )
             else:  # marche
@@ -1366,13 +1366,23 @@ def cmd_ordre(args, cid):
                     lambda page: bd_orders.create_order(
                         page, ticker, side, qty, order_type="market")
                 )
-                is_expert  = False
-                summary    = bd_orders.format_order_summary(
+                is_expert = False
+                summary   = bd_orders.format_order_summary(
                     order_data or {}, ticker, side, qty, "market"
                 )
 
             if not order_data:
-                send(f"Echec creation ordre {ticker}. Verifier session BD (/sync).", cid)
+                # Montre la réponse brute de la dernière requête pour diagnostic
+                last = bd_orders._last_raw
+                raw_txt = (
+                    f"\nHTTP {last.get('status', '?')} — "
+                    f"{str(last.get('data') or last.get('error', ''))[:300]}"
+                ) if last else ""
+                send(
+                    f"Echec creation ordre {ticker}.{raw_txt}\n\n"
+                    f"Si session expirée : /connect pour reconnecter.",
+                    cid,
+                )
                 return
 
             order_id = order_data.get("id") or order_data.get("order_id")
