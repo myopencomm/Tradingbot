@@ -1143,8 +1143,17 @@ Si ACHAT : format exact :
 - Risque : LOW / MEDIUM / HIGH"""
 
             val = _strip_markdown(ai.complete(validate_prompt, max_tokens=300))
-            if val.strip().upper().startswith("EXCLU"):
-                reason = val.strip().split("—", 1)[1].strip()[:70] if "—" in val else "écarté"
+            # Détection EXCLU robuste : l'IA peut écrire l'en-tête de la société
+            # sur la première ligne avant de dire EXCLU sur la suivante.
+            # On cherche dans les 5 premières lignes, pas seulement startswith.
+            first_lines = "\n".join(val.strip().splitlines()[:5]).upper()
+            if "EXCLU" in first_lines:
+                # Extrait la raison depuis la ligne qui contient EXCLU
+                reason = "écarté"
+                for line in val.splitlines():
+                    if "EXCLU" in line.upper():
+                        reason = line.split("—", 1)[1].strip()[:70] if "—" in line else line.strip()[:70]
+                        break
                 label = f"{company_name} ({t})" if company_name != t else t
                 rejected.append(f"- {label} : {reason}")
                 continue
@@ -1195,10 +1204,11 @@ Si ACHAT : format exact :
             result_parts.append("OPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities))
         else:
             no_opp = "Aucun candidat ne passe le filtre technique aujourd'hui."
-            if rejected:
-                no_opp += "\n\nAnalysés et écartés :\n" + "\n".join(rejected)
             no_opp += "\n\n→ /research TICKER pour un avis ciblé sur un titre précis."
             result_parts.append(no_opp)
+        # Les exclusions sont toujours affichées (même quand il y a des opportunités)
+        if rejected:
+            result_parts.append("EXCLUS\n" + "\n".join(rejected))
 
         send_fn(
             f"{emoji} SCAN OPPORTUNITÉS — {regime_summary}\n"
