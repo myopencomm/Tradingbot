@@ -1,4 +1,6 @@
 import math
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pytz
 import portfolio
@@ -8,6 +10,41 @@ from ai_provider import get_provider, VISION_PROMPT
 from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT,
                     POSITION_BUDGET_PCT, POSITION_BUDGET_MAX)
+
+# ── Univers de scan (~100 actions Bourse Direct) ──────────────────────────────
+# Le filtre quantitatif (RSI/momentum/volume) élimine les tickers invalides
+# ou sans données — inutile de maintenir cette liste à la main.
+SCAN_UNIVERSE = [
+    # CAC 40
+    "AI.PA", "AIR.PA", "ALO.PA", "BN.PA", "BNP.PA", "CA.PA", "CAP.PA",
+    "CS.PA", "DG.PA", "DSY.PA", "EL.PA", "EN.PA", "ENGI.PA", "ERF.PA",
+    "TTE.PA", "GLE.PA", "HO.PA", "KER.PA", "LR.PA", "MC.PA", "ML.PA",
+    "MT.AS", "ORA.PA", "PUB.PA", "RI.PA", "RMS.PA", "RNO.PA", "SAF.PA",
+    "SAN.PA", "SGO.PA", "STM.PA", "SU.PA", "TEP.PA", "VIE.PA", "AC.PA",
+    "ACA.PA", "STLAM.PA",
+    # Euronext Paris — Midcap / SBF 120
+    "AF.PA", "AMUN.PA", "BIM.PA", "DASSAV.PA", "FDJ.PA", "FR.PA",
+    "GET.PA", "GTT.PA", "RXL.PA", "SEB.PA", "SFCA.PA", "UBI.PA",
+    "VK.PA", "COFA.PA", "SCOR.PA", "SPIE.PA", "TFI.PA", "LI.PA",
+    "TKTT.PA", "FNAC.PA", "WLN.PA", "BOL.PA", "EDEN.PA", "FLO.PA",
+    "OREP.PA", "LANC.PA", "TNG.PA", "SESL.PA", "CAPP.PA",
+    # Euronext Amsterdam
+    "ASML.AS", "INGA.AS", "PHIA.AS", "UNA.AS", "ADYEN.AS", "HEIA.AS",
+    "NN.AS", "AKZA.AS", "WKL.AS",
+    # Euronext Bruxelles
+    "UCB.BR", "ABI.BR", "SOLB.BR", "GBLB.BR",
+    # US — Tech
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA",
+    "AMD", "QCOM", "NFLX", "CRM", "ORCL", "INTC", "MU",
+    # US — Finance
+    "JPM", "GS", "V", "MA", "BAC",
+    # US — Pharma / Santé
+    "JNJ", "PFE", "ABBV", "LLY", "MRK", "AMGN",
+    # US — Énergie / Défense / Industrie
+    "XOM", "CVX", "RTX", "LMT", "BA", "NOC",
+    # US — Conso / Autre
+    "COST", "WMT", "DIS", "PYPL", "SBUX",
+]
 
 PARIS = pytz.timezone("Europe/Paris")
 
@@ -76,8 +113,6 @@ RÈGLES DE FORMAT STRICTES — message Telegram mobile :
 - Chiffres : toujours avec unité (€, %, t)
 - Maximum 25 lignes au total — va à l'essentiel
 """
-
-import re
 
 def _strip_markdown(text: str) -> str:
     """Supprime les symboles Markdown résiduels pour un affichage propre sur Telegram."""
@@ -786,9 +821,43 @@ Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
         send_fn(f"Erreur analyse {ticker}: {e}")
 
 
+def _quant_screen(universe: list[str], held_tickers: set[str]) -> list[dict]:
+    """
+    Filtre quantitatif parallèle sur tout l'univers de scan.
+    Retourne les candidats filtrés et triés par score momentum×volume.
+    Critères d'exclusion : RSI > 75 (surachété), RSI < 28 (free-fall), mom_1m < -8%.
+    """
+    candidates = [t for t in universe if t.upper() not in held_tickers]
+
+    def fetch_one(ticker):
+        tech = prices.get_technicals(ticker)
+        if not tech:
+            return None
+        rsi = tech.get("rsi")
+        mom = tech.get("momentum_1m")
+        vol = tech.get("vol_ratio") or 1.0
+        if rsi is None or mom is None:
+            return None
+        if rsi > 75 or rsi < 28 or mom < -8:
+            return None
+        score = mom * (1 + vol * 0.2)
+        return {"ticker": ticker, "rsi": rsi, "mom_1m": mom, "vol_ratio": vol, "score": score}
+
+    results = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_ticker = {executor.submit(fetch_one, t): t for t in candidates}
+        for future in as_completed(future_to_ticker, timeout=120):
+            try:
+                r = future.result(timeout=20)
+                if r:
+                    results.append(r)
+            except Exception as e:
+                print(f"[quant_screen] {future_to_ticker.get(future, '?')}: {e}")
+    return sorted(results, key=lambda x: x["score"], reverse=True)
+
+
 def _extract_tickers(text: str) -> list[str]:
     """Extrait les tickers format Yahoo Finance d'un texte (ex: GET.PA, MSFT, BP.L)."""
-    import re
     return list(dict.fromkeys(re.findall(
         r'\b([A-Z]{2,8}(?:\.[A-Z]{1,3})?)\b', text
     )))
@@ -796,40 +865,61 @@ def _extract_tickers(text: str) -> list[str]:
 
 def scan_opportunities(send_fn, ticker: str = None) -> None:
     """
-    Scan en 2 passes pour éviter l'incohérence avec /research :
-    - Passe 1 : l'IA identifie des tickers candidats depuis les news/catalyseurs
-    - Passe 2 : on fetch les vrais technicals + fondamentaux pour chaque candidat,
-      puis l'IA valide avec les mêmes données que /research (peut dire NEUTRE → exclu)
+    Scanner pro en 3 étapes :
+    - Étape 0 : filtre quantitatif parallèle sur ~100 actions réelles (RSI/momentum/volume)
+    - Étape 1 : analyse IA des positions + context marché
+    - Étape 2 : validation IA complète des top 8 candidats filtrés
     """
     try:
+        if ticker:
+            return research_ticker(send_fn, ticker)
+
         ai = get_provider()
         cash = portfolio.get_cash()
         snapshot = _portfolio_snapshot()
         ctx = _trading_context()
+        today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
+
+        held_tickers = {cfg["ticker"].upper() for cfg in portfolio.load().get("positions", {}).values()}
+
+        send_fn(
+            f"🔍 Scan pro en cours...\n"
+            f"Analyse quantitative de {len(SCAN_UNIVERSE)} actions "
+            f"(RSI · momentum · volume)\nPatiente ~30 secondes."
+        )
+
+        # ── Étape 0 : filtre quantitatif parallèle ───────────────────────────
+        screened = _quant_screen(SCAN_UNIVERSE, held_tickers)
+        print(f"[scan] {len(screened)}/{len(SCAN_UNIVERSE)} titres passent les filtres quant")
+
+        if not screened:
+            send_fn(
+                "🔍 SCAN\n\nAucun titre ne passe les filtres quantitatifs aujourd'hui.\n"
+                "Marché en correction ou manque de momentum généralisé.\n"
+                "→ /research TICKER pour une analyse ciblée."
+            )
+            return
+
+        send_fn(
+            f"✅ {len(screened)} titres passent les filtres "
+            f"(RSI 28-75, momentum > -8%).\n"
+            f"Analyse IA des top {min(8, len(screened))} par score momentum×volume..."
+        )
+
+        # ── Étape 1 : analyse IA des positions en portefeuille ───────────────
+        macro = research.market_context()
+        macro_ctx = _macro_context()
         ctx_block = f"\n{ctx}\n" if ctx else ""
 
-        if ticker:  # backward compat
-            return research_ticker(send_fn, ticker)
-
-        today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
-        macro     = research.market_context()
-        catalysts = research.market_catalysts()
-
-        # News yfinance sur les positions en portefeuille
         positions_news = []
         for name, cfg in portfolio.load().get("positions", {}).items():
-            pos_news = prices.get_yf_news(cfg["ticker"], max_items=2)
-            for n in pos_news:
+            for n in prices.get_yf_news(cfg["ticker"], max_items=2):
                 positions_news.append(f"- {name} : {n['title']}")
-        news_block = ("\nNEWS RÉCENTES POSITIONS\n" + "\n".join(positions_news)) if positions_news else ""
+        news_block = ("\nNEWS POSITIONS\n" + "\n".join(positions_news)) if positions_news else ""
 
-        # ── Passe 1 : positions + candidats (tickers uniquement) ─────────────
-        macro_ctx = _macro_context()
-        pass1_prompt = f"""{TRADER_SYSTEM}
-{TICKER_RULES}
+        portf_prompt = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {macro_ctx}
-AUJOURD'HUI : {today_str}
 {ctx_block}
 {snapshot}
 {news_block}
@@ -837,71 +927,30 @@ AUJOURD'HUI : {today_str}
 CONTEXTE MARCHÉ
 {macro}
 
-CATALYSEURS IMMINENTS — TOUS MARCHÉS
-{catalysts}
+TÂCHE : Pour chaque position en portefeuille, donne 1 ligne :
+MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
+        portfolio_summary = _strip_markdown(ai.complete(portf_prompt, max_tokens=300))
 
-TÂCHE EN 2 PARTIES :
-
-1. Pour chaque position en portefeuille : 1 ligne — MAINTENIR / SURVEILLER / VENDRE + raison.
-
-2. Identifie 6 à 10 tickers CANDIDATS de deux types (tous marchés Bourse Direct) :
-   A) CATALYSEUR : événement futur daté APRÈS le {today_str} (résultats, OPA, FDA, contrat).
-   B) MOMENTUM : tendance haussière sur 3+ mois rendant +{_TP}% atteignable.
-   Propose LARGEMENT — ne pré-filtre pas. La validation technique (RSI, couteau qui tombe,
-   tendance) sera faite ensuite avec les données réelles. Seule exclusion dès maintenant :
-   valeurs/secteurs explicitement bannis dans le contexte personnel.
-Réponds pour la partie 2 UNIQUEMENT avec les tickers, format Yahoo Finance, un par ligne.
-Exemple : GET.PA
-          DSY.PA
-          MSFT
-Ne donne PAS de prix, pas d'analyse — juste les tickers."""
-
-        pass1 = _strip_markdown(ai.complete(pass1_prompt, max_tokens=600))
-
-        # Sépare l'analyse positions de la liste de tickers
-        lines = pass1.strip().splitlines()
-        portfolio_lines = []
-        candidate_lines = []
-        in_candidates = False
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                continue
-            # Heuristique : ligne courte sans ponctuation = ticker candidat
-            if len(stripped) <= 12 and stripped.replace(".", "").replace("-", "").isupper():
-                in_candidates = True
-            if in_candidates:
-                candidate_lines.append(stripped)
-            else:
-                portfolio_lines.append(stripped)
-
-        portfolio_summary = "\n".join(portfolio_lines)
-        raw_tickers = _extract_tickers(" ".join(candidate_lines))
-
-        # Filtre : uniquement les tickers Yahoo Finance valides (prix disponible)
-        held_tickers = {cfg["ticker"].upper() for cfg in portfolio.load().get("positions", {}).values()}
-        valid_candidates = []
-        for t in raw_tickers[:12]:
-            if t.upper() in held_tickers:
-                continue
-            q = prices.get_quote(t)
-            if q.get("price"):
-                valid_candidates.append((t, q["price"]))
-
-        # ── Passe 2 : validation avec vrais données techniques ───────────────
-        if not valid_candidates:
-            send_fn(
-                f"🔍 SCAN OPPORTUNITÉS\n\n"
-                f"POSITIONS\n{portfolio_summary}\n\n"
-                f"Aucun candidat avec prix disponible identifié aujourd'hui.\n"
-                f"→ Essaie /research TICKER pour une analyse ciblée.\n\n"
-                f"💰 Cash: {cash}€"
-            )
-            return
-
+        # ── Étape 2 : validation IA des top candidats filtrés ────────────────
+        top_candidates = screened[:8]
         opportunities = []
         rejected = []
-        for t, current_price in valid_candidates[:6]:
+        catalysts_global = research.market_catalysts()
+
+        for item in top_candidates:
+            t = item["ticker"]
+            q = prices.get_quote(t)
+            current_price = q.get("price")
+            if not current_price:
+                continue
+
+            tech   = {"rsi": item["rsi"], "momentum_1m": item["mom_1m"], "vol_ratio": item["vol_ratio"]}
+            funds  = prices.get_fundamentals(t)
+            pctx   = prices.get_price_context(t)
+            yf_news = prices.get_yf_news(t, max_items=4)
+            web    = research.research_stock(t)
+            cats   = research.search_catalysts(t)
+            social = research.get_social_sentiment(t)
             tech   = prices.get_technicals(t)
             funds  = prices.get_fundamentals(t)
             pctx   = prices.get_price_context(t)
@@ -922,11 +971,15 @@ Ne donne PAS de prix, pas d'analyse — juste les tickers."""
 
             tech_block = ""
             if tech:
+                score_line = (f"- Score quant : {item['score']:+.1f} "
+                              f"(rang {top_candidates.index(item)+1}/{len(top_candidates)})\n"
+                              if item in top_candidates else "")
                 tech_block = (
                     f"\nINDICATEURS TECHNIQUES\n"
                     f"- RSI 14j : {tech.get('rsi', 'N/A')}\n"
                     f"- Momentum 1 mois : {tech.get('momentum_1m', 'N/A'):+}%\n"
                     f"- Volume ratio : {tech.get('vol_ratio', 'N/A')}x moyenne 20j\n"
+                    f"{score_line}"
                 )
 
             funds_lines = []
@@ -1038,7 +1091,13 @@ Si ACHAT : donne format exact :
             no_opp += "\n\n→ /research TICKER pour un avis ciblé sur un titre précis."
             result_parts.append(no_opp)
 
-        send_fn(f"🔍 SCAN OPPORTUNITÉS\n\n" + "\n\n".join(result_parts) + f"\n\n💰 Cash: {cash}€")
+        nb_passed = len(screened)
+        send_fn(
+            f"🔍 SCAN OPPORTUNITÉS — {len(SCAN_UNIVERSE)} actions scannées · "
+            f"{nb_passed} passent les filtres quant\n\n"
+            + "\n\n".join(result_parts)
+            + f"\n\n💰 Cash: {cash}€"
+        )
 
     except Exception as e:
         send_fn(f"⚠️ Erreur scan: {e}")
