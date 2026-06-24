@@ -124,6 +124,8 @@ def sync(page, send_fn) -> bool:
                 detail.append(f"SL {seuil}€")
             if profit:
                 detail.append(f"TP {profit}€")
+            if not detail:
+                detail.append("⚠️ SL/TP non lus — voir logs")
             lines.append(f"  {o.get('name','?')} : {sens} {typ} {' | '.join(detail)} ({statut})")
 
             # Met à jour la position locale correspondante (seulement si elle existe)

@@ -120,15 +120,27 @@ def get_portfolio(page, send_fn=None) -> dict | None:
             log(f"Lecture positions échouée : {e}")
 
         # ── Onglet Mes ordres ────────────────────────────────────────────────
-        # Chaque bloc .ConsolidatedOrders contient le titre + ses ordres ensemble
+        # Sélecteur robuste : le hash CSS change à chaque déploiement BD.
+        # On tente d'abord le sélecteur exact, puis un fallback large.
         orders = []
         if _click_tab(page, "Mes ordres"):
             _dismiss_popups(page)
             try:
-                for block in page.locator(".ConsolidatedOrders-module_content_elUGZ").all():
-                    parsed = _parse_order(block.inner_text(timeout=2000))
+                # Sélecteur principal (hash peut changer) puis fallback
+                sel_main = "[class*='ConsolidatedOrders'][class*='content']"
+                sel_back = "[class*='orderContainer'], [class*='order-line'], [class*='OrderRow']"
+                blocks = page.locator(sel_main).all()
+                if not blocks:
+                    blocks = page.locator(sel_back).all()
+                    if blocks:
+                        log("Sélecteur ordres : fallback activé")
+
+                for block in blocks:
+                    raw_text = block.inner_text(timeout=2000)
+                    # Log brut pour debugger les problèmes de parsing
+                    print(f"[BD Reader order raw] {raw_text[:300].replace(chr(10), ' | ')}")
+                    parsed = _parse_order(raw_text)
                     if parsed:
-                        # order_id : élément enfant avec id="order-{uuid}"
                         try:
                             oid_el = block.locator('[id^="order-"]').first
                             if oid_el.count() > 0:
@@ -138,6 +150,10 @@ def get_portfolio(page, send_fn=None) -> dict | None:
                         except Exception:
                             pass
                         orders.append(parsed)
+                    else:
+                        # Ordre filtré (Annulé/Exécuté) ou format non reconnu
+                        flat = raw_text.replace("\n", " ")[:120]
+                        print(f"[BD Reader order skipped] {flat}")
             except Exception as e:
                 log(f"Lecture ordres échouée : {e}")
 
@@ -237,36 +253,48 @@ def _parse_order(text: str) -> dict | None:
     if m_name:
         order["name"] = m_name.group(1).strip()
 
-    # Sens
+    # Sens — "(Achat|Vente)(CPT)" ou standalone
     m = re.search(r'(Achat|Vente)\s*\(([A-Z]+)\)', flat)
     if m:
         order["sens"] = m.group(1)
+    else:
+        if re.search(r'\bVente\b', flat):
+            order["sens"] = "Vente"
+        elif re.search(r'\bAchat\b', flat):
+            order["sens"] = "Achat"
+
     # Type d'ordre
-    for t in ("Take Profit", "Stop Loss", "Stop Suiveur", "A cours limité", "Au marché"):
+    for t in ("Take Profit", "Stop Loss", "Stop Suiveur", "A cours limité", "Au marché", "Expert"):
         if t in flat:
             order["type"] = t
             break
-    # Seuil (SL) et Profit (TP)
-    m_seuil = re.search(r'Seuil\s*([\d\s.,]+)\s*€', flat)
+
+    # Seuil (SL) — variantes : "Seuil 57.20 €", "Stop 57.20 €"
+    m_seuil = (re.search(r'Seuil\s*([\d\s.,]+)\s*€', flat)
+               or re.search(r'Stop\s+([\d\s.,]+)\s*€', flat))
     if m_seuil:
         order["seuil"] = _parse_float(m_seuil.group(1))
-    m_profit = re.search(r'Profit\s*([\d\s.,]+)\s*€', flat)
+
+    # Profit (TP) — variantes : "Profit 72.90 €", "Limite 72.90 €"
+    m_profit = (re.search(r'Profit\s*([\d\s.,]+)\s*€', flat)
+                or re.search(r'Limite\s+([\d\s.,]+)\s*€', flat))
     if m_profit:
         order["profit"] = _parse_float(m_profit.group(1))
+
     # Quantité exécutée / totale (ex: 0/17)
     m_qty = re.search(r'(\d+)\s*/\s*(\d+)', flat)
     if m_qty:
         order["qty_exec"] = int(m_qty.group(1))
         order["qty_total"] = int(m_qty.group(2))
-    # Statut — un ordre Take Profit a un statut par partie (Seuil + Profit).
-    # Si "En cours" apparaît au moins une fois, l'ordre est encore actif.
-    # Si uniquement "Annulé"/"Exécuté" : l'ordre est clôturé → on ignore.
+
+    # Statut — "En cours" prime. Un Take Profit a un statut par partie ;
+    # si au moins une est "En cours", l'ordre est actif.
     if "En cours" in flat:
         order["statut"] = "En cours"
     elif "Annulé" in flat or "Annule" in flat:
-        return None  # ordre annulé → ignoré
+        return None  # annulé → ignoré
     elif "Exécuté" in flat or "Execute" in flat:
-        return None  # ordre exécuté (clôturé) → ignoré
+        return None  # totalement exécuté → ignoré
 
     return order
 
