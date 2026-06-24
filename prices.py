@@ -250,6 +250,63 @@ def get_vix() -> dict:
         return {}
 
 
+def get_market_regime() -> dict:
+    """
+    Détecte le régime de marché global : BULL / NEUTRAL / CORRECTION / CRISIS.
+    Critères : position CAC40 + S&P500 vs MM20, momentum 1 mois, VIX.
+    Retourne {"label", "vix", "cac_vs_mm20", "spy_vs_mm20", "index_mom_avg",
+              "summary"} — summary = ligne lisible pour les prompts IA.
+    """
+    try:
+        vix_data = get_vix()
+        vix = vix_data.get("level", 20.0)
+
+        idx_data = {}
+        for ticker, key in [("^FCHI", "cac"), ("^GSPC", "spy")]:
+            hist = yf.Ticker(ticker).history(period="2mo").dropna(subset=["Close"])
+            if len(hist) < 20:
+                continue
+            cur   = float(hist["Close"].iloc[-1])
+            mm20  = float(hist["Close"].rolling(20).mean().iloc[-1])
+            mom1m = float((cur / hist["Close"].iloc[-22] - 1) * 100) if len(hist) >= 22 else 0.0
+            idx_data[key] = {
+                "vs_mm20": round((cur / mm20 - 1) * 100, 1),
+                "mom1m":   round(mom1m, 1),
+            }
+
+        cac_vs   = idx_data.get("cac", {}).get("vs_mm20", 0.0)
+        spy_vs   = idx_data.get("spy", {}).get("vs_mm20", 0.0)
+        above_mm = sum(1 for v in [cac_vs, spy_vs] if v > -1.0)
+        avg_mom  = sum(idx_data.get(k, {}).get("mom1m", 0) for k in ("cac", "spy")) / 2
+
+        if vix > 40:
+            label = "CRISIS"
+        elif vix > 28 or above_mm == 0:
+            label = "CORRECTION"
+        elif vix > 20 or above_mm < 2 or avg_mom < -2:
+            label = "NEUTRAL"
+        else:
+            label = "BULL"
+
+        cac_str = f"CAC {cac_vs:+.1f}% vs MM20" if "cac" in idx_data else ""
+        spy_str = f"SPY {spy_vs:+.1f}% vs MM20" if "spy" in idx_data else ""
+        summary = f"RÉGIME {label} | VIX {vix}" + (f" | {cac_str}" if cac_str else "") + (f" | {spy_str}" if spy_str else "")
+
+        return {
+            "label":         label,
+            "vix":           round(vix, 1),
+            "cac_vs_mm20":   idx_data.get("cac", {}).get("vs_mm20"),
+            "spy_vs_mm20":   idx_data.get("spy", {}).get("vs_mm20"),
+            "index_mom_avg": round(avg_mom, 1),
+            "summary":       summary,
+        }
+    except Exception as e:
+        print(f"⚠️ Market regime error: {e}")
+        return {"label": "NEUTRAL", "vix": None, "cac_vs_mm20": None,
+                "spy_vs_mm20": None, "index_mom_avg": 0.0,
+                "summary": "RÉGIME NEUTRAL (données indisponibles)"}
+
+
 def get_quote(ticker: str) -> dict:
     """Retourne prix dans la devise native du ticker, avec devise détectée.
 

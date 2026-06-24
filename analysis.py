@@ -821,12 +821,21 @@ Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
         send_fn(f"Erreur analyse {ticker}: {e}")
 
 
-def _quant_screen(universe: list[str], held_tickers: set[str]) -> list[dict]:
+def _quant_screen(universe: list[str], held_tickers: set[str],
+                  regime: str = "BULL", index_mom: float = 0.0) -> list[dict]:
     """
     Filtre quantitatif parallèle sur tout l'univers de scan.
-    Retourne les candidats filtrés et triés par score momentum×volume.
-    Critères d'exclusion : RSI > 75 (surachété), RSI < 28 (free-fall), mom_1m < -8%.
+    Les filtres et le score s'adaptent au régime de marché :
+
+    BULL       : momentum > -8%, RSI 28-75. Score = mom × vol.
+    NEUTRAL    : momentum > -5%, RSI 28-74. Score = 60% mom + 40% force_relative.
+    CORRECTION : RSI 28-74, force_relative > 0 (action > indice). Score = rel × vol.
+                 Fallback si 0 candidats : force_relative > -3%.
+    CRISIS     : retourne [] immédiatement, aucun trade.
     """
+    if regime == "CRISIS":
+        return []
+
     candidates = [t for t in universe if t.upper() not in held_tickers]
 
     def fetch_one(ticker):
@@ -838,10 +847,29 @@ def _quant_screen(universe: list[str], held_tickers: set[str]) -> list[dict]:
         vol = tech.get("vol_ratio") or 1.0
         if rsi is None or mom is None:
             return None
-        if rsi > 75 or rsi < 28 or mom < -8:
-            return None
-        score = mom * (1 + vol * 0.2)
-        return {"ticker": ticker, "rsi": rsi, "mom_1m": mom, "vol_ratio": vol, "score": score}
+
+        rel = round(mom - index_mom, 1)  # force relative vs indice
+
+        if regime == "CORRECTION":
+            if rsi > 74 or rsi < 28:
+                return None
+            score = rel * (1 + vol * 0.2)
+            # Premier passage : rel > 0 (mieux que l'indice)
+            return {"ticker": ticker, "rsi": rsi, "mom_1m": mom,
+                    "vol_ratio": vol, "rel_strength": rel, "score": score}
+
+        elif regime == "NEUTRAL":
+            if rsi > 74 or rsi < 28 or mom < -5:
+                return None
+            score = (0.6 * mom + 0.4 * rel) * (1 + vol * 0.2)
+
+        else:  # BULL
+            if rsi > 75 or rsi < 28 or mom < -8:
+                return None
+            score = mom * (1 + vol * 0.2)
+
+        return {"ticker": ticker, "rsi": rsi, "mom_1m": mom,
+                "vol_ratio": vol, "rel_strength": rel, "score": round(score, 2)}
 
     results = []
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -853,7 +881,19 @@ def _quant_screen(universe: list[str], held_tickers: set[str]) -> list[dict]:
                     results.append(r)
             except Exception as e:
                 print(f"[quant_screen] {future_to_ticker.get(future, '?')}: {e}")
-    return sorted(results, key=lambda x: x["score"], reverse=True)
+
+    all_results = sorted(results, key=lambda x: x["score"], reverse=True)
+
+    # En CORRECTION : filtre rel > 0, fallback rel > -3% si vide
+    if regime == "CORRECTION":
+        strong = [r for r in all_results if r["rel_strength"] > 0]
+        if strong:
+            return strong
+        fallback = [r for r in all_results if r["rel_strength"] > -3]
+        print(f"[quant_screen] CORRECTION fallback rel>-3% : {len(fallback)} candidats")
+        return fallback
+
+    return all_results
 
 
 def _extract_tickers(text: str) -> list[str]:
@@ -882,28 +922,72 @@ def scan_opportunities(send_fn, ticker: str = None) -> None:
 
         held_tickers = {cfg["ticker"].upper() for cfg in portfolio.load().get("positions", {}).values()}
 
+        # ── Détection du régime de marché ────────────────────────────────────
+        regime_data  = prices.get_market_regime()
+        regime       = regime_data["label"]
+        index_mom    = regime_data.get("index_mom_avg", 0.0) or 0.0
+        regime_summary = regime_data.get("summary", f"RÉGIME {regime}")
+
+        REGIME_EMOJI = {"BULL": "🟢", "NEUTRAL": "🟡", "CORRECTION": "🔴", "CRISIS": "⛔"}
+        emoji = REGIME_EMOJI.get(regime, "🟡")
+
+        REGIME_SCAN_MODE = {
+            "BULL":       "momentum standard",
+            "NEUTRAL":    "momentum + qualité défensive",
+            "CORRECTION": "force relative + bénéficiaires macro",
+            "CRISIS":     "suspendu — préservation du capital",
+        }
+        scan_mode = REGIME_SCAN_MODE.get(regime, "standard")
+
         send_fn(
-            f"🔍 Scan pro en cours...\n"
-            f"Analyse quantitative de {len(SCAN_UNIVERSE)} actions "
-            f"(RSI · momentum · volume)\nPatiente ~30 secondes."
+            f"{emoji} {regime_summary}\n"
+            f"Mode scan : {scan_mode}\n\n"
+            f"Analyse quantitative de {len(SCAN_UNIVERSE)} actions... (~30 sec)"
         )
 
         # ── Étape 0 : filtre quantitatif parallèle ───────────────────────────
-        screened = _quant_screen(SCAN_UNIVERSE, held_tickers)
-        print(f"[scan] {len(screened)}/{len(SCAN_UNIVERSE)} titres passent les filtres quant")
+        screened = _quant_screen(SCAN_UNIVERSE, held_tickers, regime=regime, index_mom=index_mom)
+        print(f"[scan] régime={regime} | {len(screened)}/{len(SCAN_UNIVERSE)} candidats")
 
-        if not screened:
+        # En CRISIS : analyse positions uniquement, aucun nouveau trade
+        if regime == "CRISIS":
+            macro = research.market_context()
+            macro_ctx = _macro_context()
+            ctx_block = f"\n{ctx}\n" if ctx else ""
+            portf_prompt = f"""{TRADER_SYSTEM}
+{FORMAT_TELEGRAM}
+{macro_ctx}
+{ctx_block}
+{snapshot}
+
+CONTEXTE MARCHÉ
+{macro}
+
+RÉGIME : CRISE (VIX > 40). Aucun nouveau trade.
+TÂCHE : Pour chaque position, évalue le risque de poursuite de la baisse.
+Donner : MAINTENIR / RÉDUIRE EXPOSITION / VENDRE — raison en 5 mots."""
+            portf_summary = _strip_markdown(ai.complete(portf_prompt, max_tokens=300))
             send_fn(
-                "🔍 SCAN\n\nAucun titre ne passe les filtres quantitatifs aujourd'hui.\n"
-                "Marché en correction ou manque de momentum généralisé.\n"
-                "→ /research TICKER pour une analyse ciblée."
+                f"⛔ SCAN SUSPENDU — RÉGIME CRISE\n\n"
+                f"Nouveau trade impossible en panique de marché (VIX > 40).\n"
+                f"Priorité : préserver le capital.\n\n"
+                f"POSITIONS\n{portf_summary}\n\n💰 Cash: {cash}€"
             )
             return
 
+        if not screened:
+            send_fn(
+                f"{emoji} SCAN — {regime_summary}\n\n"
+                f"Aucun titre ne passe les filtres ({scan_mode}).\n"
+                f"→ /research TICKER pour une analyse ciblée sur un titre précis."
+            )
+            return
+
+        rel_label = " · force relative vs indice" if regime == "CORRECTION" else ""
         send_fn(
-            f"✅ {len(screened)} titres passent les filtres "
-            f"(RSI 28-75, momentum > -8%).\n"
-            f"Analyse IA des top {min(8, len(screened))} par score momentum×volume..."
+            f"✅ {len(screened)} titres passent les filtres.\n"
+            f"Analyse IA des top {min(8, len(screened))}"
+            f"{rel_label}..."
         )
 
         # ── Étape 1 : analyse IA des positions en portefeuille ───────────────
@@ -944,20 +1028,13 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             if not current_price:
                 continue
 
-            tech   = {"rsi": item["rsi"], "momentum_1m": item["mom_1m"], "vol_ratio": item["vol_ratio"]}
-            funds  = prices.get_fundamentals(t)
-            pctx   = prices.get_price_context(t)
+            tech    = prices.get_technicals(t)
+            funds   = prices.get_fundamentals(t)
+            pctx    = prices.get_price_context(t)
             yf_news = prices.get_yf_news(t, max_items=4)
-            web    = research.research_stock(t)
-            cats   = research.search_catalysts(t)
-            social = research.get_social_sentiment(t)
-            tech   = prices.get_technicals(t)
-            funds  = prices.get_fundamentals(t)
-            pctx   = prices.get_price_context(t)
-            yf_news = prices.get_yf_news(t, max_items=4)
-            web    = research.research_stock(t)
-            cats   = research.search_catalysts(t)
-            social = research.get_social_sentiment(t)
+            web     = research.research_stock(t)
+            cats    = research.search_catalysts(t)
+            social  = research.get_social_sentiment(t)
 
             pctx_block = ""
             if pctx:
@@ -971,15 +1048,17 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 
             tech_block = ""
             if tech:
-                score_line = (f"- Score quant : {item['score']:+.1f} "
-                              f"(rang {top_candidates.index(item)+1}/{len(top_candidates)})\n"
-                              if item in top_candidates else "")
+                rel = item.get("rel_strength")
+                rel_line = (f"- Force relative vs indice : {rel:+.1f}% (indice : {index_mom:+.1f}%)\n"
+                            if rel is not None else "")
+                rank = top_candidates.index(item) + 1 if item in top_candidates else "?"
+                score_line = f"- Score quant : {item['score']:+.1f} (rang {rank}/{len(top_candidates)})\n"
                 tech_block = (
                     f"\nINDICATEURS TECHNIQUES\n"
                     f"- RSI 14j : {tech.get('rsi', 'N/A')}\n"
                     f"- Momentum 1 mois : {tech.get('momentum_1m', 'N/A'):+}%\n"
                     f"- Volume ratio : {tech.get('vol_ratio', 'N/A')}x moyenne 20j\n"
-                    f"{score_line}"
+                    f"{rel_line}{score_line}"
                 )
 
             funds_lines = []
@@ -1006,12 +1085,43 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             chart_b   = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
             ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
                      f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
+
+            # Instructions spécifiques selon le régime
+            rel = item.get("rel_strength", 0.0)
+            if regime == "CORRECTION":
+                regime_instructions = f"""
+RÉGIME : CORRECTION ({regime_summary})
+Ce titre est sélectionné pour sa force relative ({rel:+.1f}% vs indice à {index_mom:+.1f}%).
+
+MISSION CORRECTION — critères ACHAT valides dans ce contexte :
+1. FORCE RELATIVE : l'action résiste ou monte pendant que l'indice baisse → thèse valide.
+2. BÉNÉFICIAIRE MACRO : la cause probable de la correction (BCE hawkish → banques ;
+   tensions géo → défense/énergie ; récession → pharma/utilities/consommation de base ;
+   correction tech → value/industrielles) bénéficie directement à ce secteur.
+3. REBOND TECHNIQUE QUALITÉ : RSI < 35, titre de qualité, tendance LT intacte,
+   catalyseur de rebond identifiable.
+
+Signal EXCLUS si : momentum positif MAIS corrélé à l'indice (force relative nulle),
+ou si secteur cyclique sans thèse macro claire en contexte de correction."""
+            elif regime == "NEUTRAL":
+                regime_instructions = f"""
+RÉGIME : NEUTRE ({regime_summary})
+Marché sans tendance claire. Exigences renforcées.
+Préférence : valeurs défensives, catalyseurs précis et datés, RSI < 60.
+EXCLUS : momentum pur sans catalyseur daté en marché neutre."""
+            else:  # BULL
+                regime_instructions = f"""
+RÉGIME : HAUSSIER ({regime_summary})
+Conditions favorables. Scan momentum standard."""
+
             validate_prompt = f"""{TRADER_SYSTEM}
 {ANALYSIS_RULES}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
 AUJOURD'HUI : {today_str}
+{regime_instructions}
+
 SOCIÉTÉ ANALYSÉE : {company_label} — JE NE DÉTIENS PAS. CASH DISPONIBLE : {cash}€.
 Cours actuel : {current_price}
 {pctx_block}{tech_block}{funds_block}{news_b}{social_b}{chart_b}
@@ -1022,14 +1132,13 @@ RECHERCHE WEB
 CATALYSEURS IMMINENTS
 {cats}
 
-Signal ACHAT ou NEUTRE/ÉVITER ?
-RÈGLE : si tu donnerais NEUTRE ou ÉVITER dans un /research → réponds : EXCLUS — [raison 5 mots max]
-RÈGLE : si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
-Si ACHAT : donne format exact :
+Signal ACHAT ou EXCLUS ?
+RÈGLE : si le titre ne répond pas aux critères du régime → EXCLUS — [raison 5 mots]
+RÈGLE : si le ticker viole une contrainte du contexte personnel → EXCLUS — [raison]
+Si ACHAT : format exact :
 {company_name} ({t}){(" — " + company_sector) if company_sector else ""}
 - Cours actuel : {current_price} | Entrée : X  SL : X (-{_SL}%)  TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
-- Thèse : [CATALYSEUR : événement précis + date après {today_str}]
-  OU [MOMENTUM : tendance + niveau technique qui invalide la thèse — cf. règles]
+- Thèse : [CATALYSEUR daté] OU [FORCE RELATIVE — raison] OU [MOMENTUM + niveau invalidation]
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
 
@@ -1091,10 +1200,9 @@ Si ACHAT : donne format exact :
             no_opp += "\n\n→ /research TICKER pour un avis ciblé sur un titre précis."
             result_parts.append(no_opp)
 
-        nb_passed = len(screened)
         send_fn(
-            f"🔍 SCAN OPPORTUNITÉS — {len(SCAN_UNIVERSE)} actions scannées · "
-            f"{nb_passed} passent les filtres quant\n\n"
+            f"{emoji} SCAN OPPORTUNITÉS — {regime_summary}\n"
+            f"{len(SCAN_UNIVERSE)} actions scannées · {len(screened)} passent les filtres\n\n"
             + "\n\n".join(result_parts)
             + f"\n\n💰 Cash: {cash}€"
         )
