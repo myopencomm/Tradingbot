@@ -195,3 +195,16 @@ def check_positions(send_fn) -> None:
     if not sent_any:
         send_fn("\n".join(status_lines))
         print("✅ Status envoyé — pas d'alerte")
+
+    # Mode autonome : surveillance positions + tentative d'entrée
+    try:
+        import autonomous_engine
+        autonomous_engine.check_autonomous_positions(send_fn)
+        import threading
+        threading.Thread(
+            target=autonomous_engine.run_entry_cycle,
+            args=(send_fn,),
+            daemon=True,
+        ).start()
+    except Exception as e:
+        print(f"[Auto] Erreur cycle autonome : {e}")

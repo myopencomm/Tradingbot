@@ -156,6 +156,7 @@ BOT_COMMANDS = [
     ("attente",    "Ordre en attente, alerte au cours — NOM TICKER QTE PRIX"),
     ("annuler",    "Annuler un ordre en attente (bot) — /annuler NOM"),
     ("connect",    "Se connecter a Bourse Direct (code TOTP)"),
+    ("auto",       "Mode autonome — /auto on 500 | off | status"),
     ("sync",       "Lire portefeuille + ordres reels depuis BD"),
     ("ordre",      "Passer un ordre reel sur BD — acheter|vendre TICKER QTE ..."),
     ("annuler_bd", "Annuler un ordre en cours sur BD — /annuler_bd TICKER"),
@@ -1301,6 +1302,11 @@ def cmd_connect(args, cid):
                 "/oui — confirmer l'ordre affiché\n"
                 "/non — annuler l'ordre affiché\n"
                 "/annuler_bd TICKER — annuler un ordre en cours sur BD\n\n"
+                "MODE AUTONOME\n"
+                "/auto on 500    — activer avec 500€ de budget\n"
+                "/auto on 20%    — activer avec 20% du cash\n"
+                "/auto off       — désactiver\n"
+                "/auto status    — état + positions autonomes\n\n"
                 "PORTEFEUILLE\n"
                 "/sync — synchroniser positions et ordres depuis BD\n\n"
                 "SESSION\n"
@@ -1656,6 +1662,128 @@ def cmd_non(args, cid):
             send("Aucun ordre en attente.", cid)
 
 
+def cmd_auto(args, cid):
+    """
+    /auto on 500        → active avec 500€
+    /auto on 20%        → active avec 20% du cash disponible
+    /auto off           → désactive (positions existantes toujours surveillées)
+    /auto status        → état + positions autonomes
+    /auto pause         → suspend les nouvelles entrées sans changer le budget
+    """
+    import autonomous_engine
+
+    sub = args[0].lower() if args else "status"
+
+    if sub == "status":
+        cfg  = portfolio.get_autonomous_config()
+        info = autonomous_engine.get_budget_info()
+        auto_pos = portfolio.get_autonomous_positions()
+
+        state = "ACTIF ✅" if cfg.get("enabled") else "INACTIF ⛔"
+        lines = [
+            f"🤖 MODE AUTONOME — {state}",
+            f"Budget : {info['total']:.0f}€ total | {info['engaged']:.0f}€ engagé | {info['available']:.0f}€ libre",
+            f"Max positions : {cfg.get('max_positions', 2)} | Breakeven : +{cfg.get('breakeven_pct', 3.0):.0f}%",
+        ]
+
+        if auto_pos:
+            lines.append("\nPOSITIONS AUTONOMES")
+            for name, pos in auto_pos.items():
+                q  = prices.get_quote(pos["ticker"])
+                px = q.get("price")
+                if px:
+                    chg = (px - pos["entry_price"]) / pos["entry_price"] * 100
+                    pnl = (px - pos["entry_price"]) * pos["qty"]
+                    lines.append(
+                        f"  {name} ({pos['ticker']}) : {px}€ ({chg:+.1f}%) | "
+                        f"P&L {pnl:+.0f}€ | SL {pos['target_low']} | TP {pos['target_high']}"
+                    )
+                else:
+                    lines.append(f"  {name} ({pos['ticker']}) : prix indispo")
+        else:
+            if cfg.get("enabled"):
+                lines.append("Aucune position autonome active.")
+
+        if not cfg.get("enabled"):
+            lines.append("\nUsage :\n/auto on 500      (budget fixe)\n/auto on 20%      (% du cash)")
+
+        send("\n".join(lines), cid)
+        return
+
+    if sub == "off":
+        cfg = portfolio.get_autonomous_config()
+        cfg["enabled"] = False
+        portfolio.set_autonomous_config(cfg)
+        auto_pos = portfolio.get_autonomous_positions()
+        nb = len(auto_pos)
+        send(
+            f"🤖 Mode autonome désactivé.\n"
+            f"{'Aucune' if nb == 0 else str(nb)} position{'s' if nb > 1 else ''} autonome{'s' if nb > 1 else ''} "
+            f"{'active — toujours surveillée.' if nb == 1 else ('actives — toujours surveillées.' if nb > 1 else '.')}",
+            cid,
+        )
+        return
+
+    if sub == "pause":
+        cfg = portfolio.get_autonomous_config()
+        cfg["enabled"] = False
+        portfolio.set_autonomous_config(cfg)
+        send("🤖 Mode autonome mis en pause — nouvelles entrées suspendues. /auto on pour reprendre.", cid)
+        return
+
+    if sub == "on":
+        if len(args) < 2:
+            send("Usage : /auto on 500  ou  /auto on 20%", cid)
+            return
+
+        raw = args[1].strip()
+        if raw.endswith("%"):
+            try:
+                pct = float(raw[:-1])
+            except ValueError:
+                send("Pourcentage invalide. Ex : /auto on 20%", cid)
+                return
+            if pct <= 0 or pct > 100:
+                send("Pourcentage hors limites (1-100).", cid)
+                return
+            cash = portfolio.get_cash()
+            budget = round(cash * pct / 100, 2)
+            cfg = autonomous_engine.set_config(True, budget_pct=pct)
+            send(
+                f"🤖 Mode autonome ACTIVÉ\n"
+                f"Budget : {pct:.0f}% du cash = {budget:.0f}€\n"
+                f"Max {cfg.get('max_positions', 2)} positions | Breakeven +{cfg.get('breakeven_pct', 3.0):.0f}%\n\n"
+                f"Le bot entrera en position au prochain check planifié\n"
+                f"(Playwright doit être connecté via /connect)\n\n"
+                f"/auto status — voir l'état\n"
+                f"/auto off — désactiver",
+                cid,
+            )
+        else:
+            try:
+                budget = float(raw.replace(",", ".").replace("€", ""))
+            except ValueError:
+                send("Montant invalide. Ex : /auto on 500", cid)
+                return
+            if budget < 50:
+                send("Budget minimum : 50€", cid)
+                return
+            cfg = autonomous_engine.set_config(True, budget_total=budget)
+            send(
+                f"🤖 Mode autonome ACTIVÉ\n"
+                f"Budget : {budget:.0f}€\n"
+                f"Max {cfg.get('max_positions', 2)} positions | Breakeven +{cfg.get('breakeven_pct', 3.0):.0f}%\n\n"
+                f"Le bot entrera en position au prochain check planifié\n"
+                f"(Playwright doit être connecté via /connect)\n\n"
+                f"/auto status — voir l'état\n"
+                f"/auto off — désactiver",
+                cid,
+            )
+        return
+
+    send("Commande non reconnue. Usage : /auto on 500 | /auto off | /auto status", cid)
+
+
 # ─── Routeur ────────────────────────────────────────────────────────────────
 
 COMMANDS = {
@@ -1690,6 +1818,7 @@ COMMANDS = {
     "/research": cmd_research,
     "/import": cmd_import,
     "/tuto": cmd_tuto,
+    "/auto": cmd_auto,
 }
 
 

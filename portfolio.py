@@ -25,6 +25,20 @@ def get_cash() -> float:
     return load().get("cash_available", 0)
 
 
+def get_autonomous_config() -> dict:
+    return load().get("autonomous_config", {})
+
+
+def get_autonomous_positions() -> dict:
+    return {k: v for k, v in load().get("positions", {}).items() if v.get("autonomous")}
+
+
+def set_autonomous_config(cfg: dict):
+    data = load()
+    data["autonomous_config"] = cfg
+    save(data)
+
+
 def add_position(name: str, ticker: str, qty: int, entry_price: float, sl: float, tp: float):
     data = load()
     data.setdefault("positions", {})[name.upper()] = {
