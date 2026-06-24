@@ -9,18 +9,28 @@ PAS partager la page entre /connect et /sync directement.
 Solution : un thread worker unique possède Playwright. Les autres threads
 soumettent des callables via run(fn) ; le worker les exécute séquentiellement
 sur la page et renvoie le résultat. Une seule opération à la fois (suffisant ici).
+
+Keepalive : un callable _keepalive est soumis toutes les 20 min pour maintenir
+la session BD côté serveur (les cookies BD expirent après ~30 min d'inactivité).
 """
 import threading
 import queue
+import time
 from datetime import datetime
 
 _lock = threading.Lock()
 _task_queue: queue.Queue = queue.Queue()
 _worker: threading.Thread | None = None
+_keepalive_thread: threading.Thread | None = None
 _ready_event = threading.Event()
 _start_error: str | None = None
 _connected_at: datetime | None = None
 _running = False
+
+KEEPALIVE_INTERVAL = 20 * 60  # 20 minutes — BD expire après ~30 min d'inactivité
+
+# URL légère : page d'accueil BD connecté (ne génère pas de log de trading)
+_KEEPALIVE_URL = "https://www.boursedirect.fr/fr/page/portefeuille"
 
 
 class _Task:
@@ -124,9 +134,59 @@ def is_connected() -> bool:
 
 
 def mark_connected():
-    global _connected_at
+    global _connected_at, _keepalive_thread
     with _lock:
         _connected_at = datetime.now()
+    # Démarre le keepalive si ce n'est pas déjà le cas
+    with _lock:
+        if _keepalive_thread is None or not _keepalive_thread.is_alive():
+            _keepalive_thread = threading.Thread(
+                target=_keepalive_loop, daemon=True, name="playwright-keepalive"
+            )
+            _keepalive_thread.start()
+
+
+def _keepalive_fn(page) -> bool:
+    """
+    Ping léger : visite la page portefeuille BD pour rafraîchir les cookies.
+    Retourne True si la session semble encore active (pas redirigé vers login).
+    """
+    try:
+        page.goto(_KEEPALIVE_URL, wait_until="domcontentloaded", timeout=15000)
+        url = page.url
+        alive = "login" not in url and "connexion" not in url
+        print(f"[Playwright keepalive] {'✅ session active' if alive else '⚠️ session expirée — reconnexion requise'} ({url[:60]})")
+        return alive
+    except Exception as e:
+        print(f"[Playwright keepalive] erreur : {e}")
+        return False
+
+
+def _keepalive_loop():
+    """Thread daemon : soumet un ping toutes les KEEPALIVE_INTERVAL secondes."""
+    while True:
+        time.sleep(KEEPALIVE_INTERVAL)
+        # Stoppe si plus connecté
+        if not is_connected():
+            print("[Playwright keepalive] session terminée — arrêt keepalive")
+            break
+        try:
+            alive = run(_keepalive_fn, timeout=30)
+            if not alive:
+                # Session expirée : marquer comme déconnecté
+                global _connected_at
+                with _lock:
+                    _connected_at = None
+                print("[Playwright keepalive] session BD expirée — /connect requis")
+                # Notification Telegram si possible
+                try:
+                    from telegram_bot import send
+                    send("⚠️ Session Bourse Direct expirée.\nRelance /connect pour reprendre le mode Playwright.")
+                except Exception:
+                    pass
+                break
+        except Exception as e:
+            print(f"[Playwright keepalive] run error : {e}")
 
 
 def session_age_str() -> str:
