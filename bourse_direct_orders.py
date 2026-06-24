@@ -326,17 +326,16 @@ def format_order_summary(order_data: dict, ticker: str, side: str,
                          qty: int, order_type: str,
                          limit_price: float = None, stop_price: float = None) -> str:
     """Formate un résumé lisible de l'ordre créé pour confirmation Telegram."""
-    # La réponse BD peut mettre les frais sous plusieurs chemins
-    fees_raw = (
-        order_data.get("fees", {}).get("total", {}).get("amount")
-        or order_data.get("commission")
-        or order_data.get("totalFees")
-        or order_data.get("frais")
-        or "?"
-    )
     order_id = order_data.get("id") or order_data.get("order_id", "?")
 
-    side_fr  = "ACHAT" if side == "buy" else "VENTE"
+    # Montant prévisionnel (seule donnée financière retournée par /order/create)
+    # Les frais BD réels (courtage) ne sont communiqués qu'après envoi.
+    prev = (order_data.get("order") or {}).get("previsionalAmount") or {}
+    montant = prev.get("value")
+    currency = prev.get("currency", "EUR")
+    sym = {"EUR": "€", "USD": "$", "GBP": "£"}.get(currency, "€")
+
+    side_fr = "ACHAT" if side == "buy" else "VENTE"
     type_map = {
         "market":     "Au marché",
         "limit":      "Cours limité",
@@ -351,10 +350,13 @@ def format_order_summary(order_data: dict, ticker: str, side: str,
         f"Type : {type_fr}",
     ]
     if limit_price:
-        lines.append(f"Limite : {limit_price}€")
+        lines.append(f"Limite : {limit_price}{sym}")
     if stop_price:
-        lines.append(f"Seuil  : {stop_price}€")
-    lines.append(f"Frais  : {fees_raw}€")
+        lines.append(f"Seuil  : {stop_price}{sym}")
+    if montant is not None:
+        lines.append(f"Montant prévu : {montant}{sym}  (frais BD ajoutés à l'exécution)")
+    else:
+        lines.append(f"Montant prévu : —")
     lines.append(f"Ref BD : {order_id}")
 
     return "\n".join(lines)

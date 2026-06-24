@@ -1293,8 +1293,17 @@ def cmd_connect(args, cid):
             send(
                 "Mode Playwright actif\n"
                 "Connecte a Bourse Direct\n\n"
-                "/sync — synchroniser le portefeuille\n"
-                "/disconnect — revenir en mode Classic",
+                "ORDRES\n"
+                "/ordre acheter TICKER QTE limite PRIX\n"
+                "/ordre acheter TICKER QTE marche\n"
+                "/ordre vendre TICKER QTE expert SL TP\n"
+                "/oui — confirmer l'ordre affiché\n"
+                "/non — annuler l'ordre affiché\n"
+                "/annuler_bd TICKER — annuler un ordre en cours sur BD\n\n"
+                "PORTEFEUILLE\n"
+                "/sync — synchroniser positions et ordres depuis BD\n\n"
+                "SESSION\n"
+                "/disconnect — fermer la session et revenir en mode Classic",
                 cid,
             )
         else:
@@ -1583,7 +1592,10 @@ def cmd_annuler_bd(args, cid):
                 return
             res = playwright_session.run(lambda page: bd_orders.cancel_order(page, oid), timeout=60)
             if res is not None:
-                send(f"Ordre {target.get('name', ticker_base)} ({target.get('type','?')}) annule sur BD.", cid)
+                o_name = target.get("name") or ticker_base
+                o_type = target.get("type")
+                o_type_str = f" — {o_type}" if o_type else ""
+                send(f"Ordre {o_name}{o_type_str} annule sur BD.", cid)
             else:
                 send("Annulation echouee — verifier sur BD.", cid)
         except Exception as e:
