@@ -48,6 +48,25 @@ SCAN_UNIVERSE = [
 
 PARIS = pytz.timezone("Europe/Paris")
 
+
+def _trigger_autonomous(send_fn) -> None:
+    """Si le mode autonome est actif + Playwright connecté, entre immédiatement
+    sur les opportunités validées à l'instant, sans attendre le check planifié."""
+    try:
+        import autonomous_engine, bot_mode, playwright_session as pw_sess
+        if (autonomous_engine.is_enabled()
+                and bot_mode.is_playwright()
+                and pw_sess.is_connected()):
+            import threading
+            threading.Thread(
+                target=autonomous_engine.run_entry_cycle,
+                args=(send_fn,),
+                daemon=True,
+            ).start()
+    except Exception as e:
+        print(f"[Auto trigger] {e}")
+
+
 _SL = f"{DEFAULT_SL_PCT:.0f}"
 _TP = f"{DEFAULT_TP_PCT:.0f}"
 
@@ -437,6 +456,11 @@ Si ACHAT → format :
             no_opp += "\n\n→ /scan pour relancer | /research TICKER pour un avis ciblé."
             msg += "\n\n" + no_opp
         send_fn(msg)
+
+        # Mode autonome : si actif + Playwright connecté + opportunités trouvées
+        # → entre immédiatement après le briefing, sans attendre le check planifié
+        if opportunities:
+            _trigger_autonomous(send_fn)
 
     except Exception as e:
         print(f"Erreur briefing: {e}")
@@ -1265,6 +1289,11 @@ Si ACHAT : format exact :
             + "\n\n".join(result_parts)
             + f"\n\n💰 Cash: {cash}€"
         )
+
+        # Mode autonome : si actif + Playwright connecté + opportunités trouvées
+        # → entre immédiatement, sans attendre le prochain check planifié
+        if opportunities:
+            _trigger_autonomous(send_fn)
 
     except Exception as e:
         send_fn(f"⚠️ Erreur scan: {e}")
