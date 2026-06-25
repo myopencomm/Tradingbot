@@ -389,6 +389,8 @@ Si NEUTRE/ÉVITER → réponds : EXCLUS — [raison en 5 mots max]
 Si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
 Si ACHAT → format :
 {company_name} ({t}){(" — " + company_sector) if company_sector else ""} — Entrée : {current_price}€  SL : X€ (-{_SL}%)  TP : X€ (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
+- Société : [1 phrase — ce que fait la société, son positionnement clé]
+- Secteur maintenant : [1 phrase — pourquoi ce secteur est porteur EN CE MOMENT pour ce trade court terme]
 - Thèse : [CATALYSEUR : événement + date après {today_str}] OU [MOMENTUM : tendance + niveau qui invalide]
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
@@ -1151,6 +1153,8 @@ RÈGLE : si le ticker viole une contrainte du contexte personnel → EXCLUS — 
 Si ACHAT : format exact :
 {company_name} ({t}){(" — " + company_sector) if company_sector else ""}
 - Cours actuel : {current_price} | Entrée : X  SL : X (-{_SL}%)  TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
+- Société : [1 phrase — ce que fait la société, son positionnement clé]
+- Secteur maintenant : [1 phrase — pourquoi ce secteur est porteur EN CE MOMENT pour ce trade court terme]
 - Thèse : [CATALYSEUR daté] OU [FORCE RELATIVE — raison] OU [MOMENTUM + niveau invalidation]
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
