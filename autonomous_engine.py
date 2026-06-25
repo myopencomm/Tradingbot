@@ -123,11 +123,94 @@ def _validate_candidate(ticker: str, price: float,
 
 # ─── Cycle d'entrée ─────────────────────────────────────────────────────────
 
+def _place_order(ticker: str, entry: float, sl: float, tp: float,
+                 available: float, reason: str, send_fn) -> bool:
+    """
+    Place un ordre Expert achat sur BD et enregistre la position.
+    Retourne True si réussi. Facteur commun aux deux chemins d'entrée.
+    """
+    qty  = max(1, int(available / entry))
+    cost = qty * entry
+    if cost > available * 1.01:
+        qty -= 1
+    if qty < 1:
+        return False
+    cost = round(qty * entry, 2)
+
+    print(f"[Auto] Entrée : {ticker} {qty}t @ {entry} SL={sl} TP={tp}")
+    send_fn(
+        f"🤖 MODE AUTONOME — Entrée en cours\n"
+        f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}€\n"
+        f"SL : {sl}€ ({(entry - sl) / entry * 100:.1f}%) | "
+        f"TP : {tp}€ (+{(tp - entry) / entry * 100:.1f}%)\n"
+        f"Coût : {cost:.0f}€ | {reason}"
+    )
+
+    try:
+        import bourse_direct_orders as bd_orders
+
+        order_data = playwright_session.run(
+            lambda page, t=ticker, q=qty, e=entry, s=sl, tp_=tp:
+                bd_orders.create_expert_buy_order(page, t, q, e, s, tp_, "max"),
+            timeout=30,
+        )
+        if not order_data:
+            send_fn(f"⚠️ {ticker} : pas de réponse BD")
+            return False
+
+        order_id = order_data.get("id") or order_data.get("order_id")
+        if not order_id:
+            send_fn(f"⚠️ {ticker} : order_id manquant")
+            return False
+
+        conf = playwright_session.run(
+            lambda page, oid=order_id: bd_orders.execute_strategy(page, oid),
+            timeout=30,
+        )
+        if not conf:
+            send_fn(f"⚠️ {ticker} : confirmation échouée")
+            return False
+
+        name = ticker.split(".")[0].upper()
+        data = portfolio.load()
+        data.setdefault("positions", {})[name] = {
+            "ticker":      ticker,
+            "qty":         qty,
+            "entry_price": round(entry, 4),
+            "target_high": round(tp, 4),
+            "target_low":  round(sl, 4),
+            "autonomous":  True,
+            "auto_reason": reason,
+        }
+        portfolio.save(data)
+
+        send_fn(
+            f"✅ ACHAT AUTONOME CONFIRMÉ\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}€\n"
+            f"SL : {sl}€ | TP : {tp}€\n"
+            f"Coût : {cost:.0f}€ | Budget restant : {available - cost:.0f}€"
+        )
+        return True
+
+    except Exception as e:
+        send_fn(f"⚠️ Entrée autonome {ticker} : {e}")
+        print(f"[Auto] _place_order error {ticker}: {e}")
+        return False
+
+
 def run_entry_cycle(send_fn) -> None:
     """
     Cherche une opportunité et entre en position.
-    Conditions : mode autonome activé + Playwright connecté + marché ouvert + budget dispo.
-    Appelé depuis monitor.check_positions (dans un thread séparé).
+
+    CHEMIN 1 (prioritaire) : opportunités validées par le briefing ou /scan du jour.
+      → Même analyse complète (news, graphique, web) que ce que tu reçois dans Telegram.
+      → Vérifie que le cours actuel est toujours proche de l'entrée conseillée (±3%).
+
+    CHEMIN 2 (fallback) : scan quantitatif propre sur SCAN_UNIVERSE.
+      → Utilisé uniquement si aucune opportunité en attente n'est exploitable.
+
+    Conditions communes : mode autonome activé + Playwright connecté + marché ouvert + budget dispo.
     """
     if not is_enabled():
         return
@@ -143,8 +226,8 @@ def run_entry_cycle(send_fn) -> None:
         return
 
     try:
-        cfg     = portfolio.get_autonomous_config()
-        max_pos = cfg.get("max_positions", MAX_POSITIONS)
+        cfg      = portfolio.get_autonomous_config()
+        max_pos  = cfg.get("max_positions", MAX_POSITIONS)
         auto_pos = portfolio.get_autonomous_positions()
 
         if len(auto_pos) >= max_pos:
@@ -157,12 +240,51 @@ def run_entry_cycle(send_fn) -> None:
             print(f"[Auto] Budget insuffisant ({available:.0f}€)")
             return
 
-        # Imports locaux pour éviter les circulaires
-        from analysis import _quant_screen, SCAN_UNIVERSE
-        from ai_provider import get_provider
-
         all_pos = portfolio.load().get("positions", {})
         held    = {v.get("ticker", "").upper() for v in all_pos.values()}
+
+        # ── Chemin 1 : opportunités validées par le briefing / scan ──────────
+        pending = portfolio.get_pending_opportunities()
+        if pending:
+            print(f"[Auto] {len(pending)} opportunité(s) en attente du briefing/scan")
+            for opp in pending:
+                ticker = opp["ticker"]
+                if ticker.upper() in held:
+                    portfolio.clear_pending_opportunity(ticker)
+                    continue
+
+                quote = prices.get_quote(ticker)
+                price = quote.get("price")
+                if not price:
+                    continue
+
+                entry = opp["entry"]
+                sl    = opp["sl"]
+                tp    = opp["tp"]
+
+                # Vérifie que le cours n'a pas trop dérivé depuis la validation
+                drift = abs(price - entry) / entry
+                if drift > 0.03:
+                    print(f"[Auto] {ticker} : cours {price} trop loin de l'entrée {entry} "
+                          f"({drift*100:.1f}% > 3%) — skip")
+                    continue
+
+                if price > available:
+                    print(f"[Auto] {ticker} : cours {price} > budget {available:.0f}€")
+                    continue
+
+                # Adapte l'entrée au cours réel (marché a bougé depuis la validation)
+                actual_entry = round(price, 3)
+                source_tag   = f"[{opp.get('source','briefing')}] " + opp.get("reason", "")[:80]
+
+                portfolio.clear_pending_opportunity(ticker)
+                if _place_order(ticker, actual_entry, sl, tp, available, source_tag, send_fn):
+                    return  # Une seule entrée par cycle
+
+        # ── Chemin 2 : fallback — scan quantitatif sur SCAN_UNIVERSE ─────────
+        print("[Auto] Pas d'opportunité en attente — scan quantitatif fallback...")
+        from analysis import _quant_screen, SCAN_UNIVERSE
+        from ai_provider import get_provider
 
         regime_data = prices.get_market_regime()
         regime      = regime_data.get("label", "NEUTRAL")
@@ -194,78 +316,9 @@ def run_entry_cycle(send_fn) -> None:
                 print(f"[Auto] {ticker} : SKIP")
                 continue
 
-            entry = cand["entry"]
-            sl    = cand["sl"]
-            tp    = cand["tp"]
-            qty   = max(1, int(available / entry))
-            cost  = qty * entry
-            if cost > available * 1.01:
-                qty -= 1
-            if qty < 1:
-                continue
-            cost = round(qty * entry, 2)
-
-            print(f"[Auto] Entrée : {ticker} {qty}t @ {entry} SL={sl} TP={tp}")
-            send_fn(
-                f"🤖 MODE AUTONOME — Entrée en cours\n"
-                f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}€\n"
-                f"SL : {sl}€ ({(entry - sl) / entry * 100:.1f}%) | "
-                f"TP : {tp}€ (+{(tp - entry) / entry * 100:.1f}%)\n"
-                f"Coût : {cost:.0f}€ | {cand['reason']}"
-            )
-
-            try:
-                import bourse_direct_orders as bd_orders
-
-                order_data = playwright_session.run(
-                    lambda page, t=ticker, q=qty, e=entry, s=sl, tp_=tp:
-                        bd_orders.create_expert_buy_order(page, t, q, e, s, tp_, "max"),
-                    timeout=30,
-                )
-                if not order_data:
-                    send_fn(f"⚠️ {ticker} : pas de réponse BD — skip")
-                    continue
-
-                order_id = order_data.get("id") or order_data.get("order_id")
-                if not order_id:
-                    send_fn(f"⚠️ {ticker} : order_id manquant — skip")
-                    continue
-
-                conf = playwright_session.run(
-                    lambda page, oid=order_id: bd_orders.execute_strategy(page, oid),
-                    timeout=30,
-                )
-                if not conf:
-                    send_fn(f"⚠️ {ticker} : confirmation échouée — skip")
-                    continue
-
-                # Enregistre la position autonome
-                name = ticker.split(".")[0].upper()
-                data = portfolio.load()
-                data.setdefault("positions", {})[name] = {
-                    "ticker":      ticker,
-                    "qty":         qty,
-                    "entry_price": round(entry, 4),
-                    "target_high": round(tp, 4),
-                    "target_low":  round(sl, 4),
-                    "autonomous":  True,
-                    "auto_reason": cand["reason"],
-                }
-                portfolio.save(data)
-
-                send_fn(
-                    f"✅ ACHAT AUTONOME CONFIRMÉ\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}€\n"
-                    f"SL : {sl}€ | TP : {tp}€\n"
-                    f"Coût : {cost:.0f}€ | Budget restant : {available - cost:.0f}€"
-                )
-                return  # Une seule entrée par cycle
-
-            except Exception as e:
-                send_fn(f"⚠️ Entrée autonome {ticker} : {e}")
-                print(f"[Auto] Entry error {ticker}: {e}")
-                continue
+            if _place_order(ticker, cand["entry"], cand["sl"], cand["tp"],
+                            available, cand["reason"], send_fn):
+                return
 
     finally:
         _entry_lock.release()

@@ -402,6 +402,22 @@ Si ACHAT → format :
                     continue
                 val = _validate_tickers(val)
                 opportunities.append(val)
+                # Stocke pour le moteur autonome (Option B)
+                try:
+                    entry_m = re.search(r"Entr[ée]e?\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                    sl_m    = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                    tp_m    = re.search(r"\bTP\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                    if entry_m and sl_m and tp_m:
+                        portfolio.add_pending_opportunity(
+                            t,
+                            float(entry_m.group(1).replace(",", ".")),
+                            float(sl_m.group(1).replace(",", ".")),
+                            float(tp_m.group(1).replace(",", ".")),
+                            reason=val.splitlines()[0][:150],
+                            source="briefing",
+                        )
+                except Exception as _pe:
+                    print(f"[briefing] pending_opp store error {t}: {_pe}")
 
         # ── Assemblage final ─────────────────────────────────────────────────
         # Extrait la partie analyse portefeuille (avant les tickers candidats)
@@ -1214,6 +1230,22 @@ Si ACHAT : format exact :
                 pass
 
             opportunities.append(val)
+            # Stocke pour le moteur autonome (Option B)
+            try:
+                entry_m = re.search(r"Entr[ée]e?\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                sl_m    = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                tp_m    = re.search(r"\bTP\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                if entry_m and sl_m and tp_m:
+                    portfolio.add_pending_opportunity(
+                        t,
+                        float(entry_m.group(1).replace(",", ".")),
+                        float(sl_m.group(1).replace(",", ".")),
+                        float(tp_m.group(1).replace(",", ".")),
+                        reason=val.splitlines()[0][:150],
+                        source="scan",
+                    )
+            except Exception as _pe:
+                print(f"[scan] pending_opp store error {t}: {_pe}")
 
         # ── Assemblage final ──────────────────────────────────────────────────
         result_parts = [f"POSITIONS\n{portfolio_summary}"]

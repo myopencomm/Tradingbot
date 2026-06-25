@@ -25,6 +25,50 @@ def get_cash() -> float:
     return load().get("cash_available", 0)
 
 
+def get_pending_opportunities() -> list:
+    """Retourne les opportunités validées non expirées (issues du briefing/scan)."""
+    from datetime import datetime
+    opps = load().get("pending_opportunities", [])
+    now  = datetime.now().isoformat()
+    return [o for o in opps if o.get("expires_at", "") > now]
+
+
+def add_pending_opportunity(ticker: str, entry: float, sl: float, tp: float,
+                             reason: str = "", source: str = "briefing"):
+    """Stocke une opportunité validée pour que le moteur autonome puisse l'exploiter."""
+    import pytz
+    from datetime import datetime, timedelta
+    PARIS = pytz.timezone("Europe/Paris")
+    now     = datetime.now(PARIS)
+    # Expire à 17h30 le même jour (fin de marché) — pas question d'agir sur
+    # une opportunité du matin le lendemain matin sans re-validation.
+    expires = now.replace(hour=17, minute=30, second=0, microsecond=0)
+    if now >= expires:
+        expires = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    data = load()
+    opps = data.get("pending_opportunities", [])
+    opps = [o for o in opps if o.get("ticker") != ticker]  # déduplique
+    opps.append({
+        "ticker":       ticker,
+        "entry":        round(entry, 4),
+        "sl":           round(sl, 4),
+        "tp":           round(tp, 4),
+        "reason":       reason[:150],
+        "source":       source,
+        "validated_at": now.isoformat(),
+        "expires_at":   expires.isoformat(),
+    })
+    data["pending_opportunities"] = sorted(opps, key=lambda x: x["validated_at"], reverse=True)[:5]
+    save(data)
+
+
+def clear_pending_opportunity(ticker: str):
+    data = load()
+    opps = data.get("pending_opportunities", [])
+    data["pending_opportunities"] = [o for o in opps if o.get("ticker") != ticker]
+    save(data)
+
+
 def get_autonomous_config() -> dict:
     return load().get("autonomous_config", {})
 
