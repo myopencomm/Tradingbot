@@ -7,8 +7,6 @@ Le bot gère en totale autonomie un budget isolé.
 - Sorties : détectées via surveillance prix, exécutées par l'Expert BD
 - Notifications Telegram pour chaque action
 """
-import json
-import re
 import threading
 from datetime import datetime
 import pytz
@@ -73,52 +71,6 @@ def _is_market_open() -> bool:
     mins = now.hour * 60 + now.minute
     return 9 * 60 + 5 <= mins <= 17 * 60 + 35
 
-
-def _validate_candidate(ticker: str, price: float,
-                        tech: dict, funds: dict, budget: float, ai) -> dict | None:
-    """
-    Validation IA légère — retourne {entry, sl, tp, reason} ou None.
-    Prompt volontairement court pour limiter les tokens.
-    """
-    rsi     = tech.get("rsi", 50)
-    mom     = tech.get("momentum_1m", 0)
-    analyst = funds.get("analyst_target") or "N/A"
-
-    prompt = (
-        f"Algo-trader. {ticker} | Cours {price} | RSI {rsi:.0f} | "
-        f"Momentum 1m {mom:+.1f}% | Objectif analyste {analyst} | Budget {budget:.0f}€\n"
-        f"Règles : SL ≤ -8%, TP ≥ +8%, entrée ±1% du cours, horizon 1-3 semaines.\n"
-        f"Setup valide → réponds JSON uniquement :\n"
-        f'{{ "entry": X.XX, "sl": X.XX, "tp": X.XX, "reason": "1 phrase" }}\n'
-        f"Pas de setup clair → réponds SKIP"
-    )
-
-    try:
-        raw = ai.complete(prompt, max_tokens=120).strip()
-        if "SKIP" in raw[:20].upper():
-            return None
-        m = re.search(r'\{[^}]+\}', raw, re.DOTALL)
-        if not m:
-            return None
-        d     = json.loads(m.group(0))
-        entry = float(d.get("entry", price))
-        sl    = float(d.get("sl", 0))
-        tp    = float(d.get("tp", 0))
-        if sl <= 0 or tp <= 0 or tp <= entry:
-            return None
-        sl_pct = (entry - sl) / entry * 100
-        tp_pct = (tp - entry) / entry * 100
-        if sl_pct > 9 or tp_pct < 6:
-            return None
-        return {
-            "entry":  round(entry, 3),
-            "sl":     round(sl, 3),
-            "tp":     round(tp, 3),
-            "reason": str(d.get("reason", "setup technique"))[:100],
-        }
-    except Exception as e:
-        print(f"[Auto] validate {ticker}: {e}")
-        return None
 
 
 # ─── Cycle d'entrée ─────────────────────────────────────────────────────────
@@ -281,44 +233,10 @@ def run_entry_cycle(send_fn) -> None:
                 if _place_order(ticker, actual_entry, sl, tp, available, source_tag, send_fn):
                     return  # Une seule entrée par cycle
 
-        # ── Chemin 2 : fallback — scan quantitatif sur SCAN_UNIVERSE ─────────
-        print("[Auto] Pas d'opportunité en attente — scan quantitatif fallback...")
-        from analysis import _quant_screen, SCAN_UNIVERSE
-        from ai_provider import get_provider
-
-        regime_data = prices.get_market_regime()
-        regime      = regime_data.get("label", "NEUTRAL")
-        index_mom   = regime_data.get("index_mom_avg", 0.0)
-
-        if regime == "CRISIS":
-            print("[Auto] Régime CRISIS — pas d'entrée")
-            return
-
-        screened = _quant_screen(SCAN_UNIVERSE, held, regime=regime, index_mom=index_mom)
-        if not screened:
-            print("[Auto] Aucun candidat quantitatif")
-            return
-
-        print(f"[Auto] {len(screened)} candidats — validation IA des top 5...")
-        ai = get_provider()
-
-        for item in screened[:5]:
-            ticker = item["ticker"]
-            quote  = prices.get_quote(ticker)
-            price  = quote.get("price")
-            if not price or price > available:
-                continue
-
-            tech  = prices.get_technicals(ticker) or {}
-            funds = prices.get_fundamentals(ticker) or {}
-            cand  = _validate_candidate(ticker, price, tech, funds, available, ai)
-            if not cand:
-                print(f"[Auto] {ticker} : SKIP")
-                continue
-
-            if _place_order(ticker, cand["entry"], cand["sl"], cand["tp"],
-                            available, cand["reason"], send_fn):
-                return
+        # Aucune opportunité validée disponible → on n'agit pas.
+        # Le moteur autonome n'entre en position QUE sur des analyses complètes
+        # (briefing 9h05 ou /scan manuel). Pas de prise de risque sur analyse légère.
+        print("[Auto] Aucune opportunité validée en attente — rien à faire.")
 
     finally:
         _entry_lock.release()
