@@ -421,7 +421,7 @@ Si ACHAT → format :
 - Thèse : [CATALYSEUR : événement + date après {today_str}] OU [MOMENTUM : tendance + niveau qui invalide]
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
-                val = _strip_markdown(ai.complete(val_prompt, max_tokens=250))
+                val = _strip_markdown(ai.complete(val_prompt, max_tokens=400))
                 if val.strip().upper().startswith("EXCLU"):
                     reason = val.strip().split("—", 1)[1].strip()[:60] if "—" in val else "écarté"
                     label = f"{company_name} ({t})" if company_name != t else t
@@ -1207,7 +1207,7 @@ Si ACHAT : format exact :
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
 
-            val = _strip_markdown(ai.complete(validate_prompt, max_tokens=300))
+            val = _strip_markdown(ai.complete(validate_prompt, max_tokens=400))
             # Détection EXCLU robuste : l'IA peut écrire l'en-tête de la société
             # sur la première ligne avant de dire EXCLU sur la suivante.
             # On cherche dans les 5 premières lignes, pas seulement startswith.
