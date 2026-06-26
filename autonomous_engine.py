@@ -233,13 +233,62 @@ def run_entry_cycle(send_fn) -> None:
                     print(f"[Auto] {ticker} : cours {price} > budget {available:.0f}€")
                     continue
 
-                # Adapte l'entrée au cours réel (marché a bougé depuis la validation)
-                actual_entry = round(price, 3)
+                # ── Research pré-achat : confirmation indépendante avant ordre réel ──
+                send_fn(f"🔍 Vérification research avant achat autonome — {ticker}…")
+                research_lines: list[str] = []
+
+                def _capture(msg, _buf=research_lines):
+                    _buf.append(msg)
+                    send_fn(msg)
+
+                try:
+                    import analysis as _analysis
+                    _analysis.research_ticker(_capture, ticker, "")
+                except Exception as e:
+                    send_fn(f"⚠️ {ticker} : research échoué ({e}) — achat annulé par précaution")
+                    portfolio.clear_pending_opportunity(ticker)
+                    continue
+
+                # Parse le verdict dans les premières lignes (format : ACHAT / NEUTRE / ÉVITER)
+                full_upper = "\n".join(research_lines).upper()
+                head       = " ".join(full_upper.splitlines()[:8])
+                is_buy     = "ACHAT" in head
+                is_bad     = "ÉVITER" in head or "EVITER" in head or (
+                    "NEUTRE" in head and not is_buy
+                )
+                if is_bad or not is_buy:
+                    verdict = "NEUTRE/ÉVITER" if is_bad else "ambigu"
+                    send_fn(
+                        f"🔴 {ticker} : research dit {verdict} — achat autonome annulé.\n"
+                        f"Opportunité supprimée. Lance /scan pour une nouvelle analyse."
+                    )
+                    portfolio.clear_pending_opportunity(ticker)
+                    continue
+
+                # Re-vérifie le prix après le research (~30-60s se sont écoulés)
+                quote2 = prices.get_quote(ticker)
+                price2 = quote2.get("price")
+                if not price2:
+                    portfolio.clear_pending_opportunity(ticker)
+                    continue
+                drift2 = abs(price2 - entry) / entry
+                if drift2 > 0.03:
+                    send_fn(
+                        f"⚠️ {ticker} : prix dérivé pendant le research "
+                        f"({price2} vs {entry} — {drift2*100:.1f}%) — achat annulé"
+                    )
+                    portfolio.clear_pending_opportunity(ticker)
+                    continue
+
+                send_fn(f"✅ {ticker} : research confirme ACHAT — passage de l'ordre…")
+                # ────────────────────────────────────────────────────────────────────
+
+                # Adapte l'entrée au cours réel post-research
+                actual_entry = round(price2, 3)
                 source_tag   = f"[{opp.get('source','briefing')}] " + opp.get("reason", "")[:80]
 
-                # Clear seulement si ordre réussi — échec = on garde pour retry
                 success = _place_order(ticker, actual_entry, sl, tp, available, source_tag, send_fn)
-                portfolio.clear_pending_opportunity(ticker)  # toujours clear (évite reboucle infinie)
+                portfolio.clear_pending_opportunity(ticker)
                 if success:
                     return  # Une seule entrée par cycle
 
