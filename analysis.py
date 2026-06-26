@@ -94,6 +94,14 @@ RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
 - TP : doit être atteignable dans l'horizon du trade (jours à semaines).
   Plafond +{2 * DEFAULT_TP_PCT:.0f}% sauf événement binaire daté (OPA en cours,
   décision FDA). Une mégacap ne fait pas +50% sur des résultats trimestriels.
+- OPA / OFFRE DE RACHAT — RÈGLE ABSOLUE : si une OPA, offre de rachat ou fusion
+  est en cours à un prix P, le cours ne peut PHYSIQUEMENT pas dépasser P (sauf
+  surenchère). Le TP DOIT être ≤ P. Si le spread (P − cours_actuel) / cours_actuel
+  est inférieur au TP minimum requis (+{_TP}%) → EXCLUS OBLIGATOIRE, sans exception.
+  Exemple : OPA à 15.60€, cours 15.35€ → spread +1.6% → EXCLUS (min +{_TP}% requis).
+  Une OPA n'est PAS un catalyseur haussier au-delà du prix d'offre — c'est un plafond dur.
+  Si la recherche web mentionne une OPA, une acquisition, un rachat ou un "takeover bid"
+  sur ce titre → vérifier immédiatement le prix d'offre avant tout autre raisonnement.
 - TRADE MOMENTUM : l'absence de catalyseur daté n'est PAS un motif d'exclusion.
   Si tendance haussière confirmée — perf 3 mois positive ET momentum 1 mois
   positif ET RSI entre 40 et 70 — c'est une thèse ACHAT VALIDE de plein droit :
