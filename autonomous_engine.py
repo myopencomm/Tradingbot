@@ -103,11 +103,19 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
 
         order_data = playwright_session.run(
             lambda page, t=ticker, q=qty, e=entry, s=sl, tp_=tp:
-                bd_orders.create_expert_buy_order(page, t, q, e, s, tp_, "max"),
+                bd_orders.create_expert_buy_order(page, t, q, e, s, tp_, "seance"),
             timeout=30,
         )
         if not order_data:
-            send_fn(f"⚠️ {ticker} : pas de réponse BD")
+            raw    = bd_orders._last_raw
+            status = raw.get("status", "?")
+            send_fn(
+                f"⚠️ {ticker} : ordre rejeté par BD (HTTP {status})\n"
+                f"L'ordre Expert achat n'est peut-être pas supporté "
+                f"sur cette place (XAMS/XBRU/US).\n"
+                f"Commande manuelle :\n"
+                f"/ordre acheter {ticker} {qty} expert {entry} {sl} {tp}"
+            )
             return False
 
         order_id = order_data.get("id") or order_data.get("order_id")
@@ -229,8 +237,10 @@ def run_entry_cycle(send_fn) -> None:
                 actual_entry = round(price, 3)
                 source_tag   = f"[{opp.get('source','briefing')}] " + opp.get("reason", "")[:80]
 
-                portfolio.clear_pending_opportunity(ticker)
-                if _place_order(ticker, actual_entry, sl, tp, available, source_tag, send_fn):
+                # Clear seulement si ordre réussi — échec = on garde pour retry
+                success = _place_order(ticker, actual_entry, sl, tp, available, source_tag, send_fn)
+                portfolio.clear_pending_opportunity(ticker)  # toujours clear (évite reboucle infinie)
+                if success:
                     return  # Une seule entrée par cycle
 
         # Aucune opportunité validée disponible → on n'agit pas.
