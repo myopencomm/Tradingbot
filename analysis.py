@@ -81,8 +81,11 @@ Priorité au meilleur rapport risque/rendement, peu importe le marché."""
 
 ANALYSIS_RULES = f"""
 RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
-- RSI : survente = RSI < 30, surachat = RSI > 70. Entre 30 et 70 : NEUTRE —
-  ne jamais parler de « survente relative » pour un RSI à 40-50.
+- RSI : survente = RSI < 30. Zone 30-70 : sain. RSI 70-78 : EXTENSION, PAS un
+  motif d'exclusion en soi — dans une tendance haussière confirmée (momentum positif,
+  cours > MM20/MM50) c'est NORMAL et tradeable en momentum, avec gestion serrée du SL.
+  RSI > 80 : surachat extrême → prudence, attendre repli ou EXCLUS.
+  Ne jamais parler de « survente relative » pour un RSI à 40-50.
 - COUTEAU QUI TOMBE : si perf 1 an < -30% OU cours à moins de +15% du plus bas
   52 semaines → risque HIGH obligatoire, et ACHAT uniquement avec un catalyseur
   de RETOURNEMENT précis et daté. Des résultats trimestriels ordinaires ne
@@ -104,12 +107,16 @@ RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
   sur ce titre → vérifier immédiatement le prix d'offre avant tout autre raisonnement.
 - TRADE MOMENTUM : l'absence de catalyseur daté n'est PAS un motif d'exclusion.
   Si tendance haussière confirmée — perf 3 mois positive ET momentum 1 mois
-  positif ET RSI entre 40 et 70 — c'est une thèse ACHAT VALIDE de plein droit :
+  positif ET RSI < 78 — c'est une thèse ACHAT VALIDE de plein droit :
   TP +{DEFAULT_TP_PCT:.0f}% à +{1.5 * DEFAULT_TP_PCT:.0f}%, risque MEDIUM minimum,
   précise le niveau technique qui invalide la thèse (support/SL).
   Jamais sur un couteau qui tombe.
 - SENTIMENT SOCIAL : signal d'appoint — jamais un argument principal d'achat.
-- En cas de doute → EXCLUS. Mieux vaut zéro opportunité qu'une mauvaise.
+- DOUTE : un trade momentum propre (tendance + volume + RSI < 78) n'est PAS un
+  « doute » — c'est validable. N'EXCLUS que sur un vrai défaut : couteau qui tombe,
+  surachat extrême (RSI > 80), illiquidité, thèse contredite par les news, OPA plafonnée.
+  Ne rejette pas un bon momentum par excès de prudence : le but est de TROUVER des
+  trades à +{_TP}%, pas de tout écarter.
 """
 
 TICKER_RULES = """
@@ -361,7 +368,26 @@ MISSION
         if cash >= 1000:
             held_tickers = {cfg["ticker"].upper()
                             for cfg in portfolio.load().get("positions", {}).values()}
-            raw_tickers = _extract_tickers(pass1_candidates)
+            ai_tickers = _extract_tickers(pass1_candidates)
+
+            # Amorce avec les meilleurs candidats RÉELS du filtre quantitatif
+            # (liquides, en tendance) — évite de dépendre de l'imagination de l'IA
+            # et garantit des candidats momentum chaque matin.
+            quant_tickers = []
+            try:
+                regime_data = prices.get_market_regime()
+                quant = _quant_screen(
+                    SCAN_UNIVERSE, held_tickers,
+                    regime_data["label"], regime_data.get("index_mom_avg", 0.0) or 0.0,
+                )
+                quant_tickers = [c["ticker"] for c in quant[:6]]
+                print(f"[briefing] quant screen ({regime_data['label']}): "
+                      f"{len(quant)} candidats, top6 {quant_tickers}")
+            except Exception as _qe:
+                print(f"[briefing] quant screen error: {_qe}")
+
+            # Quant d'abord (fiable), puis suggestions IA (catalyseurs), dédupliqué
+            raw_tickers = list(dict.fromkeys(quant_tickers + ai_tickers))
 
             for t in raw_tickers[:10]:
                 if t.upper() in held_tickers:
