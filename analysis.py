@@ -308,15 +308,19 @@ def morning_briefing(send_fn) -> None:
         if cash >= 1000:
             catalysts = research.market_catalysts()
             opps_mission = f"""
-2. Identifie 6 à 10 tickers CANDIDATS de deux types (tous marchés Bourse Direct) :
+2. Risque global portefeuille : LOW / MEDIUM / HIGH
+
+Puis écris EXACTEMENT cette ligne séparatrice seule : ===CANDIDATS===
+Et APRÈS cette ligne uniquement, identifie 6 à 10 tickers CANDIDATS de deux types
+(tous marchés Bourse Direct) :
    A) CATALYSEUR : événement futur daté après le {today_str} (résultats, OPA, FDA, contrat).
    B) MOMENTUM : tendance haussière sur 3+ mois rendant +{_TP}% atteignable.
    Propose LARGEMENT — ne pré-filtre pas, la validation technique (RSI, couteau qui tombe,
    tendance) sera faite ensuite avec les données réelles. Seules exclusions à ce stade :
    les secteurs ou valeurs explicitement bannis dans le contexte personnel.
-   Réponds UNIQUEMENT avec les tickers Yahoo Finance, un par ligne (ex: ALFRE.PA, MSFT).
-   Ne donne AUCUN prix, AUCUNE explication — juste les tickers.
-3. Risque global portefeuille : LOW / MEDIUM / HIGH"""
+   Après ===CANDIDATS===, réponds UNIQUEMENT avec les tickers Yahoo Finance, un par
+   ligne (ex: ALFRE.PA puis MSFT). AUCUN en-tête, AUCUN prix, AUCUNE explication, AUCUN
+   numéro — juste les tickers bruts un par ligne."""
         else:
             catalysts = ""
             opps_mission = f"\n2. Risque global : LOW / MEDIUM / HIGH\n(Cash {cash}€ insuffisant pour nouvelles positions)"
@@ -346,11 +350,18 @@ MISSION
         # ── Passe 2 : validation des candidats avec prix réels ───────────────
         opportunities = []
         rejected_morning = []
+        # Sépare proprement l'analyse portefeuille des tickers candidats via le
+        # délimiteur ===CANDIDATS=== (évite que des en-têtes/tickers fuitent dans
+        # l'analyse affichée).
+        if "===CANDIDATS===" in pass1:
+            pass1_analysis, _, pass1_candidates = pass1.partition("===CANDIDATS===")
+        else:
+            pass1_analysis, pass1_candidates = pass1, pass1
+
         if cash >= 1000:
-            # Extrait les tickers candidats (lignes courtes en majuscules)
             held_tickers = {cfg["ticker"].upper()
                             for cfg in portfolio.load().get("positions", {}).values()}
-            raw_tickers = _extract_tickers(pass1)
+            raw_tickers = _extract_tickers(pass1_candidates)
 
             for t in raw_tickers[:10]:
                 if t.upper() in held_tickers:
@@ -447,10 +458,13 @@ Si ACHAT → format :
                     print(f"[briefing] pending_opp store error {t}: {_pe}")
 
         # ── Assemblage final ─────────────────────────────────────────────────
-        # Extrait la partie analyse portefeuille (avant les tickers candidats)
+        # L'analyse portefeuille = tout ce qui précède ===CANDIDATS===.
+        # Filet de sécurité : retire toute ligne candidate résiduelle (ticker nu
+        # ou en-tête type "CANDIDAT A — ...") au cas où le délimiteur manque.
         portfolio_analysis = "\n".join(
-            l for l in pass1.splitlines()
-            if not (len(l.strip()) <= 12 and l.strip().replace(".", "").replace("-", "").isupper())
+            l for l in pass1_analysis.splitlines()
+            if not re.match(r"^\s*CANDIDAT\b", l, re.I)
+            and not re.match(r"^\s*[A-Za-z]{1,8}(?:\.[A-Za-z]{1,3})?\s*$", l.strip())
         ).strip()
 
         date = datetime.now(PARIS).strftime("%d/%m/%Y")
@@ -584,25 +598,47 @@ CONTEXTE MARCHÉ
 MISSION ÉTAPE 1 — IDENTIFICATION UNIQUEMENT
 Cash disponible : {cash}€
 
-Analyse les positions. Identifie :
-A) La ou les positions à swapper (momentum faible, proche SL, thesis invalidée).
-B) 1 à 2 tickers Euronext candidats à l'achat en remplacement — tickers Yahoo Finance exacts uniquement.
+Un swap n'est PAS obligatoire. Ne swappe QUE si une position remplit un de ces critères :
+- thèse clairement invalidée (cassure de support, catalyseur raté, news négative dure), OU
+- momentum durablement négatif SANS potentiel restant vers le TP, OU
+- SL réellement menacé ET pas de catalyseur proche pour rebondir.
 
-Réponds UNIQUEMENT dans ce format, sans analyse ni commentaire :
+NE PAS swapper une position qui :
+- conserve un potentiel raisonnable vers son TP (objectif analyste au-dessus du cours), OU
+- a un catalyseur daté proche (résultats, etc.), OU
+- est trop petite pour que la rotation vaille les frais (valeur < ~600€ → friction > gain marginal).
+
+Si AUCUNE position ne mérite un swap, réponds EXACTEMENT :
+NE_RIEN_FAIRE: [raison en 1 ligne]
+
+Sinon, réponds UNIQUEMENT dans ce format, sans analyse ni commentaire :
 VENDRE: TICKER_A
 ACHETER: TICKER_B
 ACHETER: TICKER_C (optionnel)
-RAISON_VENTE: [1 ligne]
+RAISON_VENTE: [1 ligne — pourquoi la thèse est cassée, pas juste "momentum faible"]
 RAISON_ACHAT_B: [1 ligne]"""
 
-        step1 = ai.complete(step1_prompt, max_tokens=200).strip()
+        step1 = ai.complete(step1_prompt, max_tokens=250).strip()
         print(f"[swap step1] {step1}")
+
+        date = datetime.now(PARIS).strftime("%d/%m/%Y")
+
+        # Décision explicite de ne rien faire → on respecte et on s'arrête là
+        if "NE_RIEN_FAIRE" in step1.upper():
+            reason = step1.split(":", 1)[1].strip() if ":" in step1 else "aucune rotation justifiée"
+            send_fn(
+                f"🔄 ANALYSE SWAP — {date}\n\n"
+                f"✋ AUCUN SWAP CETTE SEMAINE\n{reason}\n\n"
+                f"Les positions actuelles gardent leur potentiel — la rotation "
+                f"générerait des frais sans gain net. On conserve."
+            )
+            return
 
         # Extraction des tickers candidats à l'achat
         buy_tickers = re.findall(r'ACHETER\s*:\s*([A-Z][A-Z0-9]{0,7}(?:\.[A-Z]{1,3})?)', step1)
         if not buy_tickers:
             # Fallback : pas de candidat identifié
-            send_fn(f"🔄 ANALYSE SWAP — {datetime.now(PARIS).strftime('%d/%m/%Y')}\n\n{step1}\n\n⚠️ Aucun ticker candidat extrait — relance manuelle si besoin.")
+            send_fn(f"🔄 ANALYSE SWAP — {date}\n\n{step1}\n\n⚠️ Aucun ticker candidat extrait — relance manuelle si besoin.")
             return
 
         # ÉTAPE 2 — fetch cours réels pour les candidats
@@ -633,11 +669,20 @@ Maintenant rédige l'analyse complète :
    - Entrée : utilise le cours réel fourni ± 0.5% max (jamais un prix de mémoire)
    - SL : -{_SL}% du cours réel
    - TP : +{_TP}% minimum du cours réel (plus si catalyseur fort)
+   - Ratio risque/rendement chiffré
    - Raison du choix
-3. Conclusion : swapper maintenant ou attendre ?"""
+3. ARBITRAGE HONNÊTE — compare le candidat à la position à vendre :
+   - La position à vendre a-t-elle ENCORE du potentiel vers son TP (objectif analyste,
+     catalyseur proche) ? Si oui, le swap doit être nettement supérieur pour se justifier.
+   - Friction : combien de titres, quelle valeur ? Un swap sur < ~600€ ne vaut souvent
+     pas les frais — dis-le clairement si c'est le cas.
+   - Le R/R du candidat bat-il VRAIMENT celui de garder la position actuelle ?
+4. CONCLUSION — sois prêt à dire NON : "swapper maintenant" OU "conserver, ne pas swapper"
+   (avec la raison). Ne recommande un swap QUE si l'avantage est net et chiffré. Dans le
+   doute, conserver. Cette conclusion doit être cohérente avec ce qu'un /research dirait
+   sur la position concernée."""
 
         result = _strip_markdown(ai.complete(step2_prompt, max_tokens=800))
-        date = datetime.now(PARIS).strftime("%d/%m/%Y")
         send_fn(f"🔄 ANALYSE SWAP — {date}\n\n{result}")
 
     except Exception as e:
