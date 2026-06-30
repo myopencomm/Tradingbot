@@ -1,5 +1,6 @@
 import math
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pytz
@@ -69,6 +70,10 @@ def _trigger_autonomous(send_fn) -> None:
 
 _SL = f"{DEFAULT_SL_PCT:.0f}"
 _TP = f"{DEFAULT_TP_PCT:.0f}"
+
+# Empêche deux scans simultanés (le scan est lourd : web + vision IA × 8 candidats).
+# Deux scans concurrents doublent la charge réseau et peuvent se figer mutuellement.
+_scan_lock = threading.Lock()
 
 TRADER_SYSTEM = f"""Tu es un expert trader actif sur tous les marchés accessibles via Bourse Direct (France).
 Compte-titres ordinaire (CTO), horizon court à moyen terme (jours à quelques semaines).
@@ -1040,10 +1045,19 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
         _pf = progress_fn
         update_fn = lambda text: _pf(text.split("Analyse ")[-1].split("...")[0] if "Analyse " in text else text, 0, 0)
     _upd = update_fn if update_fn else send_fn
-    try:
-        if ticker:
-            return research_ticker(send_fn, ticker)
 
+    # Recherche ciblée sur un ticker : pas de verrou (rapide, pas de conflit)
+    if ticker:
+        return research_ticker(send_fn, ticker)
+
+    # Verrou : refuse un 2e scan tant qu'un scan complet tourne déjà
+    if not _scan_lock.acquire(blocking=False):
+        send_fn("⏳ Un scan est déjà en cours — patiente quelques instants, "
+                "le résultat arrive. (Inutile de relancer /scan.)")
+        return
+
+    t_start = datetime.now(PARIS)
+    try:
         ai = get_provider()
         cash = portfolio.get_cash()
         snapshot = _portfolio_snapshot()
@@ -1153,6 +1167,7 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 
         for _scan_idx, item in enumerate(top_candidates):
             t = item["ticker"]
+            print(f"[scan] validation {_scan_idx + 1}/{len(top_candidates)} : {t}")
             try:
                 _upd(f"🔍 Analyse {t}... ({_scan_idx + 1}/{len(top_candidates)})")
             except Exception:
@@ -1362,12 +1377,17 @@ Si ACHAT : format exact :
         if rejected:
             result_parts.append("EXCLUS\n" + "\n".join(rejected))
 
+        elapsed = (datetime.now(PARIS) - t_start).total_seconds()
+        print(f"[scan] terminé en {elapsed:.0f}s — {len(opportunities)} opportunité(s), "
+              f"{len(rejected)} écartée(s). Envoi du résultat final…")
+
         send_fn(
             f"{emoji} SCAN OPPORTUNITÉS — {regime_summary}\n"
             f"{len(SCAN_UNIVERSE)} actions scannées · {len(screened)} passent les filtres\n\n"
             + "\n\n".join(result_parts)
             + f"\n\n💰 Cash: {cash}€"
         )
+        print("[scan] résultat final envoyé ✅")
 
         # Mode autonome : si actif + Playwright connecté + opportunités trouvées
         # → entre immédiatement, sans attendre le prochain check planifié
@@ -1375,7 +1395,14 @@ Si ACHAT : format exact :
             _trigger_autonomous(send_fn)
 
     except Exception as e:
-        send_fn(f"⚠️ Erreur scan: {e}")
+        import traceback
+        print(f"[scan] ERREUR : {e}\n{traceback.format_exc()}")
+        try:
+            send_fn(f"⚠️ Erreur scan: {e}")
+        except Exception as send_err:
+            print(f"[scan] impossible d'envoyer l'erreur (réseau ?) : {send_err}")
+    finally:
+        _scan_lock.release()
 
 
 def _parse_vision_output(raw: str) -> list[dict]:
