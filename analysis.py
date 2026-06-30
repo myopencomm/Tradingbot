@@ -10,7 +10,8 @@ import research
 from ai_provider import get_provider, VISION_PROMPT
 from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT,
-                    POSITION_BUDGET_PCT, POSITION_BUDGET_MAX)
+                    POSITION_BUDGET_PCT, POSITION_BUDGET_MAX,
+                    BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO)
 
 # ── Univers de scan (~100 actions Bourse Direct) ──────────────────────────────
 # Le filtre quantitatif (RSI/momentum/volume) élimine les tickers invalides
@@ -1373,6 +1374,24 @@ Si ACHAT : format exact :
                             f"\n   puis protection : /ordre vendre {t} {qty_sugg} "
                             f"expert {sl_v} {tp_v}{stretch}"
                         )
+
+                        # ── Rentabilité nette de frais (courtage A/R) ──────────
+                        roundtrip = 2 * BROKERAGE_FEE
+                        gross_tp  = qty_sugg * (tp_v - current_price)
+                        net_tp    = gross_tp - roundtrip
+                        loss_sl   = qty_sugg * (current_price - sl_v) + roundtrip
+                        fee_pct   = roundtrip / cost * 100 if cost else 0
+                        val += (
+                            f"\n💸 Frais A/R ≈ {roundtrip:.2f}€ ({fee_pct:.1f}% de la position)"
+                            f"\n   Gain net au TP ≈ +{net_tp:.0f}€ | Perte au SL ≈ -{loss_sl:.0f}€"
+                        )
+                        # Garde : si les frais mangent une part trop grande du gain
+                        if gross_tp > 0 and gross_tp < roundtrip * MIN_NET_GAIN_FEE_RATIO:
+                            val += (
+                                f"\n⚠️ Frais élevés vs gain visé : position trop petite "
+                                f"pour ce trade (gain {gross_tp:.0f}€ < {MIN_NET_GAIN_FEE_RATIO:.0f}× frais). "
+                                f"Augmente la taille ou passe ton tour."
+                            )
             except Exception:
                 pass
 

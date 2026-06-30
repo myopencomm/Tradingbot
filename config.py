@@ -37,6 +37,13 @@ DEFAULT_TP_PCT = float(os.getenv("DEFAULT_TP_PCT", "10"))
 POSITION_BUDGET_PCT = float(os.getenv("POSITION_BUDGET_PCT", "50"))
 POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "800"))
 
+# Frais de courtage Bourse Direct par ordre (confirmé via capture réseau : ~1.98€).
+# Un aller-retour (achat + vente) = 2 × ce montant. Sert au calcul de rentabilité nette.
+BROKERAGE_FEE = float(os.getenv("BROKERAGE_FEE", "1.98"))
+# Marge mini : le gain net au TP doit valoir au moins ce multiple des frais A/R,
+# sinon le trade ne vaut pas le coup (frais qui mangent le gain).
+MIN_NET_GAIN_FEE_RATIO = float(os.getenv("MIN_NET_GAIN_FEE_RATIO", "5"))
+
 # Alertes TP automatiques : "on" (défaut) ou "off" pour les stratégies
 # qui laissent courir les gagnants sur avis IA
 TP_ALERTS = os.getenv("TP_ALERTS", "on").strip().lower() not in ("off", "false", "0", "no")

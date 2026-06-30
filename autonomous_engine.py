@@ -89,13 +89,27 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         return False
     cost = round(qty * entry, 2)
 
+    # ── Garde rentabilité : les frais A/R ne doivent pas manger le gain visé ──
+    from config import BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO
+    roundtrip = 2 * BROKERAGE_FEE
+    gross_tp  = qty * (tp - entry)
+    if gross_tp <= 0 or gross_tp < roundtrip * MIN_NET_GAIN_FEE_RATIO:
+        send_fn(
+            f"🚫 {ticker} : achat auto annulé — gain visé {gross_tp:.0f}€ trop faible "
+            f"vs frais A/R {roundtrip:.2f}€ (seuil {MIN_NET_GAIN_FEE_RATIO:.0f}×). "
+            f"Position trop petite pour rentabiliser les frais."
+        )
+        print(f"[Auto] {ticker} : gain {gross_tp:.0f}€ < {roundtrip*MIN_NET_GAIN_FEE_RATIO:.0f}€ — skip frais")
+        return False
+    net_tp = gross_tp - roundtrip
+
     print(f"[Auto] Entrée : {ticker} {qty}t @ {entry} SL={sl} TP={tp}")
     send_fn(
         f"🤖 MODE AUTONOME — Entrée en cours\n"
         f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}€\n"
         f"SL : {sl}€ ({(entry - sl) / entry * 100:.1f}%) | "
         f"TP : {tp}€ (+{(tp - entry) / entry * 100:.1f}%)\n"
-        f"Coût : {cost:.0f}€ | {reason}"
+        f"Coût : {cost:.0f}€ | Gain net au TP ≈ +{net_tp:.0f}€ (frais {roundtrip:.2f}€) | {reason}"
     )
 
     try:
