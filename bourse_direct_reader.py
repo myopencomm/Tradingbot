@@ -199,12 +199,15 @@ def _parse_position(text: str) -> dict | None:
     if len(parts) < 4:
         return None
 
-    name = bd_ticker = qty = pru = None
+    name = bd_ticker = qty = pru = mic = None
     for p in parts:
         if "›" in p:
             seg = p.split("›")
             if len(seg) == 2:
                 bd_ticker = seg[1].strip()
+            m_mic = re.search(r'\b(X[A-Z]{3})\b', seg[0])
+            if m_mic:
+                mic = m_mic.group(1)
         elif p.startswith("PRU"):
             m = re.search(r'PRU\s*:\s*([\d\s.,]+)', p)
             if m:
@@ -227,7 +230,8 @@ def _parse_position(text: str) -> dict | None:
     # bd_ticker optionnel (valeurs suspendues) : nom + qty suffisent
     if not name or qty is None:
         return None
-    return {"name": name, "bd_ticker": bd_ticker or "", "qty": qty, "pru": pru}
+    return {"name": name, "bd_ticker": bd_ticker or "", "qty": qty, "pru": pru,
+            "mic": mic or ""}
 
 
 def _parse_order(text: str) -> dict | None:
@@ -248,10 +252,17 @@ def _parse_order(text: str) -> dict | None:
         m_tick = re.search(r'›\s*([A-Z0-9]+)', flat)
         if m_tick:
             order["bd_ticker"] = m_tick.group(1).strip()
+    # Place / MIC (XPAR, XAMS, XBRU…) — sert à reconstruire le suffixe yfinance
+    m_mic = re.search(r'\b(X[A-Z]{3})\b', flat)
+    if m_mic:
+        order["mic"] = m_mic.group(1)
     # Nom = premier mot avant le premier séparateur/marché
     m_name = re.match(r'^([A-Za-zÀ-ÿ0-9.\- ]+?)\s*[|›]', flat)
     if m_name:
-        order["name"] = m_name.group(1).strip()
+        nm = m_name.group(1).strip()
+        # Retire un MIC accolé en fin de nom ("Unilever PLC XAMS" → "Unilever PLC")
+        nm = re.sub(r'\s+X[A-Z]{3}$', '', nm).strip()
+        order["name"] = nm
 
     # Sens — dans un bloc consolidé plusieurs ordres coexistent (ex: Achat exécuté
     # + Vente en cours). On prend le DERNIER match = l'ordre actif le plus récent.

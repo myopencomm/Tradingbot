@@ -5,6 +5,20 @@ Appelé par /sync. Met à jour cash + détecte les écarts de positions.
 import portfolio
 import bourse_direct_reader as reader
 
+# MIC (place BD) → suffixe yfinance. US (XNAS/XNYS) = pas de suffixe.
+MIC_SUFFIX = {
+    "XPAR": ".PA", "XAMS": ".AS", "XBRU": ".BR",
+    "XLON": ".L",  "XETR": ".DE",
+    "XNAS": "",     "XNYS": "",
+}
+
+
+def _yf_ticker(bd_ticker: str, mic: str) -> str:
+    """Reconstruit le ticker yfinance depuis le mnémo BD + la place (MIC)."""
+    bd_ticker = (bd_ticker or "").upper()
+    suffix = MIC_SUFFIX.get((mic or "").upper(), ".PA")  # défaut Paris
+    return f"{bd_ticker}{suffix}" if bd_ticker else ""
+
 
 def sync(page, send_fn) -> bool:
     """
@@ -55,6 +69,19 @@ def sync(page, send_fn) -> bool:
                 return k
         return None
 
+    # ── Pré-passe : protections SL/TP issues des ordres actifs ───────────
+    # Permet d'auto-créer une nouvelle position avec ses vrais SL/TP (lus sur
+    # l'ordre Expert en cours) plutôt que de demander un /add manuel.
+    order_protect = {}  # clé (bd_ticker ou name, upper) → {seuil, profit, mic}
+    for o in bd.get("orders", []):
+        if o.get("statut") != "En cours":
+            continue
+        prot = {"seuil": o.get("seuil"), "profit": o.get("profit"), "mic": o.get("mic", "")}
+        if o.get("bd_ticker"):
+            order_protect[o["bd_ticker"].upper()] = prot
+        if o.get("name"):
+            order_protect[o["name"].upper()] = prot
+
     matched_local_keys = set()
 
     for pos in bd["positions"]:
@@ -82,10 +109,44 @@ def sync(page, send_fn) -> bool:
             else:
                 lines.append(f"{local_key} OK — {bd_qty}t")
         else:
-            lines.append(
-                f"⚠️ {pos['name']} ({bd_ticker}) sur BD : {bd_qty}t @ {bd_pru}€\n"
-                f"   → pas dans le bot. /add NOM {bd_ticker}.PA {bd_qty} {bd_pru} <SL> <TP>"
-            )
+            # ── Auto-création : la position existe sur BD mais pas dans le bot ──
+            prot = order_protect.get(bd_ticker) or order_protect.get(bd_name) or {}
+            mic  = prot.get("mic") or pos.get("mic") or ""
+            yf_t = _yf_ticker(bd_ticker, mic)
+            new_key = bd_ticker or bd_name.replace(" ", "_")[:20]
+
+            sl = prot.get("seuil")
+            tp = prot.get("profit")
+            # Sans SL/TP connus (aucun ordre Expert actif) : valeurs par défaut -7%/+10%
+            if not sl and bd_pru:
+                sl = round(bd_pru * 0.93, 4)
+            if not tp and bd_pru:
+                tp = round(bd_pru * 1.10, 4)
+
+            if not yf_t or bd_qty is None or not bd_pru:
+                # Données insuffisantes → on garde le fallback manuel
+                lines.append(
+                    f"⚠️ {pos['name']} ({bd_ticker}) sur BD : {bd_qty}t @ {bd_pru}€\n"
+                    f"   → impossible d'auto-ajouter (données incomplètes). "
+                    f"/add NOM {bd_ticker or '?'}{MIC_SUFFIX.get(mic.upper(), '.PA')} {bd_qty} {bd_pru} <SL> <TP>"
+                )
+            else:
+                data.setdefault("positions", {})[new_key] = {
+                    "ticker":      yf_t,
+                    "qty":         bd_qty,
+                    "entry_price": round(bd_pru, 5),
+                    "target_high": round(tp, 4),
+                    "target_low":  round(sl, 4),
+                    "bd_name":     pos["name"],
+                }
+                local[new_key] = data["positions"][new_key]
+                matched_local_keys.add(new_key)
+                changed = True
+                src = "SL/TP lus sur l'ordre BD" if prot.get("seuil") or prot.get("profit") else "SL/TP par défaut -7%/+10%"
+                lines.append(
+                    f"➕ {new_key} ({yf_t}) AJOUTÉ auto : {bd_qty}t @ {bd_pru}€ | "
+                    f"SL {sl}€ TP {tp}€ ({src})"
+                )
 
     # ── Positions locales absentes de BD → probablement vendues ─────────
     # Détection de clôture : si une position du bot n'est plus sur BD,
