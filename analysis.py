@@ -124,6 +124,32 @@ RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
   trades à +{_TP}%, pas de tout écarter.
 """
 
+# Directive DOMINANTE injectée dans les prompts de validation. Recadre la mission :
+# le candidat a DÉJÀ passé un filtre quantitatif de momentum. Le rôle de l'IA est de
+# CONFIRMER ou de trouver un défaut DISQUALIFIANT concret — pas d'exiger un catalyseur.
+SCREEN_DIRECTIVE = f"""
+⚠️ DIRECTIVE PRIORITAIRE — elle PRIME sur ton instinct de prudence :
+Ce candidat a déjà passé un filtre quantitatif (tendance haussière + volume confirmés).
+Un momentum haussier propre EST une thèse d'achat VALIDE en soi : tendance positive +
+RSI < 78 + cours au-dessus des moyennes mobiles → ACHAT légitime, TP +{_TP}%, SL -{_SL}%.
+
+Tu n'as PAS besoin d'un catalyseur daté pour valider un momentum. NE SONT PAS des
+motifs d'exclusion (ne les utilise JAMAIS pour rejeter un momentum sain) :
+- « pas de catalyseur » / « pas d'événement avant telle date »
+- « objectif analyste sous le cours » (cible 12 mois, en retard sur le prix)
+- « consolidation » / « post-pic » / « sous résistance » sur une tendance haussière
+- sentiment de marché « fear » général (ce n'est pas spécifique au titre)
+
+EXCLUS UNIQUEMENT sur un défaut DISQUALIFIANT concret et spécifique au titre :
+- couteau qui tombe (perf 1 an < -30% ou cours < +15% du plus bas 52s)
+- surachat extrême : RSI > 80
+- une NEWS précise qui invalide la tendance (profit warning, scandale, perte de contrat)
+- OPA plafonnée (spread < +{_TP}%)
+- illiquidité réelle / société en difficulté financière
+Si aucun de ces défauts n'est présent → c'est un ACHAT. Dans le doute sur un momentum
+propre, penche vers ACHAT, pas vers EXCLUS.
+"""
+
 TICKER_RULES = """
 RÈGLES ABSOLUES — TICKERS (format Yahoo Finance) :
 - Euronext Paris / Growth : suffixe .PA (ex: AIR.PA, GNFT.PA)
@@ -445,6 +471,7 @@ MISSION
                          f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
                 val_prompt = f"""{TRADER_SYSTEM}
 {ANALYSIS_RULES}
+{SCREEN_DIRECTIVE}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
@@ -1255,9 +1282,10 @@ ou si secteur cyclique sans thèse macro claire en contexte de correction."""
             elif regime == "NEUTRAL":
                 regime_instructions = f"""
 RÉGIME : NEUTRE ({regime_summary})
-Marché sans tendance claire. Exigences renforcées.
-Préférence : valeurs défensives, catalyseurs précis et datés, RSI < 60.
-EXCLUS : momentum pur sans catalyseur daté en marché neutre."""
+Marché sans tendance d'indice claire, MAIS les titres en momentum propre restent
+tradeables — c'est justement là qu'on trouve les surperformances. Un momentum haussier
+individuel (tendance + volume + RSI < 78) est VALIDE même sans catalyseur daté.
+Préfère les titres avec force relative positive vs l'indice. Gestion du SL serrée."""
             else:  # BULL
                 regime_instructions = f"""
 RÉGIME : HAUSSIER ({regime_summary})
@@ -1265,6 +1293,7 @@ Conditions favorables. Scan momentum standard."""
 
             validate_prompt = f"""{TRADER_SYSTEM}
 {ANALYSIS_RULES}
+{SCREEN_DIRECTIVE}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
