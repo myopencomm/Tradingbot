@@ -103,16 +103,22 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
 
         order_data = playwright_session.run(
             lambda page, t=ticker, q=qty, e=entry, s=sl, tp_=tp:
-                bd_orders.create_expert_buy_order(page, t, q, e, s, tp_, "seance"),
+                bd_orders.create_expert_buy_order(page, t, q, e, s, tp_, "max"),
             timeout=30,
         )
         if not order_data:
             raw    = bd_orders._last_raw
             status = raw.get("status", "?")
+            detail = ""
+            try:
+                fields = raw.get("data", {}).get("fields") or {}
+                if fields:
+                    detail = " — " + "; ".join(f"{k}: {v[0] if isinstance(v, list) else v}"
+                                                for k, v in fields.items())
+            except Exception:
+                pass
             send_fn(
-                f"⚠️ {ticker} : ordre rejeté par BD (HTTP {status})\n"
-                f"L'ordre Expert achat n'est peut-être pas supporté "
-                f"sur cette place (XAMS/XBRU/US).\n"
+                f"⚠️ {ticker} : ordre rejeté par BD (HTTP {status}){detail}\n"
                 f"Commande manuelle :\n"
                 f"/ordre acheter {ticker} {qty} expert {entry} {sl} {tp}"
             )

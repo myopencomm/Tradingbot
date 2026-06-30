@@ -162,7 +162,7 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
 
     Valeurs acceptées :
       "seance"       → day (séance du jour)
-      "max"          → end_of_year sur XPAR, revocation ailleurs
+      "max"          → end_of_year sur Euronext (XPAR/XAMS/XBRU/XLIS), revocation ailleurs
       "revocation"   → GTC (bonne pour annulation)
       "DD/MM/YYYY"   → date précise (type "date")
       autres         → transmis tels quels (end_of_year, day…)
@@ -172,12 +172,16 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
     from datetime import datetime
     import re
 
+    # end_of_year confirmé sur XAMS via capture réseau réelle — valable sur tout
+    # Euronext (Paris/Amsterdam/Bruxelles/Lisbonne).
+    EURONEXT_MICS = {"XPAR", "XAMS", "XBRU", "XLIS"}
+
     s = (validity_str or "max").strip().lower()
 
     if s == "seance":
         return "day", datetime.now().strftime("%Y-%m-%dT00:00:00.000Z")
     if s == "max":
-        if mic == "XPAR":
+        if mic in EURONEXT_MICS:
             return "end_of_year", f"{datetime.now().year}-12-31T00:00:00.000Z"
         return "revocation", None
     if s == "revocation":
@@ -187,7 +191,7 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
         return "date", d.strftime("%Y-%m-%dT00:00:00.000Z")
     # Valeur brute (end_of_year, day…)
     if s == "end_of_year":
-        if mic != "XPAR":
+        if mic not in EURONEXT_MICS:
             return "revocation", None
         return "end_of_year", f"{datetime.now().year}-12-31T00:00:00.000Z"
     if s == "day":
@@ -242,14 +246,13 @@ def create_order(page, ticker: str, side: str, qty: int,
 
     if smart:
         payload["nature"] = "smart"
-        # type "meta" requis pour tous les ordres Expert (achat ou vente)
-        payload["type"]   = "meta"
         payload["smart"]  = smart
-        # BD rejette un ordre Expert/meta qui porte un prix limite ou un stop :
-        # "La limite ne doit pas être renseignée pour ce type d'ordre" (HTTP 400).
-        # L'entrée se fait au marché, la protection SL/TP est gérée par le smart.
-        payload["limit"] = None
-        payload["stop"]  = None
+        # Payload Expert réel confirmé (capture réseau BD) : un Expert achat à cours
+        # limité utilise type="limit" + limit=<prix> + nature="smart" (PAS type="meta",
+        # qui déclenche "La limite ne doit pas être renseignée" → HTTP 400).
+        # Le `type` et le `limit` sont fournis par l'appelant (helpers buy/sell).
+        # position_effect="close" même côté achat (confirmé par le payload réel).
+        payload["position_effect"] = "close"
 
     result = _api_post(page, "/order/create", payload)
     if not result:
@@ -351,10 +354,9 @@ def create_expert_buy_order(page, ticker: str, qty: int,
                             stop_loss: float, take_profit: float,
                             validity: str = "max") -> dict | None:
     """
-    Ordre Expert ACHAT : entrée AU MARCHÉ + SL/TP activés dès l'exécution.
-    BD interdit un prix limite sur un ordre Expert (type meta) — l'entrée se fait
-    donc au marché. entry_price n'est conservé que pour le dimensionnement/affichage
-    côté appelant ; il n'est PAS transmis à BD.
+    Ordre Expert ACHAT : entrée À COURS LIMITÉ (entry_price) + SL/TP activés dès
+    l'exécution. Structure confirmée par capture réseau BD : type="limit" +
+    limit=entry_price + nature="smart" + smart={strategy, stop_loss, take_profit}.
     Permet d'entrer en position ET de placer la protection en un seul ordre.
     Appeler execute_strategy(page, order_id) pour confirmer l'envoi.
     """
@@ -366,7 +368,8 @@ def create_expert_buy_order(page, ticker: str, qty: int,
     }
     return create_order(
         page, ticker, side="buy", qty=qty,
-        order_type="meta", smart=smart, validity=validity,
+        order_type="limit", limit_price=entry_price,
+        smart=smart, validity=validity,
     )
 
 
