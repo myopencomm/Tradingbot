@@ -245,6 +245,11 @@ def create_order(page, ticker: str, side: str, qty: int,
         # type "meta" requis pour tous les ordres Expert (achat ou vente)
         payload["type"]   = "meta"
         payload["smart"]  = smart
+        # BD rejette un ordre Expert/meta qui porte un prix limite ou un stop :
+        # "La limite ne doit pas être renseignée pour ce type d'ordre" (HTTP 400).
+        # L'entrée se fait au marché, la protection SL/TP est gérée par le smart.
+        payload["limit"] = None
+        payload["stop"]  = None
 
     result = _api_post(page, "/order/create", payload)
     if not result:
@@ -346,7 +351,10 @@ def create_expert_buy_order(page, ticker: str, qty: int,
                             stop_loss: float, take_profit: float,
                             validity: str = "max") -> dict | None:
     """
-    Ordre Expert ACHAT : achat à cours limité + SL/TP activés dès l'exécution.
+    Ordre Expert ACHAT : entrée AU MARCHÉ + SL/TP activés dès l'exécution.
+    BD interdit un prix limite sur un ordre Expert (type meta) — l'entrée se fait
+    donc au marché. entry_price n'est conservé que pour le dimensionnement/affichage
+    côté appelant ; il n'est PAS transmis à BD.
     Permet d'entrer en position ET de placer la protection en un seul ordre.
     Appeler execute_strategy(page, order_id) pour confirmer l'envoi.
     """
@@ -358,8 +366,7 @@ def create_expert_buy_order(page, ticker: str, qty: int,
     }
     return create_order(
         page, ticker, side="buy", qty=qty,
-        order_type="meta", limit_price=entry_price,
-        smart=smart, validity=validity,
+        order_type="meta", smart=smart, validity=validity,
     )
 
 
