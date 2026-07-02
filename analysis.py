@@ -482,7 +482,12 @@ RECHERCHE WEB : {web}
 CATALYSEURS : {cats}
 
 Signal ACHAT ou NEUTRE/ÉVITER ?
-Si NEUTRE/ÉVITER → réponds : EXCLUS — [raison en 5 mots max]
+Ta réponse DOIT commencer directement par le verdict — AUCUNE analyse avant.
+Si NEUTRE/ÉVITER → PREMIÈRE ligne : EXCLUS — [défaut disqualifiant en 5 mots max]
+  La raison DOIT être un des défauts disqualifiants de la directive (couteau qui tombe,
+  RSI > 80, news invalidante, OPA plafonnée, illiquidité) ou une violation du contexte
+  personnel. « sous résistance », « upside analyste insuffisant », « pas de catalyseur »
+  ne sont PAS des raisons valides d'exclusion.
 Si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
 Si ACHAT → format :
 {company_name} ({t}){(" — " + company_sector) if company_sector else ""} — Entrée : {current_price}€  SL : X€ (-{_SL}%)  TP : X€ (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
@@ -492,8 +497,22 @@ Si ACHAT → format :
 - Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
 
                 val = _strip_markdown(ai.complete(val_prompt, max_tokens=400))
-                if val.strip().upper().startswith("EXCLU"):
-                    reason = val.strip().split("—", 1)[1].strip()[:60] if "—" in val else "écarté"
+                # Détection EXCLUS robuste : l'IA place parfois le verdict en FIN
+                # d'analyse malgré la consigne — on cherche sur toutes les lignes.
+                excl_line = next(
+                    (l for l in val.splitlines() if l.strip().upper().startswith("EXCLU")),
+                    None,
+                )
+                # Garde-fou : une opportunité valide DOIT contenir Entrée + SL + TP.
+                # Sinon c'est une exclusion implicite ou une réponse malformée.
+                has_levels = (
+                    re.search(r"Entr[ée]e?\s*:", val)
+                    and re.search(r"\bSL\s*:", val)
+                    and re.search(r"\bTP\s*:", val)
+                )
+                if excl_line or not has_levels:
+                    src = excl_line or (val.strip().splitlines()[0] if val.strip() else "écarté")
+                    reason = src.split("—", 1)[1].strip()[:70] if "—" in src else src.strip()[:70]
                     label = f"{company_name} ({t})" if company_name != t else t
                     rejected_morning.append(f"- {label} : {reason}")
                     continue
@@ -530,6 +549,8 @@ Si ACHAT → format :
         msg  = f"🌅 BRIEFING — {date}\n\n{snapshot}\n\n{portfolio_analysis}"
         if opportunities:
             msg += "\n\nOPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities)
+            if rejected_morning:
+                msg += "\n\nAnalysés et écartés :\n" + "\n".join(rejected_morning)
         elif cash >= 1000:
             no_opp = "Aucun candidat validé aujourd'hui."
             if rejected_morning:
