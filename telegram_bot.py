@@ -1332,9 +1332,15 @@ def cmd_connect(args, cid):
         return
 
     send("Lancement de la connexion a Bourse Direct...", cid)
+    print("[connect] Lancement de la connexion a Bourse Direct...")
+
+    def _log_and_send(msg):
+        print(f"[connect] {msg}")
+        send(msg, cid)
 
     def _do_connect():
         ok = playwright_session.start()
+        print(f"[connect] playwright_session.start() -> {ok}")
         if not ok:
             send("Impossible de lancer Playwright. Verifie l'installation (pip install playwright && playwright install chromium).", cid)
             return
@@ -1342,10 +1348,12 @@ def cmd_connect(args, cid):
         try:
             # login s'exécute dans le thread worker via run()
             success = playwright_session.run(
-                lambda page: bourse_direct_auth.login(page, lambda msg: send(msg, cid)),
+                lambda page: bourse_direct_auth.login(page, _log_and_send),
                 timeout=140,  # > OTP_TIMEOUT (90s) pour laisser le temps au 2FA
             )
+            print(f"[connect] login() -> {success}")
         except Exception as e:
+            print(f"[connect] Exception : {e}")
             send(f"Erreur connexion : {e}", cid)
             playwright_session.stop()
             return

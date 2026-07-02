@@ -6,6 +6,8 @@ import os
 import threading
 import time
 
+from bourse_direct_reader import _dismiss_popups
+
 BD_URL      = "https://www.boursedirect.fr/fr/login"
 BD_LOGIN    = os.getenv("BD_LOGIN", "")
 BD_PASSWORD = os.getenv("BD_PASSWORD", "")
@@ -40,14 +42,20 @@ def login(page, send_fn) -> bool:
         page.goto(BD_URL, wait_until="domcontentloaded", timeout=20000)
         time.sleep(1)
 
-        # ── Ferme le popup cookies s'il est présent ──────────────────────────
+        # ── Ferme le popup cookies Didomi ("Continuer sans accepter" est un
+        #    <span role="button">, pas un <button> — d'où le sélecteur large) ──
         try:
-            cookie_btn = page.locator('button:has-text("Continuer sans accepter")')
+            cookie_btn = page.locator(
+                '.didomi-continue-without-agreeing, '
+                '[role="button"]:has-text("Continuer sans accepter"), '
+                'button:has-text("Continuer sans accepter")'
+            )
             if cookie_btn.count() > 0:
-                cookie_btn.click()
+                cookie_btn.first.click(timeout=3000)
                 time.sleep(0.5)
         except Exception:
             pass
+        _dismiss_popups(page)
 
         # ── Remplissage credentials ──────────────────────────────────────────
         login_field = page.locator('input[placeholder="Identifiant"]')
@@ -65,6 +73,7 @@ def login(page, send_fn) -> bool:
         totp_detected = False
         for i in range(24):
             time.sleep(0.5)
+            _dismiss_popups(page)
             url = page.url.lower()
             if "login" not in url:
                 break  # Connecté directement
@@ -111,6 +120,7 @@ def login(page, send_fn) -> bool:
             # Vérifie le lien /fr/deconnexion (présent uniquement quand connecté)
             for i in range(30):
                 time.sleep(0.5)
+                _dismiss_popups(page)
                 if _is_logged_in(page):
                     break
                 if i > 0 and i % 10 == 0:
@@ -146,6 +156,7 @@ def _fill_totp(page, code: str, send_fn=None) -> bool:
 
     try:
         time.sleep(0.5)
+        _dismiss_popups(page)
         # Essaie d'abord les spinbuttons, puis les inputs numériques
         spinbuttons = page.locator('[role="spinbutton"]').all()
         if len(spinbuttons) < 6:

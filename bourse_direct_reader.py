@@ -22,10 +22,15 @@ BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/mon-compte/portefeuilles"
 def _dismiss_popups(page):
     """Ferme les popups éventuelles (WelcomeModal, modals). Ignore si absentes."""
     selectors = [
+        ".didomi-continue-without-agreeing",
         "button.WelcomeModal-module_backBtn_QnNhW",
         "#modal-ui-settings button[data-dismiss='modal']",
         "#tosModalClosable button[data-dismiss='modal']",
         "button.close-modal-tos-closable",
+        "button:has-text(\"Non merci\")",
+        "button:has-text(\"Plus tard\")",
+        "[class*='modal'] button[aria-label='Fermer']",
+        "[class*='modal'] button[aria-label='Close']",
     ]
     for sel in selectors:
         try:
