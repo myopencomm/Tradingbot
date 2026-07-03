@@ -190,11 +190,16 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
             return False
 
         conf = playwright_session.run(
-            lambda page, oid=order_id: bd_orders.execute_strategy(page, oid),
+            lambda page, oid=order_id: bd_orders.confirm_order_auto(page, oid, True),
             timeout=30,
         )
         if not conf:
-            send_fn(f"⚠️ {ticker} : confirmation échouée")
+            raw = bd_orders._last_raw.get("data", {}) or {}
+            send_fn(
+                f"⚠️ {ticker} : confirmation échouée ({raw.get('message', '?')})\n"
+                f"Commande manuelle :\n"
+                f"/ordre acheter {ticker} {qty} expert {entry} {sl} {tp}"
+            )
             return False
 
         name = ticker.split(".")[0].upper()

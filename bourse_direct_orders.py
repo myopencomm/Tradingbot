@@ -379,6 +379,28 @@ def cancel_order(page, order_id: str) -> dict | None:
     return result.get("data")
 
 
+def confirm_order_auto(page, order_id: str, is_buy_with_smart: bool) -> dict | None:
+    """
+    Confirme un ordre créé — ACTION IRRÉVERSIBLE.
+
+    Un Expert ACHAT (type="limit" + smart) est un ordre LIMITE parent dont la
+    stratégie SL/TP est portée par des ordres enfants ("children" dans la
+    réponse create) : il se confirme via /order/send comme un ordre limite
+    classique. /order/execute/strategy renvoie HTTP 500 pour lui (constaté en
+    réel sur EDEN.PA) — cet endpoint ne vaut que pour les Expert VENTE (meta).
+
+    En cas d'échec de l'endpoint attendu, tente l'autre en secours (sans risque
+    de double exécution : un ordre déjà envoyé n'est plus confirmable).
+    """
+    primary, secondary = ((send_order, execute_strategy) if is_buy_with_smart
+                          else (execute_strategy, send_order))
+    res = primary(page, order_id)
+    if res:
+        return res
+    print("[BD Orders] confirmation primaire échouée — tentative endpoint alternatif")
+    return secondary(page, order_id)
+
+
 def execute_strategy(page, order_id: str) -> dict | None:
     """
     Exécute un ordre Expert (SL+TP combiné) — ACTION IRRÉVERSIBLE.

@@ -1609,6 +1609,7 @@ def cmd_ordre(args, cid):
             with _pending_lock:
                 _pending_order = {
                     "order_id":  order_id,
+                    "is_buy_smart": is_expert and side == "buy",
                     "is_expert": is_expert,
                     "ticker":    ticker,
                     "summary":   summary,
@@ -1655,8 +1656,11 @@ def cmd_oui(args, cid):
         import bourse_direct_orders as bd_orders
         try:
             if pending["is_expert"]:
+                # Expert ACHAT (limit+smart) → /order/send ; Expert VENTE (meta)
+                # → /order/execute/strategy. Bascule auto en cas d'échec.
                 result = playwright_session.run(
-                    lambda page: bd_orders.execute_strategy(page, pending["order_id"]))
+                    lambda page: bd_orders.confirm_order_auto(
+                        page, pending["order_id"], pending.get("is_buy_smart", False)))
             else:
                 result = playwright_session.run(
                     lambda page: bd_orders.send_order(page, pending["order_id"]))
