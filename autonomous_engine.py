@@ -8,6 +8,7 @@ Le bot gère en totale autonomie un budget isolé.
 - Notifications Telegram pour chaque action
 """
 import threading
+import time
 from datetime import datetime
 import pytz
 
@@ -21,6 +22,9 @@ BREAKEVEN_PCT = 3.0   # +3% → trailing stop au PRU
 MAX_POSITIONS = 2     # Positions autonomes simultanées max
 
 _entry_lock = threading.Lock()
+# Anti-spam fallback gain réduit : max 1 recherche toutes les 2h
+_last_smallgain_ts = 0.0
+SMALLGAIN_COOLDOWN = 2 * 3600
 
 
 # ─── Config ─────────────────────────────────────────────────────────────────
@@ -399,10 +403,57 @@ def run_entry_cycle(send_fn) -> None:
                 if success:
                     return  # Une seule entrée par cycle
 
-        # Aucune opportunité validée disponible → on n'agit pas.
-        # Le moteur autonome n'entre en position QUE sur des analyses complètes
-        # (briefing 9h05 ou /scan manuel). Pas de prise de risque sur analyse légère.
-        print("[Auto] Aucune opportunité validée en attente — rien à faire.")
+        # ── Fallback GAIN RÉDUIT ─────────────────────────────────────────────
+        # Fin de cycle SANS entrée : tout a été vetoé par le research, dérivé,
+        # ou attend l'ouverture de son marché. Plutôt que de finir sur "rien à
+        # faire", cherche un trade COURT (TP +3-8%) sur les meilleurs candidats
+        # quant dont le marché est OUVERT maintenant. Analyses complètes
+        # conservées : validation IA gain réduit PUIS research pré-achat.
+        global _last_smallgain_ts
+        try:
+            pending_now = portfolio.get_pending_opportunities()
+            has_ct = any(o.get("source") == "court_terme" for o in pending_now)
+            if has_ct or time.time() - _last_smallgain_ts < SMALLGAIN_COOLDOWN:
+                print("[Auto] Aucune opportunité exploitable — fallback gain réduit "
+                      "déjà tenté récemment ou en attente.")
+                return
+            _last_smallgain_ts = time.time()
+
+            import analysis
+            regime_data = prices.get_market_regime()
+            if regime_data["label"] == "CRISIS":
+                print("[Auto] Régime CRISIS — pas de fallback gain réduit.")
+                return
+            quant = analysis._quant_screen(
+                analysis.SCAN_UNIVERSE, held,
+                regime_data["label"], regime_data.get("index_mom_avg", 0.0) or 0.0,
+            )
+            quant = [c for c in quant if market_open_for(c["ticker"])]
+            if not quant:
+                print("[Auto] Fallback gain réduit : aucun candidat sur un marché ouvert.")
+                return
+
+            send_fn(
+                "⚡ Mode auto : rien d'achetable à +10% pour l'instant "
+                "(vetoé ou marché fermé) — recherche de trades courts (gain réduit)…"
+            )
+            opps, rej = analysis._small_gain_pass(
+                analysis.get_provider(), quant, portfolio.get_cash(),
+                analysis._trading_context(),
+                datetime.now(PARIS).strftime("%d/%m/%Y"),
+            )
+            if opps:
+                send_fn("⚡ OPPORTUNITÉS COURT TERME (gain réduit, 1-5 jours)\n\n"
+                        + "\n\n".join(opps))
+                # Nouveau cycle différé pour les traiter (le lock actuel sera libéré)
+                threading.Timer(3.0, run_entry_cycle, args=(send_fn,)).start()
+            else:
+                msg = "⚡ Gain réduit : aucun candidat validé non plus."
+                if rej:
+                    msg += "\n" + "\n".join(rej)
+                send_fn(msg)
+        except Exception as e:
+            print(f"[Auto] fallback gain réduit : {e}")
 
     finally:
         _entry_lock.release()
