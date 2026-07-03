@@ -311,12 +311,23 @@ def _parse_order(text: str) -> dict | None:
 
     # Statut — "En cours" prime. Un Take Profit a un statut par partie ;
     # si au moins une est "En cours", l'ordre est actif.
+    # "Exécuté" AVANT "Annulé" : sur un ordre à 2 volets exécuté, le volet
+    # non déclenché est "Annulé" et le volet déclenché "Exécuté" — c'est bien
+    # une exécution, pas une annulation.
     if "En cours" in flat:
         order["statut"] = "En cours"
-    elif "Annulé" in flat or "Annule" in flat:
-        return None  # annulé → ignoré
     elif "Exécuté" in flat or "Execute" in flat:
-        return None  # totalement exécuté → ignoré
+        # Conservé pour la détection automatique des ventes par le sync.
+        # Le volet exécuté porte le prix réel de sortie.
+        order["statut"] = "Exécuté"
+        m_ex = (re.search(r'Profit\s*([\d.,]+)\s*€\s*Exécuté', flat)
+                or re.search(r'Seuil\s*([\d.,]+)\s*€\s*Exécuté', flat)
+                or re.search(r'Limite\s+([\d.,]+)\s*€\s*Exécuté', flat)
+                or re.search(r'Stop\s+([\d.,]+)\s*€\s*Exécuté', flat))
+        if m_ex:
+            order["exec_price"] = _parse_float(m_ex.group(1))
+    elif "Annulé" in flat or "Annule" in flat:
+        return None  # annulé sans exécution → ignoré
 
     return order
 

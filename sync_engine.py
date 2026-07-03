@@ -20,15 +20,18 @@ def _yf_ticker(bd_ticker: str, mic: str) -> str:
     return f"{bd_ticker}{suffix}" if bd_ticker else ""
 
 
-def sync(page, send_fn) -> bool:
+def sync(page, send_fn, silent: bool = False) -> bool:
     """
     Lit le portefeuille depuis BD et met à jour positions.json.
     `page` fourni par playwright_session.run() (thread worker).
+    silent=True (check horaire auto) : aucun message sauf si une vente ou un
+    achat exécuté est détecté.
     Retourne True si sync réussie.
     """
-    send_fn("Synchronisation avec Bourse Direct...")
+    if not silent:
+        send_fn("Synchronisation avec Bourse Direct...")
 
-    bd = reader.get_portfolio(page, send_fn=send_fn)
+    bd = reader.get_portfolio(page, send_fn=None if silent else send_fn)
     if not bd:
         return False
 
@@ -83,6 +86,8 @@ def sync(page, send_fn) -> bool:
             order_protect[o["name"].upper()] = prot
 
     matched_local_keys = set()
+    added_keys = []
+    sold_keys = []
 
     for pos in bd["positions"]:
         bd_ticker = (pos.get("bd_ticker") or "").upper()
@@ -141,6 +146,7 @@ def sync(page, send_fn) -> bool:
                 }
                 local[new_key] = data["positions"][new_key]
                 matched_local_keys.add(new_key)
+                added_keys.append(new_key)
                 changed = True
                 src = "SL/TP lus sur l'ordre BD" if prot.get("seuil") or prot.get("profit") else "SL/TP par défaut -7%/+10%"
                 lines.append(
@@ -148,19 +154,55 @@ def sync(page, send_fn) -> bool:
                     f"SL {sl}€ TP {tp}€ ({src})"
                 )
 
-    # ── Positions locales absentes de BD → probablement vendues ─────────
-    # Détection de clôture : si une position du bot n'est plus sur BD,
-    # elle a été vendue. On propose la commande de clôture (avec le prix TP
-    # comme estimation car l'ordre TP est le scénario de sortie le plus courant).
-    for local_key in local:
-        if local_key not in matched_local_keys:
-            cfg = local[local_key]
-            tp = cfg.get("target_high")
-            suggestion = f"/vendu {local_key} {tp}" if tp else f"/vendu {local_key} PRIX"
+    # ── Positions locales absentes de BD → vendues : clôture AUTOMATIQUE ──
+    # L'ordre de vente exécuté sur BD donne le prix réel de sortie (volet TP
+    # ou SL). Le cash BD, déjà synchronisé plus haut, inclut le produit de la
+    # vente — on ne l'ajoute donc PAS une deuxième fois.
+    executed_sells = [o for o in bd.get("orders", [])
+                      if o.get("statut") == "Exécuté" and o.get("sens") == "Vente"]
+
+    for local_key in list(local):
+        if local_key in matched_local_keys:
+            continue
+        cfg = local[local_key]
+        base = _local_base(cfg)
+
+        exec_order = next(
+            (o for o in executed_sells
+             if (o.get("bd_ticker") or "").upper() == base
+             or _match_local(o.get("bd_ticker"), o.get("name")) == local_key),
+            None,
+        )
+        exit_price, price_src = None, None
+        if exec_order:
+            exit_price = (exec_order.get("exec_price")
+                          or exec_order.get("profit") or exec_order.get("seuil"))
+            price_src = "ordre exécuté BD"
+        if not exit_price:
+            exit_price = cfg.get("target_high")
+            price_src = "TP posé (estimation — ordre exécuté non lu)"
+        if not exit_price:
             lines.append(
-                f"⚠️ {local_key} absent de BD — VENDU ?\n"
-                f"   → Confirme la cloture : {suggestion}"
+                f"⚠️ {local_key} absent de BD, prix de sortie introuvable.\n"
+                f"   → Clôture manuelle : /vendu {local_key} PRIX"
             )
+            continue
+
+        import stats
+        pnl = stats.record_close(local_key, cfg["ticker"], cfg["qty"],
+                                 cfg["entry_price"], exit_price)
+        pct = ((exit_price - cfg["entry_price"]) / cfg["entry_price"]) * 100
+        portfolio.clear_gmail_triggered(local_key)
+        data["positions"].pop(local_key, None)
+        changed = True
+        sold_keys.append(local_key)
+        tag = "WIN ✅" if pnl > 0 else "LOSS 🔻"
+        lines.append(
+            f"💰 {local_key} VENDU — clôturé automatiquement ({tag})\n"
+            f"   {cfg['qty']}t @ {exit_price}€ (PRU {cfg['entry_price']}€) | "
+            f"P&L {pnl:+.0f}€ ({pct:+.1f}%)\n"
+            f"   Prix : {price_src}"
+        )
 
     # ── Ordres en cours sur BD → mettent à jour les SL/TP des positions ──
     # Les ordres BD (Take Profit, Stop Loss) reflètent les vraies protections
@@ -217,5 +259,22 @@ def sync(page, send_fn) -> bool:
     else:
         lines.append("\nInvest. programmés : aucun")
 
-    send_fn("✅ Sync BD terminée\n\n" + "\n".join(lines))
+    # Mode silencieux (check horaire) : message uniquement sur événement
+    # significatif (vente clôturée ou position achetée détectée).
+    if not silent:
+        send_fn("✅ Sync BD terminée\n\n" + "\n".join(lines))
+    elif sold_keys or added_keys:
+        send_fn("🔄 Sync auto BD — exécution détectée\n\n" + "\n".join(lines))
+    else:
+        print("[sync auto] RAS — portefeuille aligné avec BD")
+
+    # Après une vente : cash libéré → relance immédiate du moteur autonome
+    # (s'il est actif) pour chercher où réinvestir sans attendre le prochain check.
+    if sold_keys:
+        try:
+            from analysis import _trigger_autonomous
+            _trigger_autonomous(send_fn)
+        except Exception as e:
+            print(f"[sync] trigger autonome après vente : {e}")
+
     return True

@@ -48,6 +48,30 @@ def _weekly_version_check():
         print(f"[version check] erreur silencieuse: {e}")
 
 
+def _hourly_bd_sync():
+    """
+    Vérification horaire SILENCIEUSE du portefeuille BD (9h-22h, jours de marché).
+    Détecte les ventes (TP/SL exécutés) et achats passés hors du bot, met à jour
+    positions.json automatiquement. Message Telegram uniquement si exécution détectée.
+    """
+    if not _market_day():
+        return
+    if not (9 <= datetime.now().hour <= 22):
+        return
+    import bot_mode
+    import playwright_session
+    if not (bot_mode.is_playwright() and playwright_session.is_connected()):
+        return
+    import sync_engine
+    try:
+        playwright_session.run(
+            lambda page: sync_engine.sync(page, telegram_bot.send, silent=True),
+            timeout=90,
+        )
+    except Exception as e:
+        print(f"[hourly sync] {e}")
+
+
 def _auto_gmail_check():
     if not _market_day() or not GMAIL_USER or not GMAIL_APP_PASSWORD:
         return
@@ -76,7 +100,8 @@ def run_scheduler():
         if _market_day() and datetime.now().day == 1 else None
     )
     schedule.every().monday.at("09:20").do(_weekly_version_check)
-    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 | Version: lundi 09:20 (heure Paris)")
+    schedule.every().hour.at(":35").do(_hourly_bd_sync)
+    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 | Version: lundi 09:20 | Sync BD silencieux: toutes les heures à :35 (heure Paris)")
     while True:
         schedule.run_pending()
         time.sleep(30)
