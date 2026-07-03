@@ -27,6 +27,36 @@ def currency_symbol(currency: str) -> str:
     return {"USD": "$", "GBP": "£", "JPY": "¥"}.get(currency, "€")
 
 
+# Taux de change → EUR, cache 1h (suffisant pour du sizing de position)
+_fx_cache: dict = {}   # currency → (rate_to_eur, timestamp)
+_FX_TTL = 3600
+
+def fx_to_eur(currency: str) -> float:
+    """
+    Taux de conversion 1 unité de `currency` → EUR (ex: USD 0.877 si EURUSD=1.14).
+    Retourne 1.0 pour EUR ou si le taux est indisponible (fallback conservateur :
+    surestime le coût des devises faibles plutôt que de sous-estimer).
+    """
+    import time as _time
+    cur = (currency or "EUR").upper()
+    if cur == "EUR":
+        return 1.0
+    cached = _fx_cache.get(cur)
+    if cached and _time.time() - cached[1] < _FX_TTL:
+        return cached[0]
+    try:
+        pair = yf.Ticker(f"EUR{cur}=X").history(period="1d")
+        if not pair.empty:
+            eur_to_cur = float(pair["Close"].iloc[-1])
+            if eur_to_cur > 0:
+                rate = round(1.0 / eur_to_cur, 6)
+                _fx_cache[cur] = (rate, _time.time())
+                return rate
+    except Exception as e:
+        print(f"⚠️ FX error {cur}: {e}")
+    return 1.0
+
+
 def get_price(ticker: str) -> float | None:
     try:
         hist = yf.Ticker(ticker).history(period="1d")

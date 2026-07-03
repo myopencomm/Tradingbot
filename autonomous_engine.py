@@ -65,11 +65,32 @@ def set_config(enabled: bool, budget_total: float | None = None,
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _is_market_open() -> bool:
+    """Au moins un marché tradable est ouvert (Euronext OU US)."""
     now = datetime.now(PARIS)
     if now.weekday() >= 5:
         return False
     mins = now.hour * 60 + now.minute
-    return 9 * 60 + 5 <= mins <= 17 * 60 + 35
+    return 9 * 60 + 5 <= mins <= 21 * 60 + 55
+
+
+def market_open_for(ticker: str) -> bool:
+    """
+    Le marché du TICKER est-il ouvert maintenant (heure de Paris) ?
+    - US (pas de suffixe) : NYSE/NASDAQ 15:30-22:00 Paris
+    - Londres (.L)        : LSE 9:00-17:30 Paris
+    - Euronext/Xetra (défaut) : 9:00-17:30 Paris
+    Sans gestion des jours fériés locaux : BD rejette alors l'ordre, le bot
+    réessaie au cycle suivant (l'opportunité reste en attente).
+    """
+    now = datetime.now(PARIS)
+    if now.weekday() >= 5:
+        return False
+    mins = now.hour * 60 + now.minute
+    t = ticker.upper()
+    is_us = "." not in t
+    if is_us:
+        return 15 * 60 + 35 <= mins <= 21 * 60 + 55
+    return 9 * 60 + 5 <= mins <= 17 * 60 + 25
 
 
 
@@ -80,37 +101,47 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     """
     Place un ordre Expert achat sur BD et enregistre la position.
     Retourne True si réussi. Facteur commun aux deux chemins d'entrée.
+    `available` est en EUR ; `entry/sl/tp` sont dans la devise du titre —
+    conversion FX appliquée pour le sizing et la rentabilité.
     """
-    qty  = max(1, int(available / entry))
-    cost = qty * entry
-    if cost > available * 1.01:
+    quote_cur = prices._ticker_currency(ticker)
+    fx  = prices.fx_to_eur(quote_cur)      # 1 unité devise → EUR
+    sym = prices.currency_symbol(quote_cur)
+
+    entry_eur = entry * fx
+    qty  = max(1, int(available / entry_eur))
+    cost_eur = qty * entry_eur
+    if cost_eur > available * 1.01:
         qty -= 1
     if qty < 1:
         return False
-    cost = round(qty * entry, 2)
+    cost_eur = round(qty * entry_eur, 2)
 
     # ── Garde rentabilité : les frais A/R ne doivent pas manger le gain visé ──
     from config import BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO
     roundtrip = 2 * BROKERAGE_FEE
-    gross_tp  = qty * (tp - entry)
-    if gross_tp <= 0 or gross_tp < roundtrip * MIN_NET_GAIN_FEE_RATIO:
+    gross_tp_eur = qty * (tp - entry) * fx
+    if gross_tp_eur <= 0 or gross_tp_eur < roundtrip * MIN_NET_GAIN_FEE_RATIO:
         send_fn(
-            f"🚫 {ticker} : achat auto annulé — gain visé {gross_tp:.0f}€ trop faible "
+            f"🚫 {ticker} : achat auto annulé — gain visé {gross_tp_eur:.0f}€ trop faible "
             f"vs frais A/R {roundtrip:.2f}€ (seuil {MIN_NET_GAIN_FEE_RATIO:.0f}×). "
             f"Position trop petite pour rentabiliser les frais."
         )
-        print(f"[Auto] {ticker} : gain {gross_tp:.0f}€ < {roundtrip*MIN_NET_GAIN_FEE_RATIO:.0f}€ — skip frais")
+        print(f"[Auto] {ticker} : gain {gross_tp_eur:.0f}€ < {roundtrip*MIN_NET_GAIN_FEE_RATIO:.0f}€ — skip frais")
         return False
-    net_tp = gross_tp - roundtrip
+    net_tp = gross_tp_eur - roundtrip
 
-    print(f"[Auto] Entrée : {ticker} {qty}t @ {entry} SL={sl} TP={tp}")
+    fx_note = f" (≈{cost_eur:.0f}€ au taux {sym}→€ {fx:.3f})" if quote_cur != "EUR" else ""
+    print(f"[Auto] Entrée : {ticker} {qty}t @ {entry}{sym} SL={sl} TP={tp} ({quote_cur}, coût {cost_eur:.0f}€)")
     send_fn(
         f"🤖 MODE AUTONOME — Entrée en cours\n"
-        f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}€\n"
-        f"SL : {sl}€ ({(entry - sl) / entry * 100:.1f}%) | "
-        f"TP : {tp}€ (+{(tp - entry) / entry * 100:.1f}%)\n"
-        f"Coût : {cost:.0f}€ | Gain net au TP ≈ +{net_tp:.0f}€ (frais {roundtrip:.2f}€) | {reason}"
+        f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}{sym}\n"
+        f"SL : {sl}{sym} ({(entry - sl) / entry * 100:.1f}%) | "
+        f"TP : {tp}{sym} (+{(tp - entry) / entry * 100:.1f}%)\n"
+        f"Coût : {qty * entry:.0f}{sym}{fx_note} | Gain net au TP ≈ +{net_tp:.0f}€ "
+        f"(frais {roundtrip:.2f}€) | {reason}"
     )
+    cost = cost_eur
 
     try:
         import bourse_direct_orders as bd_orders
@@ -167,8 +198,8 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         send_fn(
             f"✅ ACHAT AUTONOME CONFIRMÉ\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}€\n"
-            f"SL : {sl}€ | TP : {tp}€\n"
+            f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}{sym}\n"
+            f"SL : {sl}{sym} | TP : {tp}{sym}\n"
             f"Coût : {cost:.0f}€ | Budget restant : {available - cost:.0f}€"
         )
         return True
@@ -233,6 +264,14 @@ def run_entry_cycle(send_fn) -> None:
                     portfolio.clear_pending_opportunity(ticker)
                     continue
 
+                # Marché du TITRE ouvert ? (un ticker US ne se trade qu'à partir
+                # de 15h35 Paris — BD rejette sinon). L'opportunité RESTE en
+                # attente : le prochain cycle réessaiera quand le marché ouvre.
+                if not market_open_for(ticker):
+                    print(f"[Auto] {ticker} : marché fermé pour ce titre — "
+                          f"opportunité conservée pour le prochain cycle")
+                    continue
+
                 quote = prices.get_quote(ticker)
                 price = quote.get("price")
                 if not price:
@@ -249,8 +288,11 @@ def run_entry_cycle(send_fn) -> None:
                           f"({drift*100:.1f}% > 3%) — skip")
                     continue
 
-                if price > available:
-                    print(f"[Auto] {ticker} : cours {price} > budget {available:.0f}€")
+                # Comparaison budget en EUR (cours converti si titre en devise)
+                fx_opp = prices.fx_to_eur(quote.get("currency") or "EUR")
+                if price * fx_opp > available:
+                    print(f"[Auto] {ticker} : cours {price} ({price*fx_opp:.0f}€) "
+                          f"> budget {available:.0f}€")
                     continue
 
                 # ── Research pré-achat : confirmation indépendante avant ordre réel ──

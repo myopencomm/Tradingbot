@@ -332,6 +332,9 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
             price = q.get("price")
             if not price:
                 continue
+            g_cur = q.get("currency") or "EUR"
+            g_sym = prices.currency_symbol(g_cur)
+            g_fx  = prices.fx_to_eur(g_cur)
 
             tech  = prices.get_technicals(t)
             funds = prices.get_fundamentals(t)
@@ -369,7 +372,7 @@ Aucune opportunité à +{_TP}% n'a passé la validation aujourd'hui. Ta mission 
 un trade COURT à objectif RÉDUIT mais très atteignable, plutôt que rien.
 Ce candidat est dans le top du filtre quantitatif momentum du jour.
 
-AUJOURD'HUI : {today_str} | SOCIÉTÉ : {company_label} | COURS RÉEL : {price}€
+AUJOURD'HUI : {today_str} | SOCIÉTÉ : {company_label} | COURS RÉEL : {price}{g_sym} (devise {g_cur})
 {tech_b}{funds_b}{news_b}{chart_b}
 RÈGLES DU TRADE COURT :
 - TP : +{FALLBACK_TP_MIN_PCT:.0f}% à +{FALLBACK_TP_MAX_PCT:.0f}% — cale-le SOUS la première résistance.
@@ -380,8 +383,8 @@ RÈGLES DU TRADE COURT :
 
 Signal ACHAT ou EXCLUS ? Réponds par le verdict en PREMIÈRE ligne, sans analyse avant.
 Si EXCLUS → EXCLUS — [raison 5 mots max]
-Si ACHAT → 1ère ligne EXACTEMENT :
-{company_name} ({t}) — Entrée : {price}€  SL : X€ (-X%)  TP : X€ (+X%)
+Si ACHAT → 1ère ligne EXACTEMENT (symbole {g_sym}, le titre cote en {g_cur}) :
+{company_name} ({t}) — Entrée : {price}{g_sym}  SL : X{g_sym} (-X%)  TP : X{g_sym} (+X%)
 - Thèse courte : [niveau technique visé + niveau qui invalide]
 - Risque : LOW/MEDIUM/HIGH"""
 
@@ -410,9 +413,10 @@ Si ACHAT → 1ère ligne EXACTEMENT :
                 tp_v = tp_max
 
             # ── Rentabilité nette : mêmes règles que le moteur autonome ──────
+            # Budget en EUR, cours en devise du titre → conversion FX
             budget   = min(cash * POSITION_BUDGET_PCT / 100, POSITION_BUDGET_MAX)
-            qty      = max(1, int(budget / entry))
-            gross_tp = qty * (tp_v - entry)
+            qty      = max(1, int(budget / (entry * g_fx)))
+            gross_tp = qty * (tp_v - entry) * g_fx
             net_tp   = gross_tp - roundtrip
             if gross_tp < roundtrip * MIN_NET_GAIN_FEE_RATIO:
                 rejected.append(
@@ -422,7 +426,8 @@ Si ACHAT → 1ère ligne EXACTEMENT :
                 continue
 
             val = _validate_tickers(val)
-            val += (f"\n→ {qty} titres ≈ {qty * entry:.0f}€ | "
+            fx_note = f" ≈ {qty * entry * g_fx:.0f}€" if g_cur != "EUR" else ""
+            val += (f"\n→ {qty} titres ≈ {qty * entry:.0f}{g_sym}{fx_note} | "
                     f"Gain net au TP ≈ +{net_tp:.0f}€ (frais {roundtrip:.2f}€ inclus)")
             opps.append(val)
             portfolio.add_pending_opportunity(
@@ -555,6 +560,8 @@ MISSION
                 current_price = q.get("price")
                 if not current_price:
                     continue
+                cur = q.get("currency") or "EUR"
+                sym = prices.currency_symbol(cur)
 
                 tech   = prices.get_technicals(t)
                 funds  = prices.get_fundamentals(t)
@@ -603,7 +610,7 @@ MISSION
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
-AUJOURD'HUI : {today_str}. SOCIÉTÉ : {company_label}. COURS RÉEL : {current_price}€. CASH DISPO : {cash}€.
+AUJOURD'HUI : {today_str}. SOCIÉTÉ : {company_label}. COURS RÉEL : {current_price}{sym} (devise {cur}). CASH DISPO : {cash}€.
 {tech_b}{funds_b}{social_b}{news_b}{chart_b}
 RECHERCHE WEB : {web}
 CATALYSEURS : {cats}
@@ -616,8 +623,8 @@ Si NEUTRE/ÉVITER → PREMIÈRE ligne : EXCLUS — [défaut disqualifiant en 5 m
   personnel. « sous résistance », « upside analyste insuffisant », « pas de catalyseur »
   ne sont PAS des raisons valides d'exclusion.
 Si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
-Si ACHAT → format :
-{company_name} ({t}){(" — " + company_sector) if company_sector else ""} — Entrée : {current_price}€  SL : X€ (-{_SL}%)  TP : X€ (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
+Si ACHAT → format (utilise {sym} comme symbole monétaire, le titre cote en {cur}) :
+{company_name} ({t}){(" — " + company_sector) if company_sector else ""} — Entrée : {current_price}{sym}  SL : X{sym} (-{_SL}%)  TP : X{sym} (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
 - Société : [1 phrase — ce que fait la société, son positionnement clé]
 - Secteur maintenant : [1 phrase — pourquoi ce secteur est porteur EN CE MOMENT pour ce trade court terme]
 - Thèse : [CATALYSEUR : événement + date après {today_str}] OU [MOMENTUM : tendance + niveau qui invalide]
@@ -1373,6 +1380,9 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             current_price = q.get("price")
             if not current_price:
                 continue
+            q_cur = q.get("currency") or "EUR"
+            q_sym = prices.currency_symbol(q_cur)
+            q_fx  = prices.fx_to_eur(q_cur)
 
             tech    = prices.get_technicals(t)
             funds   = prices.get_fundamentals(t)
@@ -1471,7 +1481,7 @@ AUJOURD'HUI : {today_str}
 {regime_instructions}
 
 SOCIÉTÉ ANALYSÉE : {company_label} — JE NE DÉTIENS PAS. CASH DISPONIBLE : {cash}€.
-Cours actuel : {current_price}
+Cours actuel : {current_price}{q_sym} (devise {q_cur})
 {pctx_block}{tech_block}{funds_block}{news_b}{social_b}{chart_b}
 
 RECHERCHE WEB
@@ -1483,9 +1493,9 @@ CATALYSEURS IMMINENTS
 Signal ACHAT ou EXCLUS ?
 RÈGLE : si le titre ne répond pas aux critères du régime → EXCLUS — [raison 5 mots]
 RÈGLE : si le ticker viole une contrainte du contexte personnel → EXCLUS — [raison]
-Si ACHAT : format exact :
+Si ACHAT : format exact (symbole monétaire {q_sym}, le titre cote en {q_cur}) :
 {company_name} ({t}){(" — " + company_sector) if company_sector else ""}
-- Cours actuel : {current_price} | Entrée : X  SL : X (-{_SL}%)  TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
+- Cours actuel : {current_price}{q_sym} | Entrée : X  SL : X (-{_SL}%)  TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
 - Société : [1 phrase — ce que fait la société, son positionnement clé]
 - Secteur maintenant : [1 phrase — pourquoi ce secteur est porteur EN CE MOMENT pour ce trade court terme]
 - Thèse : [CATALYSEUR daté] OU [FORCE RELATIVE — raison] OU [MOMENTUM + niveau invalidation]
@@ -1513,11 +1523,15 @@ Si ACHAT : format exact :
             # Budget configurable via .env : POSITION_BUDGET_PCT / POSITION_BUDGET_MAX
             try:
                 budget = min(cash * POSITION_BUDGET_PCT / 100, POSITION_BUDGET_MAX)
-                qty_sugg = max(1, int(budget / current_price)) if current_price else 1
-                cost = qty_sugg * current_price
+                # Budget en EUR, cours dans la devise du titre → conversion FX
+                price_eur = current_price * q_fx
+                qty_sugg = max(1, int(budget / price_eur)) if price_eur else 1
+                cost_eur = qty_sugg * price_eur
+                fx_note = (f" ({qty_sugg * current_price:.0f}{q_sym}, taux {q_fx:.3f})"
+                           if q_cur != "EUR" else "")
                 val += (
-                    f"\n→ Taille suggérée : {qty_sugg} titres ≈ {cost:.0f}€ "
-                    f"({cost / cash * 100:.0f}% du cash)\n"
+                    f"\n→ Taille suggérée : {qty_sugg} titres ≈ {cost_eur:.0f}€{fx_note} "
+                    f"({cost_eur / cash * 100:.0f}% du cash)\n"
                     f"→ Passer l'ordre (mode Playwright) :\n"
                     f"   /ordre acheter {t} {qty_sugg} limite {current_price}"
                 )
@@ -1535,7 +1549,7 @@ Si ACHAT : format exact :
                         tp_cap = round(current_price * (1 + 2 * DEFAULT_TP_PCT / 100), 2)
                         capped = ""
                         if tp_v > tp_cap:
-                            capped = f" — TP IA {tp_v}€ hors horizon, plafonné"
+                            capped = f" — TP IA {tp_v}{q_sym} hors horizon, plafonné"
                             tp_v = tp_cap
                         tp_pct = (tp_v / current_price - 1) * 100
                         stretch = f" (TP +{tp_pct:.0f}%{capped})" if tp_pct >= 11 or capped else ""
@@ -1544,12 +1558,12 @@ Si ACHAT : format exact :
                             f"expert {sl_v} {tp_v}{stretch}"
                         )
 
-                        # ── Rentabilité nette de frais (courtage A/R) ──────────
+                        # ── Rentabilité nette de frais (courtage A/R, en EUR) ──
                         roundtrip = 2 * BROKERAGE_FEE
-                        gross_tp  = qty_sugg * (tp_v - current_price)
+                        gross_tp  = qty_sugg * (tp_v - current_price) * q_fx
                         net_tp    = gross_tp - roundtrip
-                        loss_sl   = qty_sugg * (current_price - sl_v) + roundtrip
-                        fee_pct   = roundtrip / cost * 100 if cost else 0
+                        loss_sl   = qty_sugg * (current_price - sl_v) * q_fx + roundtrip
+                        fee_pct   = roundtrip / cost_eur * 100 if cost_eur else 0
                         val += (
                             f"\n💸 Frais A/R ≈ {roundtrip:.2f}€ ({fee_pct:.1f}% de la position)"
                             f"\n   Gain net au TP ≈ +{net_tp:.0f}€ | Perte au SL ≈ -{loss_sl:.0f}€"
