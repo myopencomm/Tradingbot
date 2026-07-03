@@ -335,18 +335,36 @@ def run_entry_cycle(send_fn) -> None:
                     portfolio.clear_pending_opportunity(ticker)
                     continue
 
-                # Parse le verdict dans les premières lignes (format : ACHAT / NEUTRE / ÉVITER)
-                full_upper = "\n".join(research_lines).upper()
-                head       = " ".join(full_upper.splitlines()[:8])
-                is_buy     = "ACHAT" in head
-                is_bad     = "ÉVITER" in head or "EVITER" in head or (
-                    "NEUTRE" in head and not is_buy
-                )
-                if is_bad or not is_buy:
-                    verdict = "NEUTRE/ÉVITER" if is_bad else "ambigu"
+                # ── Parse du verdict research ────────────────────────────────
+                # PRIORITÉ à la ligne "SIGNAL : X" (format imposé au prompt).
+                # Ne JAMAIS chercher "ACHAT" en substring libre : une réponse
+                # NEUTRE contient souvent "Pourquoi pas ACHAT :" → faux positif.
+                import re as _re
+                full_text = "\n".join(research_lines)
+                verdict = None
+                verdict_line = ""
+                for line in full_text.splitlines():
+                    m = _re.search(r"SIGNAL\s*[:\-]?\s*.{0,3}(ACHAT|NEUTRE|ÉVITER|EVITER)",
+                                   line.upper())
+                    if m:
+                        verdict = m.group(1).replace("EVITER", "ÉVITER")
+                        verdict_line = line.strip()[:120]
+                        break
+                if verdict is None:
+                    # Fallback : premier mot-clé des 8 premières lignes, ordre
+                    # de priorité PRUDENT (éviter > neutre > achat).
+                    head = " ".join(full_text.upper().splitlines()[:8])
+                    for kw in ("ÉVITER", "EVITER", "NEUTRE", "ACHAT"):
+                        if kw in head:
+                            verdict = kw.replace("EVITER", "ÉVITER")
+                            break
+
+                if verdict != "ACHAT":
                     send_fn(
-                        f"🔴 {ticker} : research dit {verdict} — achat autonome annulé.\n"
-                        f"Opportunité supprimée. Lance /scan pour une nouvelle analyse."
+                        f"🔴 {ticker} : research dit {verdict or 'verdict illisible'} — "
+                        f"achat autonome annulé.\n"
+                        + (f"« {verdict_line} »\n" if verdict_line else "")
+                        + f"Opportunité supprimée. Lance /scan pour une nouvelle analyse."
                     )
                     portfolio.clear_pending_opportunity(ticker)
                     continue
@@ -366,7 +384,10 @@ def run_entry_cycle(send_fn) -> None:
                     portfolio.clear_pending_opportunity(ticker)
                     continue
 
-                send_fn(f"✅ {ticker} : research confirme ACHAT — passage de l'ordre…")
+                send_fn(
+                    f"✅ {ticker} : research confirme ACHAT — passage de l'ordre…"
+                    + (f"\n« {verdict_line} »" if verdict_line else "")
+                )
                 # ────────────────────────────────────────────────────────────────────
 
                 # Adapte l'entrée au cours réel post-research
