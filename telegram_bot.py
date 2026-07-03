@@ -1696,10 +1696,31 @@ def cmd_oui(args, cid):
                     )
             except Exception:
                 send(f"Ordre envoye\n{pending['summary']}\n(verification carnet impossible)", cid)
+
+            # Sync silencieux différé : si l'ordre a été exécuté immédiatement
+            # (limite au cours), le portefeuille est à jour tout de suite —
+            # message envoyé uniquement si une exécution est détectée.
+            schedule_post_order_sync(cid)
         except Exception as e:
             send(f"Erreur envoi : {e}", cid)
 
     _run_long(cid, _do_send)
+
+
+def schedule_post_order_sync(cid=None, delay: float = 8.0):
+    """Planifie un sync BD silencieux `delay` secondes après un passage d'ordre.
+    Détecte les exécutions immédiates (achat limite au cours) sans attendre
+    le sync horaire. Silencieux : notifie uniquement si un événement est détecté."""
+    def _run():
+        try:
+            import sync_engine
+            playwright_session.run(
+                lambda page: sync_engine.sync(page, lambda m: send(m, cid), silent=True),
+                timeout=90,
+            )
+        except Exception as e:
+            print(f"[post-order sync] {e}")
+    threading.Timer(delay, _run).start()
 
 
 def cmd_annuler_bd(args, cid):

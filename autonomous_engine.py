@@ -222,6 +222,13 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
             f"SL : {sl}{sym} | TP : {tp}{sym}\n"
             f"Coût : {cost:.0f}€ | Budget restant : {available - cost:.0f}€"
         )
+        # Sync silencieux différé : aligne portefeuille + cash si l'ordre
+        # est exécuté immédiatement (limite au cours).
+        try:
+            from telegram_bot import schedule_post_order_sync
+            schedule_post_order_sync()
+        except Exception as e:
+            print(f"[Auto] post-order sync : {e}")
         return True
 
     except Exception as e:
