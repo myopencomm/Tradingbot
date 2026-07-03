@@ -471,6 +471,126 @@ def run_entry_cycle(send_fn) -> None:
         _entry_lock.release()
 
 
+# ─── Trailing stop réel sur BD (positions auto ET manuelles) ────────────────
+
+def trailing_stop_cycle(send_fn) -> None:
+    """
+    Remonte le SL au PRU (breakeven) DIRECTEMENT SUR BD pour toute position —
+    autonome (+BREAKEVEN_PCT%) ou manuelle (+BREAKEVEN_THRESHOLD%) — protégée
+    par un ordre Expert vente actif. Move purement protecteur : le SL ne peut
+    que MONTER, le TP n'est jamais modifié.
+
+    Les positions historiques SANS ordre Expert sur BD (ILMN, GVN, MCPHY…)
+    ne sont jamais touchées : pas d'ordre à modifier = pas d'action.
+    """
+    from config import BREAKEVEN_THRESHOLD
+
+    if not (bot_mode.is_playwright() and playwright_session.is_connected()):
+        return
+    positions = portfolio.load().get("positions", {})
+    if not positions:
+        return
+
+    # 1. Positions au-dessus de leur seuil de breakeven
+    candidates = []
+    for name, pos in positions.items():
+        entry = pos.get("entry_price")
+        if not entry or not pos.get("qty"):
+            continue
+        price = prices.get_quote(pos["ticker"]).get("price")
+        if not price:
+            continue
+        change_pct = (price - entry) / entry * 100
+        threshold = BREAKEVEN_PCT if pos.get("autonomous") else BREAKEVEN_THRESHOLD
+        if change_pct >= threshold:
+            candidates.append((name, pos, change_pct))
+    if not candidates:
+        return
+
+    # 2. Ordres Expert vente actifs sur BD (une seule lecture)
+    import bourse_direct_reader as reader
+    import bourse_direct_orders as bd_orders
+    try:
+        bd = playwright_session.run(lambda page: reader.get_portfolio(page), timeout=60)
+    except Exception as e:
+        print(f"[Trailing] lecture BD : {e}")
+        return
+    if not bd:
+        return
+    sell_orders = [o for o in bd.get("orders", [])
+                   if o.get("statut") == "En cours" and o.get("sens") == "Vente"
+                   and o.get("order_id")]
+
+    for name, pos, change_pct in candidates:
+        base = pos["ticker"].upper().split(".")[0]
+        target = next(
+            (o for o in sell_orders
+             if (o.get("bd_ticker") or "").upper() == base
+             or base in (o.get("name") or "").upper()),
+            None,
+        )
+        if not target:
+            continue  # pas d'ordre Expert actif → position historique, on ne touche pas
+
+        entry  = pos["entry_price"]
+        cur_sl = target.get("seuil")
+        # Le SL ne peut que MONTER : déjà au PRU ou au-dessus → rien à faire
+        if cur_sl is not None and cur_sl >= entry:
+            continue
+        tp     = target.get("profit") or pos.get("target_high")
+        new_sl = round(entry, 4)
+        if not tp:
+            continue
+
+        try:
+            ok_cancel = playwright_session.run(
+                lambda page, oid=target["order_id"]: bd_orders.cancel_order(page, oid),
+                timeout=30,
+            )
+            if not ok_cancel:
+                send_fn(f"⚠️ Trailing {name} : annulation de l'ancien Expert impossible — SL inchangé sur BD.")
+                continue
+
+            od = playwright_session.run(
+                lambda page, t=pos["ticker"], q=pos["qty"], s=new_sl, tp_=tp:
+                    bd_orders.create_expert_order(page, t, q, s, tp_, "max"),
+                timeout=30,
+            )
+            oid = od and (od.get("id") or od.get("order_id"))
+            conf = None
+            if oid:
+                conf = playwright_session.run(
+                    lambda page, o=oid: bd_orders.confirm_order_auto(page, o, False),
+                    timeout=30,
+                )
+            if conf:
+                adj    = (od.get("_adjusted") or {})
+                new_sl = adj.get("stop_loss") or new_sl
+                tp_f   = adj.get("take_profit") or tp
+                data = portfolio.load()
+                if name in data.get("positions", {}):
+                    data["positions"][name]["target_low"] = new_sl
+                    data["positions"][name]["auto_breakeven_notified"] = True
+                    portfolio.save(data)
+                tag = "🤖" if pos.get("autonomous") else "🛡️"
+                send_fn(
+                    f"{tag} BREAKEVEN AUTO — {name} à +{change_pct:.1f}%\n"
+                    f"SL remonté au PRU sur BD : {cur_sl}€ → {new_sl}€ (TP {tp_f}€ inchangé)\n"
+                    f"Perte impossible sur cette position désormais."
+                )
+            else:
+                # L'ancien ordre est annulé mais le nouveau n'est pas passé :
+                # position SANS protection → alerte forte + commande de secours.
+                send_fn(
+                    f"🚨 Trailing {name} : ancien Expert annulé mais NOUVEL ORDRE NON CONFIRMÉ.\n"
+                    f"⚠️ POSITION SANS PROTECTION SUR BD — replace immédiatement :\n"
+                    f"/ordre vendre {pos['ticker']} {pos['qty']} expert {new_sl} {tp}"
+                )
+        except Exception as e:
+            print(f"[Trailing] {name} : {e}")
+            send_fn(f"⚠️ Trailing {name} : erreur {e}")
+
+
 # ─── Surveillance des positions autonomes ────────────────────────────────────
 
 def check_autonomous_positions(send_fn) -> None:
@@ -528,10 +648,14 @@ def check_autonomous_positions(send_fn) -> None:
                 f"L'Expert BD s'est exécuté. Faire /sync pour confirmer puis /remove {name}."
             )
 
-        # Trailing : SL → PRU à +3%
+        # Trailing : SL → PRU à +3%.
+        # Playwright connecté → trailing_stop_cycle() modifie l'ordre SUR BD ;
+        # ici on n'agit qu'en mode déconnecté (alerte + commande manuelle).
         elif (change_pct >= be_pct
               and sl < entry
               and not pos.get("auto_breakeven_notified")):
+            if bot_mode.is_playwright() and playwright_session.is_connected():
+                continue  # géré sur BD par trailing_stop_cycle
             data["positions"][name]["target_low"]           = round(entry, 4)
             data["positions"][name]["auto_breakeven_notified"] = True
             changed = True

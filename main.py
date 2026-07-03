@@ -70,6 +70,13 @@ def _hourly_bd_sync():
         )
     except Exception as e:
         print(f"[hourly sync] {e}")
+    # Trailing stop : remonte les SL au PRU sur BD (positions auto +3%,
+    # manuelles +5%) — uniquement celles protégées par un Expert actif.
+    try:
+        import autonomous_engine
+        autonomous_engine.trailing_stop_cycle(telegram_bot.send)
+    except Exception as e:
+        print(f"[hourly trailing] {e}")
 
 
 def _auto_gmail_check():
