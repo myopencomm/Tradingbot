@@ -373,6 +373,57 @@ def create_expert_buy_order(page, ticker: str, qty: int,
     )
 
 
+def debug_order_variants(page, ticker: str, send_fn=print) -> None:
+    """
+    Diagnostic /testordre : teste plusieurs variantes de payload /order/create
+    (étape de VALIDATION uniquement — l'ordre n'est JAMAIS envoyé au marché,
+    le brouillon expire de lui-même). Identifie ce que BD accepte sur ce titre.
+    Utile pour les marchés où le payload Euronext échoue (ex: US "Missing arguments").
+    """
+    import prices
+    q = prices.get_quote(ticker)
+    price = q.get("price")
+    if not price:
+        send_fn(f"Cours indisponible pour {ticker}")
+        return
+    entry = round(price * 0.99, 2)
+    sl    = round(price * 0.95, 2)
+    tp    = round(price * 1.05, 2)
+    smart = {"strategy": "take_profit", "stop_loss": sl, "take_profit": tp, "variation": None}
+    info  = get_ticker_info(ticker)
+    send_fn(f"🔬 Test /order/create {ticker} (mic {info['mic']}, {info['currency']}) "
+            f"— qty 1, entrée {entry}, SL {sl}, TP {tp}\n"
+            f"Aucun ordre ne sera envoyé au marché.")
+
+    variants = [
+        ("A: Expert limit+smart, validité revocation (payload actuel US)",
+         dict(order_type="limit", limit_price=entry, smart=smart, validity="revocation")),
+        ("B: Expert limit+smart, validité seance",
+         dict(order_type="limit", limit_price=entry, smart=smart, validity="seance")),
+        ("C: limit simple, validité revocation",
+         dict(order_type="limit", limit_price=entry, smart=None, validity="revocation")),
+        ("D: limit simple, validité seance",
+         dict(order_type="limit", limit_price=entry, smart=None, validity="seance")),
+        ("E: market simple, validité seance",
+         dict(order_type="market", limit_price=None, smart=None, validity="seance")),
+    ]
+    results = []
+    for label, kw in variants:
+        try:
+            res = create_order(page, ticker, side="buy", qty=1, **kw)
+            if res:
+                oid = res.get("id") or res.get("order_id", "?")
+                results.append(f"✅ {label}\n   → accepté (brouillon {oid}, non envoyé)")
+            else:
+                data   = _last_raw.get("data", {}) or {}
+                msg    = data.get("message", "?")
+                fields = data.get("fields") or ""
+                results.append(f"❌ {label}\n   → HTTP {_last_raw.get('status')} : {msg} {fields}")
+        except Exception as e:
+            results.append(f"⚠️ {label}\n   → exception : {e}")
+    send_fn("RÉSULTATS\n\n" + "\n\n".join(results))
+
+
 def format_order_summary(order_data: dict, ticker: str, side: str,
                          qty: int, order_type: str,
                          limit_price: float = None, stop_price: float = None,

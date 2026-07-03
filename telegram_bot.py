@@ -1440,6 +1440,29 @@ def _check_playwright_ready(cid) -> bool:
     return True
 
 
+def cmd_testordre(args, cid):
+    """/testordre TICKER — diagnostic payload BD : teste les variantes /order/create
+    (validation seule, rien n'est envoyé au marché)."""
+    if not _check_playwright_ready(cid):
+        return
+    if not args:
+        send("Usage : /testordre TICKER (ex: /testordre RTX)", cid)
+        return
+    ticker = args[0].upper()
+    import bourse_direct_orders as bd_orders
+
+    def _do_test():
+        try:
+            playwright_session.run(
+                lambda page: bd_orders.debug_order_variants(page, ticker, lambda m: send(m, cid)),
+                timeout=120,
+            )
+        except Exception as e:
+            send(f"Erreur testordre : {e}", cid)
+
+    _run_long(cid, _do_test)
+
+
 def _parse_validity_arg(args, start_idx: int) -> str:
     """Extrait le dernier argument optionnel de validité s'il est présent."""
     import re
@@ -1864,6 +1887,7 @@ COMMANDS = {
     "/connect": cmd_connect,
     "/disconnect": cmd_disconnect,
     "/sync": cmd_sync,
+    "/testordre": cmd_testordre,
     "/ordre": cmd_ordre,
     "/oui": cmd_oui,
     "/non": cmd_non,
