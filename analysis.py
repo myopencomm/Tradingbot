@@ -412,6 +412,19 @@ Si ACHAT → 1ère ligne EXACTEMENT (symbole {g_sym}, le titre cote en {g_cur}) 
             if tp_v > tp_max:
                 tp_v = tp_max
 
+            # ── Ratio risque/gain : le SL ne doit JAMAIS risquer plus que le
+            # TP ne vise (l'IA ignore souvent cette consigne — on l'impose).
+            # Ex: TP +2.9% avec SL -6.9% = ratio 2.4:1 → SL resserré à -2.9%.
+            tp_pct = (tp_v / entry - 1) * 100
+            sl_pct = (1 - sl_v / entry) * 100
+            sl_note = ""
+            if sl_pct > tp_pct:
+                new_sl = round(entry * (1 - tp_pct / 100), 2)
+                sl_note = (f"\n⚠️ SL resserré : {sl_v}{g_sym} (-{sl_pct:.1f}%) → "
+                           f"{new_sl}{g_sym} (-{tp_pct:.1f}%) — règle gain réduit : "
+                           f"risque ≤ gain visé")
+                sl_v = new_sl
+
             # ── Rentabilité nette : mêmes règles que le moteur autonome ──────
             # Budget en EUR, cours en devise du titre → conversion FX
             budget   = min(cash * POSITION_BUDGET_PCT / 100, POSITION_BUDGET_MAX)
@@ -427,6 +440,7 @@ Si ACHAT → 1ère ligne EXACTEMENT (symbole {g_sym}, le titre cote en {g_cur}) 
 
             val = _validate_tickers(val)
             fx_note = f" ≈ {qty * entry * g_fx:.0f}€" if g_cur != "EUR" else ""
+            val += sl_note
             val += (f"\n→ {qty} titres ≈ {qty * entry:.0f}{g_sym}{fx_note} | "
                     f"Gain net au TP ≈ +{net_tp:.0f}€ (frais {roundtrip:.2f}€ inclus)")
             opps.append(val)
@@ -1123,11 +1137,23 @@ DÉCISION
         else:
             social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
             question_block = f"\nQUESTION SPÉCIFIQUE : {question}" if question else ""
+            short_directive = ""
+            if min_tp_pct:
+                short_directive = f"""
+⚡ DIRECTIVE PRIORITAIRE — TRADE COURT TERME (GAIN RÉDUIT) — PRIME SUR TOUT :
+Ce trade vise +{min_tp_pct}% en 1 à 5 jours. La règle « TP minimum +{_TP}% » est
+SUSPENDUE pour cette analyse — y compris si le contexte personnel ou les règles
+ci-dessus la mentionnent. INTERDIT de reformuler la question en trade à +{_TP}%,
+INTERDIT de proposer un autre TP. Juge UNIQUEMENT la probabilité que le cours
+atteigne +{min_tp_pct}% AVANT de toucher le SL dans les 1-5 prochains jours
+(momentum, distance à la résistance, volume). SIGNAL : ACHAT si probable,
+NEUTRE ou ÉVITER sinon — sur CE trade, pas un autre.
+"""
             prompt = f"""{TRADER_SYSTEM}
 {ANALYSIS_RULES}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
-{ctx_block}
+{ctx_block}{short_directive}
 TICKER ANALYSÉ : {ticker} — JE NE DÉTIENS PAS CETTE ACTION.
 {tech_block}{funds_block}{news_block}{social_block}{chart_block}
 RECHERCHE WEB
