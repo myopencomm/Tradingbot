@@ -169,6 +169,17 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
             )
             return False
 
+        # Prix ré-arrondis au pas de cotation par le retry BD (SL haussé, TP baissé)
+        adj = order_data.get("_adjusted") or {}
+        if adj:
+            entry = adj.get("limit") or entry
+            sl    = adj.get("stop_loss") or sl
+            tp    = adj.get("take_profit") or tp
+            send_fn(
+                f"ℹ️ {ticker} : prix ajustés au pas de cotation BD → "
+                f"entrée {entry}{sym} | SL {sl}{sym} | TP {tp}{sym}"
+            )
+
         order_id = order_data.get("id") or order_data.get("order_id")
         if not order_id:
             send_fn(f"⚠️ {ticker} : order_id manquant")

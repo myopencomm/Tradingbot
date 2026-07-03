@@ -200,12 +200,40 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
     return s, None
 
 
+def _round_to_tick(price: float, tick: float, direction: str) -> float:
+    """Arrondit un prix au pas de cotation. direction: 'up' | 'down' | 'nearest'."""
+    import math
+    steps = price / tick
+    if direction == "up":
+        return round(math.ceil(steps - 1e-9) * tick, 4)
+    if direction == "down":
+        return round(math.floor(steps + 1e-9) * tick, 4)
+    return round(round(steps) * tick, 4)
+
+
+def _extract_tick(raw: dict) -> float | None:
+    """Extrait le pas de cotation depuis une erreur BD.
+    Ex: fields.smart = ["Le pas de cotation pour cette limite est 0.02."]"""
+    import re
+    try:
+        txt = json.dumps(raw.get("data", {}) or {}, ensure_ascii=False)
+        m = re.search(r"pas de cotation[^\d]*(\d+(?:[.,]\d+)?)", txt, re.I)
+        if m:
+            tick = float(m.group(1).replace(",", "."))
+            if tick > 0:
+                return tick
+    except Exception:
+        pass
+    return None
+
+
 def create_order(page, ticker: str, side: str, qty: int,
                  order_type: str = "market",
                  limit_price: float = None,
                  stop_price:  float = None,
                  validity:    str   = "max",
-                 smart:       dict  = None) -> dict | None:
+                 smart:       dict  = None,
+                 _tick_retry: int   = 0) -> dict | None:
     """
     Crée un ordre sur BD — étape de validation (non envoyé).
 
@@ -216,6 +244,12 @@ def create_order(page, ticker: str, side: str, qty: int,
     stop_price : seuil de déclenchement stop
     validity   : "seance" | "max" | "revocation" | "DD/MM/YYYY"
     smart      : dict SL/TP pour ordre Expert (généré par les helpers)
+
+    Si BD rejette pour pas de cotation ("Le pas de cotation pour cette limite
+    est 0.02"), les prix sont ré-arrondis au pas et l'ordre retenté (max 3×).
+    Règle conservatrice : SL arrondi VERS LE HAUT, TP VERS LE BAS, limite
+    d'achat vers le bas / de vente vers le haut. Les prix finalement acceptés
+    sont retournés dans data["_adjusted"].
     """
     info = get_ticker_info(ticker)
     if not info:
@@ -258,12 +292,48 @@ def create_order(page, ticker: str, side: str, qty: int,
     if not result:
         return None
     if not result.get("ok"):
+        # ── Retry pas de cotation : BD indique le tick dans son erreur ───────
+        tick = _extract_tick(result)
+        if tick and _tick_retry < 3:
+            new_limit, new_stop, new_smart = limit_price, stop_price, smart
+            changed = False
+            if limit_price is not None:
+                nl = _round_to_tick(limit_price, tick, "down" if side == "buy" else "up")
+                changed |= nl != limit_price
+                new_limit = nl
+            if stop_price is not None:
+                ns = _round_to_tick(stop_price, tick, "nearest")
+                changed |= ns != stop_price
+                new_stop = ns
+            if smart:
+                new_smart = dict(smart)
+                sl_v = smart.get("stop_loss")
+                tp_v = smart.get("take_profit")
+                if sl_v:
+                    new_smart["stop_loss"] = _round_to_tick(sl_v, tick, "up")
+                if tp_v:
+                    new_smart["take_profit"] = _round_to_tick(tp_v, tick, "down")
+                changed |= new_smart != smart
+            if changed:
+                print(f"[BD Orders] pas de cotation {tick} — retry "
+                      f"limit={new_limit} stop={new_stop} smart={new_smart}")
+                return create_order(page, ticker, side, qty, order_type,
+                                    new_limit, new_stop, validity, new_smart,
+                                    _tick_retry=_tick_retry + 1)
         print(f"[BD Orders] create_order HTTP {result.get('status')} : {result.get('data')}")
         return None
 
     data = result.get("data")
     # Log complet pour découvrir la structure réelle de la réponse BD
     print(f"[BD Orders] create_order OK : {json.dumps(data)[:600]}")
+    # Prix finalement acceptés (≠ demandés si retry pas de cotation)
+    if isinstance(data, dict) and _tick_retry > 0:
+        data["_adjusted"] = {
+            "limit":       limit_price,
+            "stop":        stop_price,
+            "stop_loss":   (smart or {}).get("stop_loss"),
+            "take_profit": (smart or {}).get("take_profit"),
+        }
     return data
 
 
