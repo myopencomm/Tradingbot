@@ -11,7 +11,8 @@ from ai_provider import get_provider, VISION_PROMPT
 from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT,
                     POSITION_BUDGET_PCT, POSITION_BUDGET_MAX,
-                    BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO)
+                    BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO,
+                    FALLBACK_TP_MIN_PCT, FALLBACK_TP_MAX_PCT)
 
 # ── Univers de scan (~100 actions Bourse Direct) ──────────────────────────────
 # Le filtre quantitatif (RSI/momentum/volume) élimine les tickers invalides
@@ -310,6 +311,131 @@ def _breach_warning(ticker: str, pru: float, sl: float) -> str | None:
     return None
 
 
+def _small_gain_pass(ai, candidates: list[dict], cash: float,
+                     ctx: str, today_str: str) -> tuple[list[str], list[str]]:
+    """
+    Passe GAIN RÉDUIT : appelée quand AUCUNE opportunité à +DEFAULT_TP_PCT% n'a
+    été validée. Re-teste les meilleurs candidats quant avec un objectif court
+    terme réduit (+FALLBACK_TP_MIN_PCT à +FALLBACK_TP_MAX_PCT%, 1-5 jours).
+    Philosophie : mieux vaut un petit gain net que rien — tant que les frais
+    restent une part faible du gain (MIN_NET_GAIN_FEE_RATIO).
+    Les opportunités validées sont stockées en pending (source="court_terme")
+    pour le moteur autonome. Retourne (opportunités, écartés).
+    """
+    opps, rejected = [], []
+    roundtrip = 2 * BROKERAGE_FEE
+
+    for c in candidates[:3]:
+        t = c["ticker"]
+        try:
+            q = prices.get_quote(t)
+            price = q.get("price")
+            if not price:
+                continue
+
+            tech  = prices.get_technicals(t)
+            funds = prices.get_fundamentals(t)
+            pctx  = prices.get_price_context(t)
+            yf_n  = prices.get_yf_news(t, max_items=3)
+
+            tech_b = ""
+            if tech:
+                tech_b = (f"\nTECHNICALS : RSI {tech.get('rsi','N/A')} | "
+                          f"Momentum 1 mois {tech.get('momentum_1m','N/A'):+}% | "
+                          f"Vol ratio {tech.get('vol_ratio','N/A')}x\n")
+            if pctx:
+                tech_b += (f"52 SEMAINES : perf 1 an {pctx['perf_1y']:+}% | "
+                           f"+{pctx['from_52w_low']}% vs plus bas | "
+                           f"{pctx['from_52w_high']}% vs plus haut\n")
+            funds_b = ""
+            if funds.get("next_earnings"):
+                funds_b = f"\nRésultats le : {funds['next_earnings']}\n"
+            news_b = ("\nNEWS : " + " | ".join(n["title"] for n in yf_n)) if yf_n else ""
+            chart_txt = _analyze_chart(t, ai)
+            chart_b   = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
+
+            company_name  = funds.get("name", t)
+            company_label = f"{company_name} ({t})"
+            ctx_v = (f"\nCONTEXTE PERSONNEL — contraintes à respecter "
+                     f"(toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
+
+            prompt = f"""{TRADER_SYSTEM}
+{ANALYSIS_RULES}
+{TICKER_RULES}
+{FORMAT_TELEGRAM}
+{ctx_v}
+⚡ MODE GAIN RÉDUIT — TRADE COURT TERME (1 à 5 jours)
+Aucune opportunité à +{_TP}% n'a passé la validation aujourd'hui. Ta mission :
+un trade COURT à objectif RÉDUIT mais très atteignable, plutôt que rien.
+Ce candidat est dans le top du filtre quantitatif momentum du jour.
+
+AUJOURD'HUI : {today_str} | SOCIÉTÉ : {company_label} | COURS RÉEL : {price}€
+{tech_b}{funds_b}{news_b}{chart_b}
+RÈGLES DU TRADE COURT :
+- TP : +{FALLBACK_TP_MIN_PCT:.0f}% à +{FALLBACK_TP_MAX_PCT:.0f}% — cale-le SOUS la première résistance.
+  Ici une résistance proche est une CIBLE à exploiter, PAS un motif d'exclusion.
+- SL : serré, sous le dernier support — en %, jamais plus de la moitié du TP visé.
+- Momentum sain exigé : tendance 1 mois positive, RSI < 75, pas de couteau qui tombe.
+- EXCLUS si résultats ou événement binaire dans les 5 prochains jours.
+
+Signal ACHAT ou EXCLUS ? Réponds par le verdict en PREMIÈRE ligne, sans analyse avant.
+Si EXCLUS → EXCLUS — [raison 5 mots max]
+Si ACHAT → 1ère ligne EXACTEMENT :
+{company_name} ({t}) — Entrée : {price}€  SL : X€ (-X%)  TP : X€ (+X%)
+- Thèse courte : [niveau technique visé + niveau qui invalide]
+- Risque : LOW/MEDIUM/HIGH"""
+
+            val = _strip_markdown(ai.complete(prompt, max_tokens=300))
+            excl = next((l for l in val.splitlines()
+                         if l.strip().upper().startswith("EXCLU")), None)
+            entry_m = re.search(r"Entr[ée]e?\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+            sl_m    = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+            tp_m    = re.search(r"\bTP\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+
+            if excl or not (entry_m and sl_m and tp_m):
+                reason = (excl or "réponse malformée")
+                reason = reason.split("—", 1)[1].strip()[:60] if "—" in reason else reason[:60]
+                rejected.append(f"- {company_label} : {reason}")
+                continue
+
+            entry = float(entry_m.group(1).replace(",", "."))
+            sl_v  = float(sl_m.group(1).replace(",", "."))
+            tp_v  = float(tp_m.group(1).replace(",", "."))
+            if not (sl_v < entry < tp_v):
+                rejected.append(f"- {company_label} : niveaux incohérents (SL {sl_v} / TP {tp_v})")
+                continue
+            # Plafonne le TP dans la fourchette gain réduit
+            tp_max = round(entry * (1 + FALLBACK_TP_MAX_PCT / 100), 2)
+            if tp_v > tp_max:
+                tp_v = tp_max
+
+            # ── Rentabilité nette : mêmes règles que le moteur autonome ──────
+            budget   = min(cash * POSITION_BUDGET_PCT / 100, POSITION_BUDGET_MAX)
+            qty      = max(1, int(budget / entry))
+            gross_tp = qty * (tp_v - entry)
+            net_tp   = gross_tp - roundtrip
+            if gross_tp < roundtrip * MIN_NET_GAIN_FEE_RATIO:
+                rejected.append(
+                    f"- {company_label} : gain net {net_tp:.0f}€ trop faible vs frais "
+                    f"({MIN_NET_GAIN_FEE_RATIO:.0f}× {roundtrip:.2f}€ requis)"
+                )
+                continue
+
+            val = _validate_tickers(val)
+            val += (f"\n→ {qty} titres ≈ {qty * entry:.0f}€ | "
+                    f"Gain net au TP ≈ +{net_tp:.0f}€ (frais {roundtrip:.2f}€ inclus)")
+            opps.append(val)
+            portfolio.add_pending_opportunity(
+                t, entry, sl_v, tp_v,
+                reason=val.splitlines()[0][:150],
+                source="court_terme",
+            )
+        except Exception as e:
+            print(f"[gain réduit] {t}: {e}")
+
+    return opps, rejected
+
+
 def morning_briefing(send_fn) -> None:
     """
     Briefing quotidien 9h05.
@@ -406,6 +532,7 @@ MISSION
             # (liquides, en tendance) — évite de dépendre de l'imagination de l'IA
             # et garantit des candidats momentum chaque matin.
             quant_tickers = []
+            quant = []
             try:
                 regime_data = prices.get_market_regime()
                 quant = _quant_screen(
@@ -535,6 +662,15 @@ Si ACHAT → format :
                 except Exception as _pe:
                     print(f"[briefing] pending_opp store error {t}: {_pe}")
 
+        # ── Passe 3 : GAIN RÉDUIT si rien ne passe à +TP% ────────────────────
+        # Mieux vaut un petit trade net de frais que zéro trade : re-teste les
+        # 3 meilleurs candidats quant avec un TP court terme réduit.
+        small_opps, small_rejected = [], []
+        if cash >= 1000 and not opportunities and quant:
+            print(f"[briefing] 0 opportunité à +{_TP}% — passe gain réduit sur "
+                  f"{[c['ticker'] for c in quant[:3]]}")
+            small_opps, small_rejected = _small_gain_pass(ai, quant, cash, ctx, today_str)
+
         # ── Assemblage final ─────────────────────────────────────────────────
         # L'analyse portefeuille = tout ce qui précède ===CANDIDATS===.
         # Filet de sécurité : retire toute ligne candidate résiduelle (ticker nu
@@ -552,16 +688,22 @@ Si ACHAT → format :
             if rejected_morning:
                 msg += "\n\nAnalysés et écartés :\n" + "\n".join(rejected_morning)
         elif cash >= 1000:
-            no_opp = "Aucun candidat validé aujourd'hui."
+            no_opp = f"Aucun candidat validé à +{_TP}% aujourd'hui."
+            if small_opps:
+                no_opp += ("\n\n⚡ OPPORTUNITÉS COURT TERME (gain réduit, 1-5 jours)\n"
+                           + "\n\n".join(small_opps))
             if rejected_morning:
-                no_opp += "\n\nAnalysés et écartés :\n" + "\n".join(rejected_morning)
-            no_opp += "\n\n→ /scan pour relancer | /research TICKER pour un avis ciblé."
+                no_opp += f"\n\nAnalysés et écartés (+{_TP}%) :\n" + "\n".join(rejected_morning)
+            if small_rejected:
+                no_opp += "\n\nÉcartés en gain réduit :\n" + "\n".join(small_rejected)
+            if not small_opps:
+                no_opp += "\n\n→ /scan pour relancer | /research TICKER pour un avis ciblé."
             msg += "\n\n" + no_opp
         send_fn(msg)
 
         # Mode autonome : si actif + Playwright connecté + opportunités trouvées
         # → entre immédiatement après le briefing, sans attendre le check planifié
-        if opportunities:
+        if opportunities or small_opps:
             _trigger_autonomous(send_fn)
 
     except Exception as e:
@@ -790,8 +932,14 @@ def _validate_tickers(text: str) -> str:
     return text
 
 
-def research_ticker(send_fn, ticker: str, question: str = "") -> None:
-    """Analyse approfondie d'un ticker. Si question fournie, répond à cette question précise."""
+def research_ticker(send_fn, ticker: str, question: str = "",
+                    min_tp_pct: float | None = None) -> None:
+    """
+    Analyse approfondie d'un ticker. Si question fournie, répond à cette question précise.
+    min_tp_pct : remplace le TP minimum par défaut (+DEFAULT_TP_PCT%) — utilisé par le
+    moteur autonome pour confirmer un trade court terme à objectif réduit sans que le
+    critère +10% ne le fasse rejeter à tort.
+    """
     try:
         ai   = get_provider()
         ctx  = _trading_context()
@@ -983,7 +1131,7 @@ CATALYSEURS IMMINENTS
 {question_block}
 Y a-t-il une opportunité d'entrée sur {ticker} ?
 Réponds directement à la question spécifique si elle est posée.
-Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-{_SL}%), TP (+{_TP}% minimum — plus haut si le potentiel le justifie, % exact obligatoire), catalyseur principal, risque (LOW/MEDIUM/HIGH).
+Format : SIGNAL (ACHAT / NEUTRE / ÉVITER), prix d'entrée, SL (-{_SL}%), TP (+{f"{min_tp_pct:.1f}" if min_tp_pct else _TP}% minimum — plus haut si le potentiel le justifie, % exact obligatoire), catalyseur principal, risque (LOW/MEDIUM/HIGH).
 Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
 
         result = _strip_markdown(ai.complete(prompt, max_tokens=600))
@@ -1434,10 +1582,27 @@ Si ACHAT : format exact :
             except Exception as _pe:
                 print(f"[scan] pending_opp store error {t}: {_pe}")
 
+        # ── Passe GAIN RÉDUIT si rien ne passe à +TP% ─────────────────────────
+        small_opps, small_rejected = [], []
+        if not opportunities and screened:
+            print(f"[scan] 0 opportunité à +{_TP}% — passe gain réduit sur "
+                  f"{[c['ticker'] for c in screened[:3]]}")
+            _ctx = _trading_context()
+            small_opps, small_rejected = _small_gain_pass(
+                get_provider(), screened, cash, _ctx,
+                datetime.now(PARIS).strftime("%d/%m/%Y"),
+            )
+
         # ── Assemblage final ──────────────────────────────────────────────────
         result_parts = [f"POSITIONS\n{portfolio_summary}"]
         if opportunities:
             result_parts.append("OPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities))
+        elif small_opps:
+            result_parts.append(
+                f"Aucun candidat à +{_TP}% — repli sur le court terme.\n\n"
+                "⚡ OPPORTUNITÉS COURT TERME (gain réduit, 1-5 jours)\n"
+                + "\n\n".join(small_opps)
+            )
         else:
             no_opp = "Aucun candidat ne passe le filtre technique aujourd'hui."
             no_opp += "\n\n→ /research TICKER pour un avis ciblé sur un titre précis."
@@ -1445,6 +1610,8 @@ Si ACHAT : format exact :
         # Les exclusions sont toujours affichées (même quand il y a des opportunités)
         if rejected:
             result_parts.append("EXCLUS\n" + "\n".join(rejected))
+        if small_rejected:
+            result_parts.append("EXCLUS (gain réduit)\n" + "\n".join(small_rejected))
 
         elapsed = (datetime.now(PARIS) - t_start).total_seconds()
         print(f"[scan] terminé en {elapsed:.0f}s — {len(opportunities)} opportunité(s), "
@@ -1460,7 +1627,7 @@ Si ACHAT : format exact :
 
         # Mode autonome : si actif + Playwright connecté + opportunités trouvées
         # → entre immédiatement, sans attendre le prochain check planifié
-        if opportunities:
+        if opportunities or small_opps:
             _trigger_autonomous(send_fn)
 
     except Exception as e:

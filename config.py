@@ -44,6 +44,14 @@ BROKERAGE_FEE = float(os.getenv("BROKERAGE_FEE", "1.98"))
 # sinon le trade ne vaut pas le coup (frais qui mangent le gain).
 MIN_NET_GAIN_FEE_RATIO = float(os.getenv("MIN_NET_GAIN_FEE_RATIO", "5"))
 
+# Mode GAIN RÉDUIT (trades courts 1-5 jours) : quand AUCUNE opportunité à
+# +DEFAULT_TP_PCT% ne passe la validation, les meilleurs candidats quant sont
+# re-testés avec un TP réduit dans cette fourchette. Objectif : gagner un peu
+# chaque jour plutôt que rien — la rentabilité nette de frais reste contrôlée
+# par MIN_NET_GAIN_FEE_RATIO.
+FALLBACK_TP_MIN_PCT = float(os.getenv("FALLBACK_TP_MIN_PCT", "3"))
+FALLBACK_TP_MAX_PCT = float(os.getenv("FALLBACK_TP_MAX_PCT", "8"))
+
 # Alertes TP automatiques : "on" (défaut) ou "off" pour les stratégies
 # qui laissent courir les gagnants sur avis IA
 TP_ALERTS = os.getenv("TP_ALERTS", "on").strip().lower() not in ("off", "false", "0", "no")

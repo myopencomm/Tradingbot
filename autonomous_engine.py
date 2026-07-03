@@ -261,9 +261,22 @@ def run_entry_cycle(send_fn) -> None:
                     _buf.append(msg)
                     send_fn(msg)
 
+                # Trade court terme (gain réduit) : le critère TP +10% ne
+                # s'applique pas — le research juge la faisabilité du TP réel.
+                tp_pct = round((tp - entry) / entry * 100, 1)
+                question = ""
+                min_tp = None
+                if opp.get("source") == "court_terme":
+                    min_tp = tp_pct
+                    question = (
+                        f"Trade COURT TERME (1-5 jours) visant seulement +{tp_pct}% "
+                        f"(TP {tp}). Le momentum court terme rend-il cet objectif "
+                        f"très probable ? Le critère TP +10% ne s'applique PAS ici."
+                    )
+
                 try:
                     import analysis as _analysis
-                    _analysis.research_ticker(_capture, ticker, "")
+                    _analysis.research_ticker(_capture, ticker, question, min_tp_pct=min_tp)
                 except Exception as e:
                     send_fn(f"⚠️ {ticker} : research échoué ({e}) — achat annulé par précaution")
                     portfolio.clear_pending_opportunity(ticker)
