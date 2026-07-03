@@ -309,23 +309,29 @@ def _parse_order(text: str) -> dict | None:
         order["qty_exec"] = int(m_qty.group(1))
         order["qty_total"] = int(m_qty.group(2))
 
-    # Statut — "En cours" prime. Un Take Profit a un statut par partie ;
-    # si au moins une est "En cours", l'ordre est actif.
-    # "Exécuté" AVANT "Annulé" : sur un ordre à 2 volets exécuté, le volet
-    # non déclenché est "Annulé" et le volet déclenché "Exécuté" — c'est bien
-    # une exécution, pas une annulation.
+    # ── Prix réel d'exécution — formats RÉELS observés sur BD (logs bruts) :
+    #   volet TP déclenché : "Profit206.00 € Profit Exé. 208.00 €"
+    #   volet SL déclenché : "Seuil57.20 € Seuil Exé. 57.20 €"
+    #   ordre simple rempli : "Ordre exécuté 18/18 Lim. 53.06 € 53.05 €"
+    # Le prix après "Exé." est le prix RÉEL (peut différer du seuil posé, ex:
+    # gap d'ouverture au-dessus du TP).
+    m_ex = (re.search(r'Profit\s*Exé\.?\s*([\d.,]+)\s*€', flat)
+            or re.search(r'Seuil\s*Exé\.?\s*([\d.,]+)\s*€', flat)
+            or re.search(r'Lim(?:ite)?\.?\s*Exé\.?\s*([\d.,]+)\s*€', flat)
+            or re.search(r'Ordre exécuté\s*\d+\s*/\s*\d+\s*Lim\.\s*[\d.,]+\s*€\s*([\d.,]+)\s*€', flat))
+    if m_ex:
+        order["exec_price"] = _parse_float(m_ex.group(1))
+
+    # Statut — "En cours" prime : un bloc peut contenir un volet exécuté
+    # (entrée remplie) ET des protections encore actives.
+    # Exécution AVANT "Annulé" : sur un ordre TP/SL à 2 volets exécuté, le
+    # volet non déclenché est "Annulé" et le volet déclenché porte "Exé." —
+    # c'est une exécution, pas une annulation.
     if "En cours" in flat:
         order["statut"] = "En cours"
-    elif "Exécuté" in flat or "Execute" in flat:
+    elif m_ex or re.search(r'exécuté|execute', flat, re.I):
         # Conservé pour la détection automatique des ventes par le sync.
-        # Le volet exécuté porte le prix réel de sortie.
         order["statut"] = "Exécuté"
-        m_ex = (re.search(r'Profit\s*([\d.,]+)\s*€\s*Exécuté', flat)
-                or re.search(r'Seuil\s*([\d.,]+)\s*€\s*Exécuté', flat)
-                or re.search(r'Limite\s+([\d.,]+)\s*€\s*Exécuté', flat)
-                or re.search(r'Stop\s+([\d.,]+)\s*€\s*Exécuté', flat))
-        if m_ex:
-            order["exec_price"] = _parse_float(m_ex.group(1))
     elif "Annulé" in flat or "Annule" in flat:
         return None  # annulé sans exécution → ignoré
 
