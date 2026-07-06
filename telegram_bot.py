@@ -27,8 +27,11 @@ _buf_lock = threading.Lock()
 # ─── Envoi ──────────────────────────────────────────────────────────────────
 
 def send(text: str, chat_id: str = None) -> bool:
+    # Trace compacte de TOUT message sortant : indispensable pour diagnostiquer
+    # a posteriori pourquoi le bot a pris (ou pas) une décision.
+    flat = text.replace("\n", " ⏎ ")
+    print(f"[TG] {flat[:200]}")
     if not TELEGRAM_TOKEN:
-        print(f"[NO TOKEN] {text[:80]}")
         return False
     try:
         r = requests.post(
