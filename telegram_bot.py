@@ -1443,15 +1443,62 @@ def _check_playwright_ready(cid) -> bool:
     return True
 
 
+def cmd_capture(args, cid):
+    """/capture — trace toutes les requêtes POST vers l'API trading BD dans le log.
+    Utilisation : /capture, puis passer un ordre MANUELLEMENT dans la fenêtre
+    Chromium du bot jusqu'à l'écran de vérification — le payload exact du site
+    apparaît dans tradingbot.log ([CAPTURE]). Actif jusqu'au redémarrage."""
+    if not _check_playwright_ready(cid):
+        return
+
+    def _arm(page):
+        def on_request(req):
+            try:
+                if "/hub/trading" in req.url and req.method == "POST":
+                    print(f"[CAPTURE] POST {req.url}")
+                    print(f"[CAPTURE PAYLOAD] {req.post_data}")
+            except Exception:
+                pass
+
+        def on_response(resp):
+            try:
+                if "/hub/trading" in resp.url:
+                    print(f"[CAPTURE RESP] {resp.status} {resp.url}")
+            except Exception:
+                pass
+
+        page.on("request", on_request)
+        page.on("response", on_response)
+        return True
+
+    def _do():
+        try:
+            playwright_session.run(_arm, timeout=15)
+            send(
+                "🎥 Capture réseau ACTIVE sur la session BD.\n"
+                "Dans la fenêtre Chromium du bot (sur le Mac) :\n"
+                "1. Va sur la fiche du titre (ex: AMGN)\n"
+                "2. Ouvre le formulaire d'ordre, remplis-le (qty 1)\n"
+                "3. Clique Vérifier/Valider — SANS confirmer l'envoi final\n"
+                "Le payload exact sera dans tradingbot.log ([CAPTURE]).",
+                cid,
+            )
+        except Exception as e:
+            send(f"Erreur capture : {e}", cid)
+
+    _run_long(cid, _do)
+
+
 def cmd_testordre(args, cid):
     """/testordre TICKER — diagnostic payload BD : teste les variantes /order/create
     (validation seule, rien n'est envoyé au marché)."""
     if not _check_playwright_ready(cid):
         return
-    if not args:
+    tickers = [a for a in args if a.lower() not in ("acheter", "vendre", "buy", "sell")]
+    if not tickers:
         send("Usage : /testordre TICKER (ex: /testordre RTX)", cid)
         return
-    ticker = args[0].upper()
+    ticker = tickers[0].upper()
     import bourse_direct_orders as bd_orders
 
     def _do_test():
