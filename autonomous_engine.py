@@ -285,6 +285,20 @@ def run_entry_cycle(send_fn) -> None:
         pending = portfolio.get_pending_opportunities()
         if pending:
             print(f"[Auto] {len(pending)} opportunité(s) en attente du briefing/scan")
+            # Résumé du cycle : ce qui va être tenté et ce qui attend son marché
+            statuses, actionable = [], False
+            for opp in pending:
+                t = opp["ticker"]
+                if t.upper() in held:
+                    continue
+                if market_open_for(t):
+                    statuses.append(f"• {t} [{opp.get('source', '?')}] — marché ouvert, évaluation")
+                    actionable = True
+                else:
+                    open_at = "15h35" if "." not in t else "9h05"
+                    statuses.append(f"• {t} [{opp.get('source', '?')}] — attend l'ouverture ({open_at} Paris)")
+            if actionable and statuses:
+                send_fn("🤖 Cycle d'entrée auto — opportunités en attente :\n" + "\n".join(statuses))
             for opp in pending:
                 ticker = opp["ticker"]
                 if ticker.upper() in held:
@@ -345,7 +359,8 @@ def run_entry_cycle(send_fn) -> None:
 
                 try:
                     import analysis as _analysis
-                    _analysis.research_ticker(_capture, ticker, question, min_tp_pct=min_tp)
+                    _analysis.research_ticker(_capture, ticker, question,
+                                              min_tp_pct=min_tp, confirm_mode=True)
                 except Exception as e:
                     send_fn(f"⚠️ {ticker} : research échoué ({e}) — achat annulé par précaution")
                     portfolio.clear_pending_opportunity(ticker)

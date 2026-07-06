@@ -77,6 +77,14 @@ def _hourly_bd_sync():
         autonomous_engine.trailing_stop_cycle(telegram_bot.send)
     except Exception as e:
         print(f"[hourly trailing] {e}")
+    # Cycle d'entrée : tente les opportunités en attente dont le marché vient
+    # d'ouvrir (ex: US validées le matin, achetables dès 15h35 Paris). Chaque
+    # opportunité n'est évaluée qu'une fois (achetée ou retirée après veto).
+    try:
+        import autonomous_engine
+        autonomous_engine.run_entry_cycle(telegram_bot.send)
+    except Exception as e:
+        print(f"[hourly entry] {e}")
 
 
 def _auto_gmail_check():

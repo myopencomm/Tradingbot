@@ -954,12 +954,19 @@ def _validate_tickers(text: str) -> str:
 
 
 def research_ticker(send_fn, ticker: str, question: str = "",
-                    min_tp_pct: float | None = None) -> None:
+                    min_tp_pct: float | None = None,
+                    confirm_mode: bool = False) -> None:
     """
     Analyse approfondie d'un ticker. Si question fournie, répond à cette question précise.
     min_tp_pct : remplace le TP minimum par défaut (+DEFAULT_TP_PCT%) — utilisé par le
     moteur autonome pour confirmer un trade court terme à objectif réduit sans que le
     critère +10% ne le fasse rejeter à tort.
+    confirm_mode : confirmation pré-achat du moteur autonome. Le titre a DÉJÀ été
+    validé par l'analyse complète du scan/briefing — le research ne re-juge pas
+    l'opportunité, il cherche uniquement un défaut DISQUALIFIANT (même contrat que
+    SCREEN_DIRECTIVE). Sans ce mode, le research re-analysait librement et vetoait
+    sur des motifs interdits (volume faible, résistance proche) → aucun trade ne
+    passait jamais les deux couches.
     """
     try:
         ai   = get_provider()
@@ -1137,6 +1144,20 @@ DÉCISION
         else:
             social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
             question_block = f"\nQUESTION SPÉCIFIQUE : {question}" if question else ""
+            confirm_directive = ""
+            if confirm_mode:
+                confirm_directive = f"""{SCREEN_DIRECTIVE}
+⚡ MODE CONFIRMATION PRÉ-ACHAT — PRIME SUR TON INSTINCT DE PRUDENCE :
+Ce titre a DÉJÀ été validé ACHAT aujourd'hui par l'analyse complète (filtre
+quantitatif + validation IA avec web, news, graphique). Ton rôle N'EST PAS de
+re-juger l'opportunité ni d'exiger un meilleur point d'entrée : c'est un
+DERNIER contrôle pour détecter un défaut DISQUALIFIANT apparu depuis ou manqué
+(voir liste dans la directive ci-dessus : couteau qui tombe, RSI > 80, news
+invalidante, OPA plafonnée, illiquidité réelle).
+« volume faible », « résistance proche », « consolidation », « attendre un
+repli » ne sont PAS des défauts disqualifiants — ne les utilise JAMAIS pour
+rejeter. Si aucun défaut disqualifiant concret → SIGNAL : ACHAT.
+"""
             short_directive = ""
             if min_tp_pct:
                 short_directive = f"""
@@ -1153,7 +1174,7 @@ NEUTRE ou ÉVITER sinon — sur CE trade, pas un autre.
 {ANALYSIS_RULES}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
-{ctx_block}{short_directive}
+{ctx_block}{confirm_directive}{short_directive}
 TICKER ANALYSÉ : {ticker} — JE NE DÉTIENS PAS CETTE ACTION.
 {tech_block}{funds_block}{news_block}{social_block}{chart_block}
 RECHERCHE WEB

@@ -40,9 +40,12 @@ def add_pending_opportunity(ticker: str, entry: float, sl: float, tp: float,
     from datetime import datetime, timedelta
     PARIS = pytz.timezone("Europe/Paris")
     now     = datetime.now(PARIS)
-    # Expire à 17h30 le même jour (fin de marché) — pas question d'agir sur
-    # une opportunité du matin le lendemain matin sans re-validation.
-    expires = now.replace(hour=17, minute=30, second=0, microsecond=0)
+    # Expire à la clôture du marché DU TITRE (heure de Paris) — pas question
+    # d'agir sur une opportunité du matin le lendemain sans re-validation.
+    # US (pas de suffixe) : 21h55 ; Euronext/autres : 17h30.
+    is_us = "." not in ticker.upper()
+    close_h, close_m = (21, 55) if is_us else (17, 30)
+    expires = now.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
     if now >= expires:
         expires = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
     data = load()
