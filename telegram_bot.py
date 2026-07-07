@@ -1452,9 +1452,14 @@ def cmd_capture(args, cid):
         return
 
     def _arm(page):
+        # Écoute au niveau du CONTEXTE (tous les onglets, y compris ceux que
+        # BD ouvrira ensuite) — le module d'ordre BD s'ouvre souvent dans un
+        # nouvel onglet que le listener de page unique ne voyait pas.
+        ctx = page.context
+
         def on_request(req):
             try:
-                if "/hub/trading" in req.url and req.method == "POST":
+                if "/hub/" in req.url and req.method == "POST":
                     print(f"[CAPTURE] POST {req.url}")
                     print(f"[CAPTURE PAYLOAD] {req.post_data}")
             except Exception:
@@ -1462,13 +1467,20 @@ def cmd_capture(args, cid):
 
         def on_response(resp):
             try:
-                if "/hub/trading" in resp.url:
+                if "/hub/" in resp.url:
                     print(f"[CAPTURE RESP] {resp.status} {resp.url}")
             except Exception:
                 pass
 
-        page.on("request", on_request)
-        page.on("response", on_response)
+        def on_page(p):
+            try:
+                print(f"[CAPTURE] nouvel onglet : {p.url}")
+            except Exception:
+                pass
+
+        ctx.on("request", on_request)
+        ctx.on("response", on_response)
+        ctx.on("page", on_page)
         return True
 
     def _do():
