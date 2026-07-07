@@ -273,9 +273,13 @@ def run_entry_cycle(send_fn) -> None:
             return
 
         budget_info = get_budget_info()
-        available   = budget_info["available"]
+        # Plafonné au cash RÉEL (synchronisé depuis BD) : les fonds réservés
+        # par des ordres d'achat encore en attente ne sont pas réengageables —
+        # le budget théorique seul ne les voit pas (ils ne sont pas des positions).
+        available = min(budget_info["available"], portfolio.get_cash())
         if available < 50:
-            print(f"[Auto] Budget insuffisant ({available:.0f}€)")
+            print(f"[Auto] Budget insuffisant ({available:.0f}€ — "
+                  f"budget {budget_info['available']:.0f}€, cash {portfolio.get_cash():.0f}€)")
             return
 
         all_pos = portfolio.load().get("positions", {})

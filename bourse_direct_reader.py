@@ -322,17 +322,20 @@ def _parse_order(text: str) -> dict | None:
     if m_ex:
         order["exec_price"] = _parse_float(m_ex.group(1))
 
-    # Statut — "En cours" prime : un bloc peut contenir un volet exécuté
+    # Statut — "en cours" prime : un bloc peut contenir un volet exécuté
     # (entrée remplie) ET des protections encore actives.
+    # INSENSIBLE À LA CASSE : BD écrit "En cours" sur les volets TP/SL mais
+    # "Ordre en cours" (minuscule) sur les achats limite en attente — sans ça
+    # les ordres d'achat en attente étaient invisibles pour le sync.
     # Exécution AVANT "Annulé" : sur un ordre TP/SL à 2 volets exécuté, le
     # volet non déclenché est "Annulé" et le volet déclenché porte "Exé." —
     # c'est une exécution, pas une annulation.
-    if "En cours" in flat:
+    if re.search(r'en cours', flat, re.I):
         order["statut"] = "En cours"
     elif m_ex or re.search(r'exécuté|execute', flat, re.I):
         # Conservé pour la détection automatique des ventes par le sync.
         order["statut"] = "Exécuté"
-    elif "Annulé" in flat or "Annule" in flat:
+    elif re.search(r'annulé|annule', flat, re.I):
         return None  # annulé sans exécution → ignoré
 
     return order
