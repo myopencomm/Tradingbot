@@ -64,9 +64,17 @@ TICKER_MAP: dict[str, dict] = {
     "LBIRD.PA":               {"bd_ticker": "LBIRD",  "mic": "XPAR", "currency": "EUR"},
     "MCPHY.PA":               {"bd_ticker": "MCPHY",  "mic": "XPAR", "currency": "EUR"},
     "FR0011799907.PA":        {"bd_ticker": "ALGV",   "mic": "XPAR", "currency": "EUR"},  # Genomic Vision
-    "ILMN":                   {"bd_ticker": "ILMN",   "mic": "XNAS", "currency": "USD"},
+    # AMGN XNGS confirmé par capture réseau du site BD (07/2026) : le NASDAQ
+    # est identifié par XNGS (Global Select), PAS XNAS — un mic inconnu de BD
+    # donne un HTTP 400 "Missing arguments" générique sur /order/create.
+    "AMGN":                   {"bd_ticker": "AMGN",   "mic": "XNGS", "currency": "USD"},
+    "ILMN":                   {"bd_ticker": "ILMN",   "mic": "XNGS", "currency": "USD"},
     # Ajouter au fur et à mesure lors des premiers passages d'ordres
 }
+
+# MICs candidats pour un titre US : résolus dynamiquement via
+# /order/context-validate (endpoint confirmé par capture réseau).
+US_MIC_CANDIDATES = ("XNGS", "XNYS", "XNAS")
 
 
 def get_ticker_info(yf_ticker: str) -> dict | None:
@@ -102,8 +110,9 @@ def get_ticker_info(yf_ticker: str) -> dict | None:
             base = t[: -len(suffix)]
             return {"bd_ticker": base, "mic": mic, "currency": currency}
 
-    # US sans suffixe — NASDAQ par défaut (NYSE → ajouter override "mic": "XNYS")
-    return {"bd_ticker": t, "mic": "XNAS", "currency": "USD"}
+    # US sans suffixe — MIC inconnu a priori (XNGS=NASDAQ, XNYS=NYSE) :
+    # create_order le résout dynamiquement via /order/context-validate.
+    return {"bd_ticker": t, "mic": "XNGS", "currency": "USD", "us_unresolved": True}
 
 
 def register_ticker(yf_ticker: str, bd_ticker: str, mic: str, currency: str):
@@ -113,6 +122,24 @@ def register_ticker(yf_ticker: str, bd_ticker: str, mic: str, currency: str):
         "mic":       mic,
         "currency":  currency,
     }
+
+
+def resolve_us_mic(page, ticker: str, currency: str = "USD") -> str | None:
+    """
+    Détermine le MIC BD réel d'un titre US via /order/context-validate
+    (endpoint + payload confirmés par capture réseau du site BD).
+    Un MIC erroné donne HTTP 400 "Missing arguments" sur /order/create.
+    Le résultat est mémorisé dans TICKER_MAP pour la session.
+    """
+    for mic in US_MIC_CANDIDATES:
+        r = _api_post(page, "/order/context-validate",
+                      {"instrument": {"mic": mic, "ticker": ticker, "currency": currency}})
+        if r and r.get("ok"):
+            print(f"[BD Orders] MIC résolu : {ticker} → {mic}")
+            register_ticker(ticker, ticker, mic, currency)
+            return mic
+    print(f"[BD Orders] MIC introuvable pour {ticker} (candidats {US_MIC_CANDIDATES})")
+    return None
 
 
 # ── Appel API interne (via fetch Playwright avec cookies de session) ──────────
@@ -178,14 +205,21 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
 
     s = (validity_str or "max").strip().lower()
 
+    # "revocation" avec date de FIN DE MOIS — payload réel du site BD confirmé
+    # par capture réseau (07/2026) : validityDate n'est jamais null.
+    import calendar
+    now = datetime.now()
+    last_day = calendar.monthrange(now.year, now.month)[1]
+    end_of_month = f"{now.year}-{now.month:02d}-{last_day:02d}T00:00:00.000Z"
+
     if s == "seance":
-        return "day", datetime.now().strftime("%Y-%m-%dT00:00:00.000Z")
+        return "day", now.strftime("%Y-%m-%dT00:00:00.000Z")
     if s == "max":
         if mic in EURONEXT_MICS:
-            return "end_of_year", f"{datetime.now().year}-12-31T00:00:00.000Z"
-        return "revocation", None
+            return "end_of_year", f"{now.year}-12-31T00:00:00.000Z"
+        return "revocation", end_of_month
     if s == "revocation":
-        return "revocation", None
+        return "revocation", end_of_month
     if re.match(r"\d{2}/\d{2}/\d{4}$", s):
         d = datetime.strptime(s, "%d/%m/%Y")
         return "date", d.strftime("%Y-%m-%dT00:00:00.000Z")
@@ -255,6 +289,13 @@ def create_order(page, ticker: str, side: str, qty: int,
     if not info:
         print(f"[BD Orders] Ticker inconnu : {ticker} — ajouter dans TICKER_MAP")
         return None
+
+    # Titre US jamais tradé : résout le vrai MIC (XNGS/XNYS) avant l'ordre —
+    # un MIC erroné donne "Missing arguments".
+    if info.get("us_unresolved"):
+        resolved = resolve_us_mic(page, info["bd_ticker"], info["currency"])
+        if resolved:
+            info = TICKER_MAP[ticker.upper()]
 
     validity_api, validity_date = parse_validity(validity, info["mic"])
 
