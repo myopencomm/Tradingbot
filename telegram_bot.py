@@ -1963,6 +1963,7 @@ COMMANDS = {
     "/disconnect": cmd_disconnect,
     "/sync": cmd_sync,
     "/testordre": cmd_testordre,
+    "/capture": cmd_capture,
     "/ordre": cmd_ordre,
     "/oui": cmd_oui,
     "/non": cmd_non,
