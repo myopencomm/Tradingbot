@@ -5,7 +5,8 @@ Toutes les commandes sont disponibles depuis l'app iPhone/web.
 import requests
 import time
 import threading
-from config import (TELEGRAM_TOKEN, CHAT_ID, GMAIL_USER, GMAIL_APP_PASSWORD,
+from config import (TELEGRAM_TOKEN, CHAT_ID, AUTHORIZED_CHAT_IDS,
+                    GMAIL_USER, GMAIL_APP_PASSWORD,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT, BREAKEVEN_THRESHOLD)
 import portfolio
 import prices
@@ -2062,6 +2063,15 @@ COMMANDS = {
 
 def _handle_message(message: dict):
     cid = str(message.get("chat", {}).get("id", ""))
+
+    # ── AUTORISATION (sécurité critique) ─────────────────────────────────────
+    # N'exécuter les commandes QUE pour les chats autorisés. Sans ce filtre,
+    # tout inconnu ayant trouvé le bot pourrait passer des ordres réels, lire
+    # le portefeuille, ou relayer le code 2FA de connexion Bourse Direct.
+    if AUTHORIZED_CHAT_IDS and cid not in AUTHORIZED_CHAT_IDS:
+        print(f"[SECURITY] message ignoré d'un chat non autorisé : {cid}")
+        return
+
     text = (message.get("text") or "").strip()
     doc = message.get("document")
     photo = message.get("photo")

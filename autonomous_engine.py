@@ -540,9 +540,13 @@ def trailing_stop_cycle(send_fn) -> None:
         return
     if not bd:
         return
+    # Ordres de PROTECTION actifs = tout ordre En cours portant un seuil SL
+    # ou un profit TP, avec un order_id. On ne filtre PAS sur sens=="Vente" :
+    # BD attache souvent le bracket TP/SL à l'ordre d'ACHAT exécuté (sens lu
+    # "Achat"), ce qui excluait à tort ces protections du trailing (cas UNA).
     sell_orders = [o for o in bd.get("orders", [])
-                   if o.get("statut") == "En cours" and o.get("sens") == "Vente"
-                   and o.get("order_id")]
+                   if o.get("statut") == "En cours" and o.get("order_id")
+                   and (o.get("seuil") or o.get("profit"))]
 
     for name, pos, change_pct in candidates:
         base = pos["ticker"].upper().split(".")[0]

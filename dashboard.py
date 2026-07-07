@@ -474,8 +474,26 @@ def summary_text() -> str:
 # ─── Serveur local ───────────────────────────────────────────────────────────
 
 class _Handler(BaseHTTPRequestHandler):
+    def _authorized(self) -> bool:
+        """Si DASHBOARD_TOKEN est défini, exige ?token=… ou cookie dash_token.
+        Vide = pas d'auth (usage local uniquement, bind 127.0.0.1)."""
+        from config import DASHBOARD_TOKEN
+        if not DASHBOARD_TOKEN:
+            return True
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        if qs.get("token", [""])[0] == DASHBOARD_TOKEN:
+            return True
+        cookie = self.headers.get("Cookie", "")
+        return f"dash_token={DASHBOARD_TOKEN}" in cookie
+
     def do_GET(self):
         try:
+            if not self._authorized():
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"403 - token requis (ajoute ?token=... a l'URL)")
+                return
             path = self.path.split("?")[0]
             if path == "/manifest.webmanifest":
                 body  = json.dumps(_MANIFEST).encode("utf-8")
@@ -489,6 +507,13 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            # Mémorise le jeton en cookie : la PWA installée (manifest/icônes/
+            # lancements depuis l'écran d'accueil) n'a plus besoin du ?token=.
+            from config import DASHBOARD_TOKEN
+            if DASHBOARD_TOKEN and f"token={DASHBOARD_TOKEN}" in self.path:
+                self.send_header("Set-Cookie",
+                                 f"dash_token={DASHBOARD_TOKEN}; Max-Age=31536000; "
+                                 f"Path=/; SameSite=Strict")
             self.end_headers()
             self.wfile.write(body)
         except Exception as e:
@@ -508,13 +533,19 @@ def start_server():
     authentification, à réserver à un réseau de confiance (tailnet).
     L'alternative recommandée sans changer le bind : `tailscale serve --bg 8642`.
     """
-    import os
-    bind = os.getenv("DASHBOARD_BIND", "127.0.0.1").strip() or "127.0.0.1"
+    from config import DASHBOARD_BIND as bind, DASHBOARD_TOKEN
+    # Garde-fou : exposition réseau SANS jeton = fuite du portefeuille sur le
+    # réseau. On force alors le bind local et on prévient.
+    if bind != "127.0.0.1" and not DASHBOARD_TOKEN:
+        print("⚠️ SÉCURITÉ : DASHBOARD_BIND expose le réseau sans DASHBOARD_TOKEN — "
+              "repli forcé sur 127.0.0.1. Définis DASHBOARD_TOKEN pour l'accès distant.")
+        bind = "127.0.0.1"
     try:
         srv = HTTPServer((bind, PORT), _Handler)
         threading.Thread(target=srv.serve_forever, daemon=True,
                          name="dashboard").start()
-        scope = "local uniquement" if bind == "127.0.0.1" else f"bind {bind} — accessible réseau"
+        scope = ("local uniquement" if bind == "127.0.0.1"
+                 else f"bind {bind} — réseau, protégé par jeton")
         print(f"✅ Dashboard : http://localhost:{PORT} ({scope})")
     except OSError as e:
         print(f"⚠️ Dashboard non démarré (port {PORT}) : {e}")

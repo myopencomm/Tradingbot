@@ -10,6 +10,18 @@ BASE_DIR = Path(__file__).parent
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+# Allowlist des expéditeurs autorisés à piloter le bot. Par défaut : CHAT_ID
+# seul. Pour autoriser plusieurs comptes (ex: conjoint), CHAT_ID="111,222".
+# SÉCURITÉ CRITIQUE : tout message d'un chat hors de cette liste est ignoré —
+# sans ce filtre, quiconque connaît le @username du bot pourrait passer des
+# ordres réels et relayer le code 2FA de connexion Bourse Direct.
+AUTHORIZED_CHAT_IDS = {c.strip() for c in (CHAT_ID or "").split(",") if c.strip()}
+
+# Dashboard — jeton optionnel exigé quand le serveur est exposé au réseau
+# (DASHBOARD_BIND != 127.0.0.1). Vide = pas d'auth (OK en local uniquement).
+DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "").strip()
+DASHBOARD_BIND  = os.getenv("DASHBOARD_BIND", "127.0.0.1").strip() or "127.0.0.1"
+
 # AI — plug any provider via .env
 AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic").lower()
 AI_MODEL = os.getenv("AI_MODEL", "")

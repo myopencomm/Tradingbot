@@ -43,6 +43,11 @@ do_start() {
         echo "✅ Le bot tourne déjà (PID $(_pid))."
         return 0
     fi
+    # Sécurité : restreint les permissions des fichiers sensibles au seul
+    # propriétaire (600) — ils contiennent secrets et données financières.
+    for f in .env positions.json trades_history.json CLAUDE_TRADING_CONTEXT.md bot_state.json; do
+        [ -f "$f" ] && chmod 600 "$f"
+    done
     if _autostart_active; then
         echo "Démarrage via le service auto..."
         if [ "$(uname)" = "Darwin" ]; then
