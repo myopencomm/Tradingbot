@@ -65,6 +65,29 @@ def add_pending_opportunity(ticker: str, entry: float, sl: float, tp: float,
     save(data)
 
 
+def get_auto_pending_orders() -> dict:
+    """Ordres d'achat AUTONOMES placés sur BD mais pas encore exécutés.
+    Comptent dans le budget engagé (fonds réservés par BD)."""
+    return load().get("auto_pending_orders", {})
+
+
+def add_auto_pending_order(ticker: str, qty: int, entry: float, sl: float, tp: float):
+    import pytz
+    from datetime import datetime
+    data = load()
+    data.setdefault("auto_pending_orders", {})[ticker.upper()] = {
+        "qty": qty, "entry": entry, "sl": sl, "tp": tp,
+        "placed_at": datetime.now(pytz.timezone("Europe/Paris")).isoformat(),
+    }
+    save(data)
+
+
+def clear_auto_pending_order(ticker: str):
+    data = load()
+    if data.get("auto_pending_orders", {}).pop(ticker.upper(), None) is not None:
+        save(data)
+
+
 def clear_pending_opportunity(ticker: str):
     data = load()
     opps = data.get("pending_opportunities", [])

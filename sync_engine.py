@@ -120,8 +120,13 @@ def sync(page, send_fn, silent: bool = False) -> bool:
             yf_t = _yf_ticker(bd_ticker, mic)
             new_key = bd_ticker or bd_name.replace(" ", "_")[:20]
 
-            sl = prot.get("seuil")
-            tp = prot.get("profit")
+            # Ordre autonome en attente correspondant ? → la position naît
+            # avec le flag autonome et ses SL/TP d'origine, et l'engagement
+            # "en attente" est consommé.
+            auto_rec = (data.get("auto_pending_orders", {}).get(yf_t.upper())
+                        or data.get("auto_pending_orders", {}).get(bd_ticker))
+            sl = prot.get("seuil") or (auto_rec or {}).get("sl")
+            tp = prot.get("profit") or (auto_rec or {}).get("tp")
             # Sans SL/TP connus (aucun ordre Expert actif) : valeurs par défaut -7%/+10%
             if not sl and bd_pru:
                 sl = round(bd_pru * 0.93, 4)
@@ -144,13 +149,20 @@ def sync(page, send_fn, silent: bool = False) -> bool:
                     "target_low":  round(sl, 4),
                     "bd_name":     pos["name"],
                 }
+                if auto_rec:
+                    data["positions"][new_key]["autonomous"] = True
+                    # Consomme l'engagement "ordre en attente" (exécuté)
+                    for k in (yf_t.upper(), bd_ticker):
+                        data.get("auto_pending_orders", {}).pop(k, None)
                 local[new_key] = data["positions"][new_key]
                 matched_local_keys.add(new_key)
                 added_keys.append(new_key)
                 changed = True
-                src = "SL/TP lus sur l'ordre BD" if prot.get("seuil") or prot.get("profit") else "SL/TP par défaut -7%/+10%"
+                src = "SL/TP lus sur l'ordre BD" if prot.get("seuil") or prot.get("profit") else \
+                      ("SL/TP de l'ordre autonome" if auto_rec else "SL/TP par défaut -7%/+10%")
+                tag = "🤖 " if auto_rec else ""
                 lines.append(
-                    f"➕ {new_key} ({yf_t}) AJOUTÉ auto : {bd_qty}t @ {bd_pru}€ | "
+                    f"➕ {tag}{new_key} ({yf_t}) AJOUTÉ auto : {bd_qty}t @ {bd_pru}€ | "
                     f"SL {sl}€ TP {tp}€ ({src})"
                 )
 
@@ -254,6 +266,20 @@ def sync(page, send_fn, silent: bool = False) -> bool:
                     lines.append(f"    → TP {lk} : {pos_cfg.get('target_high')} → {profit}")
                     pos_cfg["target_high"] = profit
                     changed = True
+
+    # ── Réconciliation des ordres autonomes en attente ────────────────────
+    # Un enregistrement sans ordre d'achat actif sur BD ni position créée =
+    # ordre annulé/expiré → engagement libéré.
+    active_buys = {(o.get("bd_ticker") or "").upper()
+                   for o in bd.get("orders", [])
+                   if o.get("statut") == "En cours" and o.get("sens") == "Achat"}
+    for t in list(data.get("auto_pending_orders", {})):
+        base = t.split(".")[0].upper()
+        has_position = any(_local_base(c) == base for c in data.get("positions", {}).values())
+        if base not in active_buys and not has_position:
+            data["auto_pending_orders"].pop(t, None)
+            changed = True
+            lines.append(f"♻️ Ordre autonome {t} disparu de BD (annulé/expiré) — budget libéré.")
 
     if changed:
         portfolio.save(data)

@@ -34,11 +34,20 @@ def is_enabled() -> bool:
 
 
 def get_budget_info() -> dict:
-    """Retourne {total, engaged, available}."""
+    """
+    Retourne {total, engaged, available} en EUR.
+    Engagé = positions autonomes + ordres d'achat autonomes EN ATTENTE sur BD
+    (fonds réservés par BD dès le placement, pas à l'exécution).
+    """
     cfg     = portfolio.get_autonomous_config()
     total   = cfg.get("budget_total", 0.0)
-    auto_pos = portfolio.get_autonomous_positions()
-    engaged = sum(p.get("entry_price", 0) * p.get("qty", 0) for p in auto_pos.values())
+    engaged = 0.0
+    for p in portfolio.get_autonomous_positions().values():
+        fx = prices.fx_to_eur(prices._ticker_currency(p.get("ticker", "")))
+        engaged += p.get("entry_price", 0) * p.get("qty", 0) * fx
+    for t, o in portfolio.get_auto_pending_orders().items():
+        fx = prices.fx_to_eur(prices._ticker_currency(t))
+        engaged += o.get("entry", 0) * o.get("qty", 0) * fx
     return {
         "total":     round(total, 2),
         "engaged":   round(engaged, 2),
@@ -202,25 +211,20 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
             )
             return False
 
-        name = ticker.split(".")[0].upper()
-        data = portfolio.load()
-        data.setdefault("positions", {})[name] = {
-            "ticker":      ticker,
-            "qty":         qty,
-            "entry_price": round(entry, 4),
-            "target_high": round(tp, 4),
-            "target_low":  round(sl, 4),
-            "autonomous":  True,
-            "auto_reason": reason,
-        }
-        portfolio.save(data)
+        # PAS de position tant que l'ordre n'est pas EXÉCUTÉ (incident 07/07 :
+        # position créée à la confirmation → confondue avec une exécution).
+        # On enregistre un ordre en attente : il compte dans le budget engagé,
+        # et le sync créera la position (flag autonome) à l'exécution réelle.
+        portfolio.add_auto_pending_order(ticker, qty, round(entry, 4),
+                                         round(sl, 4), round(tp, 4))
 
         send_fn(
-            f"✅ ACHAT AUTONOME CONFIRMÉ\n"
+            f"✅ ORDRE AUTONOME PLACÉ SUR BD\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}{sym}\n"
+            f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}{sym} (limite)\n"
             f"SL : {sl}{sym} | TP : {tp}{sym}\n"
-            f"Coût : {cost:.0f}€ | Budget restant : {available - cost:.0f}€"
+            f"Coût : {cost:.0f}€ | Budget auto restant : {available - cost:.0f}€\n"
+            f"Position créée automatiquement à l'exécution (sync)."
         )
         # Sync silencieux différé : aligne portefeuille + cash si l'ordre
         # est exécuté immédiatement (limite au cours).
@@ -267,9 +271,12 @@ def run_entry_cycle(send_fn) -> None:
         cfg      = portfolio.get_autonomous_config()
         max_pos  = cfg.get("max_positions", MAX_POSITIONS)
         auto_pos = portfolio.get_autonomous_positions()
+        auto_pending = portfolio.get_auto_pending_orders()
 
-        if len(auto_pos) >= max_pos:
-            print(f"[Auto] Max positions atteint ({len(auto_pos)}/{max_pos})")
+        # Les ordres en attente comptent comme des positions (fonds réservés)
+        if len(auto_pos) + len(auto_pending) >= max_pos:
+            print(f"[Auto] Max positions atteint ({len(auto_pos)} positions "
+                  f"+ {len(auto_pending)} ordres en attente / {max_pos})")
             return
 
         budget_info = get_budget_info()
@@ -284,6 +291,7 @@ def run_entry_cycle(send_fn) -> None:
 
         all_pos = portfolio.load().get("positions", {})
         held    = {v.get("ticker", "").upper() for v in all_pos.values()}
+        held   |= set(auto_pending.keys())  # pas de doublon sur un ordre en attente
 
         # ── Chemin 1 : opportunités validées par le briefing / scan ──────────
         pending = portfolio.get_pending_opportunities()
