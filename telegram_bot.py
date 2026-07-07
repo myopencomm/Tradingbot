@@ -5,7 +5,8 @@ Toutes les commandes sont disponibles depuis l'app iPhone/web.
 import requests
 import time
 import threading
-from config import TELEGRAM_TOKEN, CHAT_ID, GMAIL_USER, GMAIL_APP_PASSWORD, DEFAULT_SL_PCT, DEFAULT_TP_PCT
+from config import (TELEGRAM_TOKEN, CHAT_ID, GMAIL_USER, GMAIL_APP_PASSWORD,
+                    DEFAULT_SL_PCT, DEFAULT_TP_PCT, BREAKEVEN_THRESHOLD)
 import portfolio
 import prices
 import analysis
@@ -1233,18 +1234,36 @@ def _tuto_avance(cid):
     send(
         "Fonctions avancees — Trailing stop\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Quand une position atteint +5% au-dessus\n"
-        "du PRU, le bot :\n"
+        "Quand une position atteint le seuil\n"
+        "(+" + f"{BREAKEVEN_THRESHOLD:.0f}" + "% manuel / +3% autonome) :\n"
         "\n"
-        "→ Releve le SL au PRU dans positions.json\n"
-        "→ Envoie une alerte avec la commande\n"
-        "  /ordre vendre ready-to-use pour mettre\n"
-        "  a jour l'Expert BD (SL=PRU, meme TP)\n"
+        "→ Session BD connectee : l'ordre Expert\n"
+        "  est REMPLACE automatiquement sur BD\n"
+        "  (SL remonte au PRU, TP inchange).\n"
+        "  Tu n'as RIEN a faire.\n"
+        "→ Deconnecte : alerte avec la commande\n"
+        "  /ordre vendre prete a l'emploi.\n"
         "\n"
         "P&L garanti >= 0 une fois le SL au PRU.\n"
-        "En mode autonome : breakeven a +3% (plus\n"
-        "serré) et mise a jour tentee auto si\n"
-        "Playwright est connecte.",
+        "Seules les positions protegees par un\n"
+        "Expert actif sont gerees (les positions\n"
+        "historiques sans ordre ne sont pas touchees).",
+        cid,
+    )
+    time.sleep(0.4)
+    send(
+        "Fonctions avancees — Dashboard\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "/dashboard → graphique P&L cumule +\n"
+        "resume (win rate, ROI, €/jour) en image.\n"
+        "\n"
+        "Version web complete (tableau filtrable,\n"
+        "positions live, cash engage par deal) :\n"
+        "  http://localhost:8642 sur la machine du bot\n"
+        "\n"
+        "Acces distant via Tailscale :\n"
+        "  tailscale serve --bg 8642\n"
+        "  (ou DASHBOARD_BIND=0.0.0.0 dans .env)",
         cid,
     )
     time.sleep(0.4)

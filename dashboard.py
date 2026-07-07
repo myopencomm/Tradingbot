@@ -383,11 +383,20 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def start_server():
-    """Démarre le serveur local (127.0.0.1 uniquement) dans un thread daemon."""
+    """
+    Démarre le serveur dans un thread daemon.
+    Bind par défaut : 127.0.0.1 (local uniquement). Pour un accès distant
+    (Tailscale/LAN), DASHBOARD_BIND=0.0.0.0 dans .env — ATTENTION : aucune
+    authentification, à réserver à un réseau de confiance (tailnet).
+    L'alternative recommandée sans changer le bind : `tailscale serve --bg 8642`.
+    """
+    import os
+    bind = os.getenv("DASHBOARD_BIND", "127.0.0.1").strip() or "127.0.0.1"
     try:
-        srv = HTTPServer(("127.0.0.1", PORT), _Handler)
+        srv = HTTPServer((bind, PORT), _Handler)
         threading.Thread(target=srv.serve_forever, daemon=True,
                          name="dashboard").start()
-        print(f"✅ Dashboard local : http://localhost:{PORT}")
+        scope = "local uniquement" if bind == "127.0.0.1" else f"bind {bind} — accessible réseau"
+        print(f"✅ Dashboard : http://localhost:{PORT} ({scope})")
     except OSError as e:
         print(f"⚠️ Dashboard non démarré (port {PORT}) : {e}")

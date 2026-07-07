@@ -220,11 +220,13 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | | |
 |---|---|
 | **Briefing matinal 9h05** | Analyse IA : état des positions + contexte macro + top opportunités |
-| **Surveillance 4×/jour** | Check automatique 9h / 12h / 15h / 17h — alerte si SL ou TP atteint |
-| **Trailing stop automatique** | Quand une position atteint +5% du PRU, le SL est relevé au PRU (P&L ≥ 0 garanti) |
-| **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD |
-| **Validité des ordres** | Par séance, max (fin d'année), ou date précise JJ/MM/AAAA |
-| **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +3% → sortie |
+| **Surveillance 4×/jour + sync horaire** | Checks 9h / 12h / 15h / 17h (alertes SL/TP) + sync BD silencieux chaque heure : détection automatique des exécutions |
+| **Trailing stop automatique** | À +5% (manuel) / +3% (autonome), l'ordre Expert est **remplacé sur BD** avec le SL au PRU (P&L ≥ 0 garanti) |
+| **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
+| **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
+| **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +3% → sortie détectée → réinvestissement |
+| **Mode gain réduit** | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) à rentabilité nette de frais contrôlée |
+| **Dashboard visuel** | http://localhost:8642 (accès Tailscale possible) + `/dashboard` Telegram : P&L cumulé, cash engagé, ROI, trades filtrables |
 | **Instructions d'ordres** | Format Bourse Direct step-by-step, prêt à saisir sur mobile ou web |
 | **Import screenshot** | Envoyez vos captures d'écran — le bot lit et importe automatiquement |
 | **Import CSV** | Envoyez l'export Bourse Direct — importe avec SL/TP par défaut |
@@ -297,6 +299,7 @@ TradingBot/
 | `/status` | Portefeuille complet avec P&L temps réel, alertes SL/TP |
 | `/cash [montant]` | Voir ou mettre à jour le cash disponible |
 | `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor |
+| `/dashboard` | Graphique P&L cumulé + résumé visuel (image) — voir section [Dashboard](#dashboard-visuel) |
 
 ### Positions
 
@@ -340,7 +343,11 @@ TradingBot/
 | `/mode` | Afficher le mode actuel (Classic ou Playwright) et l'état de la session |
 | `/connect` | Activer le mode Playwright — connexion à Bourse Direct avec relay TOTP |
 | `/disconnect` | Fermer la session Playwright et revenir en mode Classic |
-| `/sync` | Synchroniser le portefeuille depuis Bourse Direct |
+| `/sync` | Synchroniser le portefeuille depuis Bourse Direct — détecte et clôture automatiquement les ventes exécutées (TP/SL touchés), ajoute les positions issues d'achats exécutés |
+| `/testordre TICKER` | Diagnostic : teste 5 variantes de payload d'ordre contre l'API BD (validation seule, rien n'est envoyé au marché) |
+| `/capture` | Diagnostic : trace dans le log toutes les requêtes API que le site BD envoie (à utiliser en passant un ordre à la main dans la fenêtre Chromium du bot) |
+
+> **Sync automatique** : en plus du `/sync` manuel, un sync silencieux tourne **toutes les heures** (à :35, 9h-22h les jours de marché) — il ne vous notifie que si une exécution (achat ou vente) est détectée. Un sync est aussi déclenché 8 s après chaque passage d'ordre pour capter les exécutions immédiates.
 
 ### Ordres réels (Mode Playwright uniquement)
 
@@ -356,9 +363,11 @@ TradingBot/
 | `/non` | Annuler l'ordre affiché |
 | `/annuler_bd TICKER` | Annuler un ordre en cours sur Bourse Direct |
 
-> **Validité (paramètre optionnel en dernier) :** `seance` (expire fin de séance) | `max` (défaut — jusqu'à fin d'année sur Euronext) | `JJ/MM/AAAA` (date précise)
+> **Validité (paramètre optionnel en dernier) :** `seance` (expire fin de séance) | `max` (défaut — fin d'année sur Euronext, révocation fin de mois sur les marchés US) | `JJ/MM/AAAA` (date précise)
 >
-> **Format des tickers :** utilisez le format Yahoo Finance — `TTE.PA`, `ASML.AS`, `AAPL`, `BP.L`, `SAP.DE`. La conversion vers le format interne Bourse Direct est automatique.
+> **Format des tickers :** utilisez le format Yahoo Finance — `TTE.PA`, `ASML.AS`, `AAPL`, `BP.L`, `SAP.DE`. La conversion vers le format interne Bourse Direct est automatique, y compris la résolution du code marché des titres US (NASDAQ=XNGS, NYSE=XNYS, détectée dynamiquement).
+>
+> **Pas de cotation :** si BD rejette un prix hors pas de cotation, le bot ré-arrondit automatiquement (SL vers le haut, TP vers le bas, règle conservatrice) et retente.
 >
 > **Flow :** `/ordre ...` → le bot affiche recap + montant prévisionnel → `/oui` pour envoyer, `/non` pour annuler (timeout 120s).
 
@@ -372,7 +381,13 @@ TradingBot/
 | `/auto pause` | Suspendre les nouvelles entrées sans changer le budget |
 | `/auto status` | État complet + P&L en temps réel des positions autonomes |
 
-> Le bot opère entièrement seul sur ce budget : il scanne à chaque check planifié, entre en position via un ordre Expert (SL+TP garantis sur BD), relève le SL au PRU quand la position atteint **+3%**, et vous notifie pour chaque action. Maximum 2 positions simultanées. Playwright doit être connecté pour les nouvelles entrées — les sorties sont gérées automatiquement par les ordres Expert déjà posés sur BD.
+> Le bot opère entièrement seul sur ce budget : il exploite les opportunités validées par le briefing/`/scan` (cycle d'entrée **toutes les heures** + à chaque check), entre en position via un ordre Expert (SL+TP garantis sur BD), et vous notifie pour chaque action. Maximum 2 positions simultanées ; les **ordres en attente comptent dans le budget** (fonds réservés). La position n'est créée qu'à l'**exécution réelle** de l'ordre, détectée par le sync.
+>
+> **Horaires par marché** : un titre US n'est acheté qu'entre 15h35 et 21h55 Paris (Euronext : 9h05-17h25) — les opportunités US validées le matin attendent l'ouverture de Wall Street.
+>
+> **Mode gain réduit** : quand aucune opportunité à +10% ne passe la validation, le bot re-teste les meilleurs candidats en trade court (TP +3 à +8% calé sous la première résistance, SL ≤ TP en %, horizon 1-5 jours) — la rentabilité nette de frais reste contrôlée. Objectif : gagner un peu chaque jour plutôt que rien.
+>
+> **Trailing stop réel** : dès **+3%** (autonome) ou **+BREAKEVEN_THRESHOLD%** (manuel), le bot **remplace l'ordre Expert sur BD** avec le SL remonté au PRU — automatique, TP inchangé, uniquement pour les positions protégées par un ordre Expert actif (les positions historiques sans ordre ne sont jamais touchées).
 
 ### Import & Aide
 
@@ -547,6 +562,34 @@ GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 
 ---
 
+## Dashboard visuel
+
+Un tableau de bord local est servi en permanence par le bot : **http://localhost:8642**
+
+- **Cartes de synthèse** : P&L réalisé / latent / total, win rate, profit factor, cash, performance en €/jour depuis le premier trade, ROI sur cash engagé
+- **Courbe du P&L cumulé** sur axe temporel réel — la taille de chaque point est proportionnelle au cash engagé sur le deal
+- **P&L par trade** : une barre par trade avec nom, date, cash engagé et résultat annoté
+- **Tableau des trades filtrable** (texte, WIN/LOSS) avec colonnes Investi et ROI
+- **Positions ouvertes** : cours live, variation, P&L latent, SL/TP, badge `auto` pour les positions du mode autonome
+
+La page se régénère à chaque visite — les données sont toujours fraîches. Sur Telegram, `/dashboard` envoie la même vue en image avec le résumé chiffré.
+
+### Accès à distance (Tailscale)
+
+Le dashboard n'a **pas d'authentification** — ne l'exposez jamais à Internet. Deux options sûres :
+
+**Option recommandée — `tailscale serve`** (tailnet uniquement, HTTPS automatique, aucun changement de config) :
+
+```bash
+tailscale serve --bg 8642
+# → https://votre-mac.votre-tailnet.ts.net accessible depuis vos appareils Tailscale
+tailscale serve --https=443 off   # pour désactiver
+```
+
+**Alternative — bind réseau** (tailnet + réseau local) : dans `.env`, ajoutez `DASHBOARD_BIND=0.0.0.0` puis `./bot.sh restart`. Le dashboard devient accessible via l'IP Tailscale du Mac (`http://100.x.y.z:8642`). À réserver à un réseau de confiance.
+
+---
+
 ## Personnaliser les conseils IA
 
 Par défaut l'IA ne connaît que votre portefeuille temps réel et le contexte macro du jour. Pour des conseils adaptés à votre situation réelle :
@@ -611,7 +654,7 @@ Les prix proviennent de Yahoo Finance via `yfinance` (données différées de 15
 La session Playwright ne survit pas à un redémarrage du bot — `/connect` est requis à chaque démarrage. La durée d'une session BD varie selon les paramètres de sécurité de votre compte.
 
 **Mode Autonome**
-Le bot ne peut entrer en position que si Playwright est connecté et le marché ouvert. Si la session expire, les positions existantes restent protégées par leurs ordres Expert sur BD, mais aucune nouvelle entrée n'est possible. Le bot détecte les sorties SL/TP via la surveillance des prix (range 4h), pas via des webhooks BD — il peut donc notifier avec jusqu'à 3h de décalage.
+Le bot ne peut entrer en position que si Playwright est connecté et le marché du titre ouvert. Si la session expire, les positions existantes restent protégées par leurs ordres Expert sur BD, mais aucune nouvelle entrée n'est possible. Les exécutions (achats comme ventes SL/TP) sont détectées par le **sync horaire** qui lit les ordres exécutés sur BD — clôture enregistrée au prix réel d'exécution, jamais estimée sans preuve.
 
 **Stabilité**
 Pour un usage continu, activez `./bot.sh autostart` : démarrage au boot + relance automatique après crash.
@@ -629,9 +672,17 @@ Pour un usage continu, activez `./bot.sh autostart` : démarrage au boot + relan
 ```env
 DEFAULT_SL_PCT=7          # stop-loss en % sous le PRU
 DEFAULT_TP_PCT=10         # take-profit minimum en % au-dessus du PRU
-BREAKEVEN_THRESHOLD=5     # trailing stop manuel : % au-dessus du PRU
+BREAKEVEN_THRESHOLD=5     # trailing stop positions manuelles : % au-dessus du PRU
 POSITION_BUDGET_PCT=50    # % du cash investi par nouvelle position
 POSITION_BUDGET_MAX=800   # plafond en € par position (à adapter à votre capital)
+
+BROKERAGE_FEE=1.98        # frais de courtage BD par ordre (aller-retour = 2×)
+MIN_NET_GAIN_FEE_RATIO=5  # gain brut au TP requis : au moins N× les frais A/R
+
+FALLBACK_TP_MIN_PCT=3     # mode gain réduit : TP minimum des trades courts
+FALLBACK_TP_MAX_PCT=8     # mode gain réduit : TP maximum des trades courts
+
+DASHBOARD_BIND=127.0.0.1  # 0.0.0.0 pour accès Tailscale/LAN (voir section Dashboard)
 ```
 
 ---
@@ -666,9 +717,9 @@ Projet open-source, conçu pour être étendu. Voir [CONTRIBUTING.md](CONTRIBUTI
 
 **Idées de contributions :**
 - Support d'autres courtiers français (Boursorama, Fortuneo, Trade Republic...)
-- Dashboard web léger (Flask)
 - Backtest simple sur données historiques Yahoo Finance
 - Suite de tests automatisés (pytest)
+- Authentification sur le dashboard web (pour exposition au-delà du tailnet)
 
 ```bash
 git checkout -b feature/ma-feature
