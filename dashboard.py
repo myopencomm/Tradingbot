@@ -37,26 +37,39 @@ def build_data() -> dict:
     cum, total = [], 0.0
     for t in trades:
         total += t.get("pnl", 0)
+        # Cash engagé sur CE deal (qté × entrée), converti en EUR au taux
+        # actuel pour les titres en devise (approximation : taux historique
+        # non stocké).
+        ticker = t.get("ticker", "")
+        fx = prices.fx_to_eur("USD") if "." not in ticker else 1.0
+        invested = round((t.get("entry_price") or 0) * t.get("qty", 0) * fx, 2)
+        roi = round(t.get("pnl", 0) / invested * 100, 2) if invested else 0
         cum.append({
             "date":     t.get("date", ""),
             "date_iso": _date_iso(t.get("date", "")),
             "name":   t.get("name", "?"),
-            "ticker": t.get("ticker", ""),
+            "ticker": ticker,
             "qty":    t.get("qty", 0),
             "entry":  t.get("entry_price"),
             "exit":   t.get("exit_price"),
             "pnl":    round(t.get("pnl", 0), 2),
             "cum":    round(total, 2),
+            "invested": invested,
+            "roi":      roi,
             "result": t.get("result", ""),
         })
 
     # Durée de la performance : du premier trade à aujourd'hui
     span_days, since, per_day = 0, "", 0.0
+    avg_invested, avg_roi = 0.0, 0.0
     if cum:
         first = _dt.fromisoformat(cum[0]["date_iso"])
         span_days = max(1, (_dt.now() - first).days)
         since = first.strftime("%d/%m/%Y")
         per_day = round(total / span_days, 2)
+        total_invested = sum(t["invested"] for t in cum)
+        avg_invested = round(total_invested / len(cum), 0)
+        avg_roi = round(total / total_invested * 100, 2) if total_invested else 0
 
     s = stats.get_stats()
 
@@ -94,6 +107,8 @@ def build_data() -> dict:
         "span_days": span_days,
         "since":     since,
         "per_day":   per_day,
+        "avg_invested": avg_invested,
+        "avg_roi":      avg_roi,
         "generated": __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M"),
     }
 
@@ -135,9 +150,11 @@ _HTML = """<!DOCTYPE html>
   <div class="card"><div class="v">{pf}</div><div class="l">Profit factor</div></div>
   <div class="card"><div class="v">{cash:.2f}€</div><div class="l">Cash disponible</div></div>
   <div class="card"><div class="v {pnl_cls}">{per_day:+.2f}€/j</div><div class="l">depuis le {since} ({span_days} jours)</div></div>
+  <div class="card"><div class="v {roi_cls}">{avg_roi:+.2f}%</div><div class="l">ROI / cash engagé (moy. {avg_invested:.0f}€/deal)</div></div>
 </div>
 
-<h2>P&L cumulé dans le temps</h2><canvas id="cum" height="90"></canvas>
+<h2>P&L cumulé dans le temps <span class="muted">(fond bleu : cash engagé par deal, axe droit)</span></h2>
+<canvas id="cum" height="90"></canvas>
 <h2>P&L par trade</h2><canvas id="bars" height="90"></canvas>
 
 <h2>Trades clôturés</h2>
@@ -148,7 +165,7 @@ _HTML = """<!DOCTYPE html>
   <button id="fLoss" onclick="setF('loss')">LOSS</button>
 </div>
 <table id="tt"><thead><tr><th>Nom</th><th>Ticker</th><th>Date</th><th>Qté</th>
-<th>Entrée</th><th>Sortie</th><th>P&L</th><th>Cumul</th></tr></thead><tbody></tbody></table>
+<th>Entrée</th><th>Sortie</th><th>Investi</th><th>P&L</th><th>ROI</th><th>Cumul</th></tr></thead><tbody></tbody></table>
 
 <h2>Positions ouvertes</h2>
 <table><thead><tr><th>Nom</th><th>Qté</th><th>PRU</th><th>Cours</th><th>Var</th>
@@ -172,8 +189,9 @@ function renderT() {{
     if (q && !(t.name + t.ticker + t.date).toLowerCase().includes(q)) continue;
     const c = t.pnl >= 0 ? 'green' : 'red';
     tb.innerHTML += `<tr><td>${{t.name}}</td><td>${{t.ticker}}</td><td>${{t.date}}</td>
-      <td>${{t.qty}}</td><td>${{t.entry}}</td><td>${{t.exit}}</td>
-      <td class="${{c}}">${{t.pnl >= 0 ? '+' : ''}}${{t.pnl}}€</td><td>${{t.cum}}€</td></tr>`;
+      <td>${{t.qty}}</td><td>${{t.entry}}</td><td>${{t.exit}}</td><td>${{t.invested}}€</td>
+      <td class="${{c}}">${{t.pnl >= 0 ? '+' : ''}}${{t.pnl}}€</td>
+      <td class="${{c}}">${{t.roi >= 0 ? '+' : ''}}${{t.roi}}%</td><td>${{t.cum}}€</td></tr>`;
   }}
 }}
 renderT();
@@ -187,16 +205,29 @@ const timeScale = {{
 }};
 const tt = {{ callbacks: {{ label: c => {{
   const t = D.trades[c.dataIndex];
-  return `${{t.name}} : ${{t.pnl >= 0 ? '+' : ''}}${{t.pnl}}€ (cumul ${{t.cum}}€)`;
+  return `${{t.name}} : ${{t.pnl >= 0 ? '+' : ''}}${{t.pnl}}€ sur ${{t.invested}}€ engagés `
+       + `(ROI ${{t.roi >= 0 ? '+' : ''}}${{t.roi}}%) — cumul ${{t.cum}}€`;
 }} }} }};
 new Chart(document.getElementById('cum'), {{
-  type: 'line',
-  data: {{ datasets: [{{ label: 'P&L cumulé (€)',
-    data: D.trades.map(t => ({{ x: t.date_iso, y: t.cum }})),
-    borderColor: '#4cd97b', backgroundColor: 'rgba(76,217,123,.12)',
-    fill: true, tension: .25, pointRadius: 4 }}] }},
-  options: {{ scales: {{ x: timeScale }},
-             plugins: {{ legend: {{ display: false }}, tooltip: tt }} }}
+  data: {{ datasets: [
+    {{ type: 'line', label: 'P&L cumulé (€)', order: 0,
+       data: D.trades.map(t => ({{ x: t.date_iso, y: t.cum }})),
+       borderColor: '#4cd97b', backgroundColor: 'rgba(76,217,123,.12)',
+       fill: true, tension: .25, pointRadius: 4, yAxisID: 'y' }},
+    {{ type: 'bar', label: 'Cash engagé (€)', order: 1,
+       data: D.trades.map(t => ({{ x: t.date_iso, y: t.invested }})),
+       backgroundColor: 'rgba(96,140,220,.28)', barThickness: 9, yAxisID: 'y2' }}
+  ] }},
+  options: {{
+    scales: {{
+      x: timeScale,
+      y:  {{ position: 'left' }},
+      y2: {{ position: 'right', grid: {{ display: false }},
+            ticks: {{ color: '#7a9bd4' }}, beginAtZero: true,
+            title: {{ display: true, text: '€ engagés', color: '#7a9bd4' }} }}
+    }},
+    plugins: {{ legend: {{ display: false }}, tooltip: tt }}
+  }}
 }});
 new Chart(document.getElementById('bars'), {{
   type: 'bar',
@@ -242,6 +273,7 @@ def render_html() -> str:
         pf=s["profit_factor"] if s["profit_factor"] is not None else "—",
         cash=d["cash"],
         per_day=d["per_day"], since=d["since"] or "—", span_days=d["span_days"],
+        avg_roi=d["avg_roi"], roi_cls=cls(d["avg_roi"]), avg_invested=d["avg_invested"],
         open_rows="".join(rows),
         data_json=json.dumps(d, ensure_ascii=False),
     )
@@ -265,15 +297,27 @@ def render_png() -> bytes | None:
     cum   = [t["cum"] for t in trades]
     pnl   = [t["pnl"] for t in trades]
 
+    invested = [t["invested"] for t in trades]
+
     plt.style.use("dark_background")
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
                                    gridspec_kw={"height_ratios": [2, 1]})
-    ax1.plot(dates, cum, color="#4cd97b", linewidth=2, marker="o", markersize=5)
-    ax1.fill_between(dates, cum, alpha=0.12, color="#4cd97b")
+    # Fond : cash engagé par deal (axe droit, discret)
+    ax1b = ax1.twinx()
+    ax1b.bar(dates, invested, width=1.6, color="#608cdc", alpha=0.25, zorder=1)
+    ax1b.set_ylabel("€ engagés / deal", color="#7a9bd4", fontsize=9)
+    ax1b.tick_params(axis="y", labelcolor="#7a9bd4", labelsize=8)
+    ax1b.set_ylim(bottom=0)
+    ax1.set_zorder(ax1b.get_zorder() + 1)
+    ax1.patch.set_visible(False)
+
+    ax1.plot(dates, cum, color="#4cd97b", linewidth=2, marker="o", markersize=5, zorder=3)
+    ax1.fill_between(dates, cum, alpha=0.12, color="#4cd97b", zorder=2)
     ax1.axhline(0, color="#556", linewidth=0.8)
     ax1.set_title(f"P&L cumulé : {cum[-1]:+.2f}€ en {d['span_days']} jours "
-                  f"(≈{d['per_day']:+.2f}€/j) — {len(trades)} trades, "
-                  f"win rate {d['stats']['win_rate']}%", fontsize=11)
+                  f"(≈{d['per_day']:+.2f}€/j) — ROI {d['avg_roi']:+.2f}% "
+                  f"sur ~{d['avg_invested']:.0f}€/deal, win rate {d['stats']['win_rate']}%",
+                  fontsize=10)
     ax1.set_ylabel("€")
     # Annote chaque point avec le nom du trade
     for x, y, t in zip(dates, cum, trades):
