@@ -166,7 +166,22 @@ def check_positions(send_fn) -> None:
             continue
         elif a["type"] == "BREAKEVEN":
             entry = cfg["entry_price"]
-            # Met à jour target_low au PRU dans positions.json immédiatement
+            # Session BD connectée → le remplacement de l'ordre Expert sur BD
+            # est AUTOMATIQUE (trailing_stop_cycle). On le déclenche tout de
+            # suite au lieu de donner un mode d'emploi manuel. Le SL local et
+            # la notification seront posés par le trailing lui-même.
+            import bot_mode
+            import playwright_session
+            if bot_mode.is_playwright() and playwright_session.is_connected():
+                import threading
+                import autonomous_engine
+                threading.Thread(
+                    target=autonomous_engine.trailing_stop_cycle,
+                    args=(send_fn,), daemon=True,
+                ).start()
+                print(f"[monitor] breakeven {a['name']} → trailing automatique déclenché")
+                continue
+            # Mode déconnecté : mise à jour locale + instructions manuelles
             portfolio.update_sl(a["name"], entry)
             portfolio.mark_breakeven(a["name"])
             msg = (
