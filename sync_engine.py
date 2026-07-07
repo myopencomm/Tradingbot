@@ -173,14 +173,25 @@ def sync(page, send_fn, silent: bool = False) -> bool:
              or _match_local(o.get("bd_ticker"), o.get("name")) == local_key),
             None,
         )
-        exit_price, price_src = None, None
-        if exec_order:
-            exit_price = (exec_order.get("exec_price")
-                          or exec_order.get("profit") or exec_order.get("seuil"))
-            price_src = "ordre exécuté BD"
-        if not exit_price:
-            exit_price = cfg.get("target_high")
-            price_src = "TP posé (estimation — ordre exécuté non lu)"
+        if not exec_order:
+            # AUCUNE PREUVE de vente (pas d'ordre Vente exécuté sur BD) →
+            # clôture REFUSÉE. Cas typique : position achetée il y a quelques
+            # secondes, pas encore affichée dans l'onglet positions BD.
+            # Incident du 07/07 : AF.PA acheté puis « vendu » fictivement au TP
+            # 8s plus tard par le sync post-ordre, budget libéré à tort →
+            # cascade d'achats. On ne clôture QUE sur preuve d'exécution.
+            lines.append(
+                f"⚠️ {local_key} absent des positions BD mais aucun ordre de vente "
+                f"exécuté trouvé — clôture refusée (affichage BD en retard ?).\n"
+                f"   Si la vente est réelle : /vendu {local_key} PRIX"
+            )
+            continue
+
+        exit_price = (exec_order.get("exec_price")
+                      or exec_order.get("profit") or exec_order.get("seuil")
+                      or cfg.get("target_high"))
+        price_src = ("ordre exécuté BD" if exec_order.get("exec_price")
+                     else "niveau de l'ordre exécuté BD")
         if not exit_price:
             lines.append(
                 f"⚠️ {local_key} absent de BD, prix de sortie introuvable.\n"
