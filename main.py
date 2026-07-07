@@ -137,6 +137,9 @@ if __name__ == "__main__":
     print(f"  Positions: {list(positions.keys()) or 'aucune'}")
     print("=" * 40)
 
+    import dashboard
+    dashboard.start_server()
+
     telegram_bot.start_polling()
 
     nb = len(positions)

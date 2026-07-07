@@ -144,6 +144,7 @@ BOT_COMMANDS = [
     ("status",     "Voir mon portefeuille"),
     ("cash",       "Cash dispo  |  /cash 1234 le definir"),
     ("stats",      "Bilan : win rate, P&L, profit factor"),
+    ("dashboard",  "Graphique P&L + resume visuel"),
     ("morning",    "Briefing du jour (macro + positions + opps)"),
     ("scan",       "Meilleures opportunites avec mon cash"),
     ("research",   "Analyser une action — /research TICKER"),
@@ -1443,6 +1444,41 @@ def _check_playwright_ready(cid) -> bool:
     return True
 
 
+def send_photo(image_bytes: bytes, caption: str = "", chat_id: str = None) -> bool:
+    """Envoie une image (PNG) sur Telegram."""
+    if not TELEGRAM_TOKEN:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
+            data={"chat_id": chat_id or CHAT_ID, "caption": caption[:1024]},
+            files={"photo": ("dashboard.png", image_bytes, "image/png")},
+            timeout=30,
+        )
+        return r.status_code == 200
+    except Exception as e:
+        print(f"Telegram send_photo error: {e}")
+        return False
+
+
+def cmd_dashboard(args, cid):
+    """/dashboard — graphique P&L + résumé, et lien vers la version locale."""
+    def _do():
+        try:
+            import dashboard
+            png = dashboard.render_png()
+            txt = dashboard.summary_text()
+            if png:
+                if not send_photo(png, caption=txt, chat_id=cid):
+                    send(txt, cid)
+            else:
+                send("Aucun trade clôturé pour l'instant.\n\n" + txt, cid)
+        except Exception as e:
+            send(f"Erreur dashboard : {e}", cid)
+
+    _run_long(cid, _do)
+
+
 def cmd_capture(args, cid):
     """/capture — trace toutes les requêtes POST vers l'API trading BD dans le log.
     Utilisation : /capture, puis passer un ordre MANUELLEMENT dans la fenêtre
@@ -1976,6 +2012,7 @@ COMMANDS = {
     "/sync": cmd_sync,
     "/testordre": cmd_testordre,
     "/capture": cmd_capture,
+    "/dashboard": cmd_dashboard,
     "/ordre": cmd_ordre,
     "/oui": cmd_oui,
     "/non": cmd_non,
