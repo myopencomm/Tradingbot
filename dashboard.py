@@ -153,7 +153,7 @@ _HTML = """<!DOCTYPE html>
   <div class="card"><div class="v {roi_cls}">{avg_roi:+.2f}%</div><div class="l">ROI / cash engagé (moy. {avg_invested:.0f}€/deal)</div></div>
 </div>
 
-<h2>P&L cumulé dans le temps <span class="muted">(fond bleu : cash engagé par deal, axe droit)</span></h2>
+<h2>P&L cumulé dans le temps <span class="muted">(taille du point ◉ = cash engagé sur le deal)</span></h2>
 <canvas id="cum" height="90"></canvas>
 <h2>P&L par trade</h2><canvas id="bars" height="90"></canvas>
 
@@ -208,26 +208,22 @@ const tt = {{ callbacks: {{ label: c => {{
   return `${{t.name}} : ${{t.pnl >= 0 ? '+' : ''}}${{t.pnl}}€ sur ${{t.invested}}€ engagés `
        + `(ROI ${{t.roi >= 0 ? '+' : ''}}${{t.roi}}%) — cumul ${{t.cum}}€`;
 }} }} }};
+// Taille du point ∝ cash engagé sur le deal (min 4px, max 14px)
+const invs = D.trades.map(t => t.invested);
+const iMin = Math.min(...invs), iMax = Math.max(...invs);
+const radius = i => 4 + (iMax > iMin ? 10 * (invs[i] - iMin) / (iMax - iMin) : 4);
 new Chart(document.getElementById('cum'), {{
-  data: {{ datasets: [
-    {{ type: 'line', label: 'P&L cumulé (€)', order: 0,
-       data: D.trades.map(t => ({{ x: t.date_iso, y: t.cum }})),
-       borderColor: '#4cd97b', backgroundColor: 'rgba(76,217,123,.12)',
-       fill: true, tension: .25, pointRadius: 4, yAxisID: 'y' }},
-    {{ type: 'bar', label: 'Cash engagé (€)', order: 1,
-       data: D.trades.map(t => ({{ x: t.date_iso, y: t.invested }})),
-       backgroundColor: 'rgba(96,140,220,.28)', barThickness: 9, yAxisID: 'y2' }}
-  ] }},
-  options: {{
-    scales: {{
-      x: timeScale,
-      y:  {{ position: 'left' }},
-      y2: {{ position: 'right', grid: {{ display: false }},
-            ticks: {{ color: '#7a9bd4' }}, beginAtZero: true,
-            title: {{ display: true, text: '€ engagés', color: '#7a9bd4' }} }}
-    }},
-    plugins: {{ legend: {{ display: false }}, tooltip: tt }}
-  }}
+  type: 'line',
+  data: {{ datasets: [{{ label: 'P&L cumulé (€)',
+    data: D.trades.map(t => ({{ x: t.date_iso, y: t.cum }})),
+    borderColor: '#4cd97b', backgroundColor: 'rgba(76,217,123,.12)',
+    fill: true, tension: .25,
+    pointRadius: c => radius(c.dataIndex),
+    pointHoverRadius: c => radius(c.dataIndex) + 3,
+    pointBackgroundColor: '#4cd97b',
+    pointBorderColor: '#7a9bd4', pointBorderWidth: 2 }}] }},
+  options: {{ scales: {{ x: timeScale }},
+             plugins: {{ legend: {{ display: false }}, tooltip: tt }} }}
 }});
 new Chart(document.getElementById('bars'), {{
   type: 'bar',
@@ -302,17 +298,17 @@ def render_png() -> bytes | None:
     plt.style.use("dark_background")
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
                                    gridspec_kw={"height_ratios": [2, 1]})
-    # Fond : cash engagé par deal (axe droit, discret)
-    ax1b = ax1.twinx()
-    ax1b.bar(dates, invested, width=1.6, color="#608cdc", alpha=0.25, zorder=1)
-    ax1b.set_ylabel("€ engagés / deal", color="#7a9bd4", fontsize=9)
-    ax1b.tick_params(axis="y", labelcolor="#7a9bd4", labelsize=8)
-    ax1b.set_ylim(bottom=0)
-    ax1.set_zorder(ax1b.get_zorder() + 1)
-    ax1.patch.set_visible(False)
-
-    ax1.plot(dates, cum, color="#4cd97b", linewidth=2, marker="o", markersize=5, zorder=3)
-    ax1.fill_between(dates, cum, alpha=0.12, color="#4cd97b", zorder=2)
+    ax1.plot(dates, cum, color="#4cd97b", linewidth=2, zorder=2)
+    ax1.fill_between(dates, cum, alpha=0.12, color="#4cd97b", zorder=1)
+    # Taille du point ∝ cash engagé sur le deal + montant annoté dessous
+    i_min, i_max = min(invested), max(invested)
+    sizes = [40 + (200 * (v - i_min) / (i_max - i_min) if i_max > i_min else 40)
+             for v in invested]
+    ax1.scatter(dates, cum, s=sizes, color="#4cd97b",
+                edgecolor="#7a9bd4", linewidth=1.5, zorder=3)
+    for x, y, v in zip(dates, cum, invested):
+        ax1.annotate(f"{v:.0f}€", (x, y), textcoords="offset points",
+                     xytext=(0, -16), fontsize=6.5, ha="center", color="#7a9bd4")
     ax1.axhline(0, color="#556", linewidth=0.8)
     ax1.set_title(f"P&L cumulé : {cum[-1]:+.2f}€ en {d['span_days']} jours "
                   f"(≈{d['per_day']:+.2f}€/j) — ROI {d['avg_roi']:+.2f}% "
