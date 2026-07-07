@@ -22,14 +22,24 @@ PORT = 8642
 
 # ─── Données ─────────────────────────────────────────────────────────────────
 
+def _date_iso(d: str) -> str:
+    """Normalise les dates de trades : '2026-05' (mois seul) → '2026-05-01'."""
+    d = (d or "").strip()
+    if len(d) == 7:   # YYYY-MM
+        return d + "-01"
+    return d or "1970-01-01"
+
+
 def build_data() -> dict:
     """Assemble trades clôturés, P&L cumulé, stats et positions ouvertes."""
+    from datetime import datetime as _dt
     trades = stats.load_history().get("closed_trades", [])
     cum, total = [], 0.0
     for t in trades:
         total += t.get("pnl", 0)
         cum.append({
-            "date":   t.get("date", ""),
+            "date":     t.get("date", ""),
+            "date_iso": _date_iso(t.get("date", "")),
             "name":   t.get("name", "?"),
             "ticker": t.get("ticker", ""),
             "qty":    t.get("qty", 0),
@@ -39,6 +49,14 @@ def build_data() -> dict:
             "cum":    round(total, 2),
             "result": t.get("result", ""),
         })
+
+    # Durée de la performance : du premier trade à aujourd'hui
+    span_days, since, per_day = 0, "", 0.0
+    if cum:
+        first = _dt.fromisoformat(cum[0]["date_iso"])
+        span_days = max(1, (_dt.now() - first).days)
+        since = first.strftime("%d/%m/%Y")
+        per_day = round(total / span_days, 2)
 
     s = stats.get_stats()
 
@@ -73,6 +91,9 @@ def build_data() -> dict:
         "stats":     s,
         "open":      open_pos,
         "cash":      data.get("cash_available", 0),
+        "span_days": span_days,
+        "since":     since,
+        "per_day":   per_day,
         "generated": __import__("datetime").datetime.now().strftime("%d/%m/%Y %H:%M"),
     }
 
@@ -84,6 +105,7 @@ _HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TradingBot — Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
 <style>
   :root {{ color-scheme: dark; }}
   body {{ font-family: -apple-system, sans-serif; background:#12151c; color:#e8e8e8;
@@ -112,9 +134,10 @@ _HTML = """<!DOCTYPE html>
   <div class="card"><div class="v">{win_rate}%</div><div class="l">Win rate ({wins}W / {losses}L)</div></div>
   <div class="card"><div class="v">{pf}</div><div class="l">Profit factor</div></div>
   <div class="card"><div class="v">{cash:.2f}€</div><div class="l">Cash disponible</div></div>
+  <div class="card"><div class="v {pnl_cls}">{per_day:+.2f}€/j</div><div class="l">depuis le {since} ({span_days} jours)</div></div>
 </div>
 
-<h2>P&L cumulé</h2><canvas id="cum" height="90"></canvas>
+<h2>P&L cumulé dans le temps</h2><canvas id="cum" height="90"></canvas>
 <h2>P&L par trade</h2><canvas id="bars" height="90"></canvas>
 
 <h2>Trades clôturés</h2>
@@ -154,18 +177,34 @@ function renderT() {{
   }}
 }}
 renderT();
-const labels = D.trades.map(t => t.date + ' ' + t.name);
+// Axe X = temps réel : chaque trade est placé à sa vraie date, l'espacement
+// reflète la durée écoulée (les mois creux se voient).
+const timeScale = {{
+  type: 'time',
+  time: {{ unit: 'day', tooltipFormat: 'dd/MM/yyyy',
+          displayFormats: {{ day: 'dd/MM', week: 'dd/MM', month: 'MM/yyyy' }} }},
+  ticks: {{ maxRotation: 0 }}
+}};
+const tt = {{ callbacks: {{ label: c => {{
+  const t = D.trades[c.dataIndex];
+  return `${{t.name}} : ${{t.pnl >= 0 ? '+' : ''}}${{t.pnl}}€ (cumul ${{t.cum}}€)`;
+}} }} }};
 new Chart(document.getElementById('cum'), {{
   type: 'line',
-  data: {{ labels, datasets: [{{ label: 'P&L cumulé (€)', data: D.trades.map(t => t.cum),
-    borderColor: '#4cd97b', backgroundColor: 'rgba(76,217,123,.12)', fill: true, tension: .25 }}] }},
-  options: {{ plugins: {{ legend: {{ display: false }} }} }}
+  data: {{ datasets: [{{ label: 'P&L cumulé (€)',
+    data: D.trades.map(t => ({{ x: t.date_iso, y: t.cum }})),
+    borderColor: '#4cd97b', backgroundColor: 'rgba(76,217,123,.12)',
+    fill: true, tension: .25, pointRadius: 4 }}] }},
+  options: {{ scales: {{ x: timeScale }},
+             plugins: {{ legend: {{ display: false }}, tooltip: tt }} }}
 }});
 new Chart(document.getElementById('bars'), {{
   type: 'bar',
-  data: {{ labels, datasets: [{{ data: D.trades.map(t => t.pnl),
-    backgroundColor: D.trades.map(t => t.pnl >= 0 ? '#4cd97b' : '#ff6b6b') }}] }},
-  options: {{ plugins: {{ legend: {{ display: false }} }} }}
+  data: {{ datasets: [{{ data: D.trades.map(t => ({{ x: t.date_iso, y: t.pnl }})),
+    backgroundColor: D.trades.map(t => t.pnl >= 0 ? '#4cd97b' : '#ff6b6b'),
+    barThickness: 8 }}] }},
+  options: {{ scales: {{ x: timeScale }},
+             plugins: {{ legend: {{ display: false }}, tooltip: tt }} }}
 }});
 </script></body></html>"""
 
@@ -202,6 +241,7 @@ def render_html() -> str:
         wins=s["nb_wins"], losses=s["nb_losses"],
         pf=s["profit_factor"] if s["profit_factor"] is not None else "—",
         cash=d["cash"],
+        per_day=d["per_day"], since=d["since"] or "—", span_days=d["span_days"],
         open_rows="".join(rows),
         data_json=json.dumps(d, ensure_ascii=False),
     )
@@ -218,26 +258,34 @@ def render_png() -> bytes | None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    from datetime import datetime as _dt
 
-    labels = [f"{t['name']}\n{t['date'][5:]}" for t in trades]
-    cum    = [t["cum"] for t in trades]
-    pnl    = [t["pnl"] for t in trades]
+    dates = [_dt.fromisoformat(t["date_iso"]) for t in trades]
+    cum   = [t["cum"] for t in trades]
+    pnl   = [t["pnl"] for t in trades]
 
     plt.style.use("dark_background")
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
                                    gridspec_kw={"height_ratios": [2, 1]})
-    ax1.plot(range(len(cum)), cum, color="#4cd97b", linewidth=2, marker="o", markersize=4)
-    ax1.fill_between(range(len(cum)), cum, alpha=0.12, color="#4cd97b")
+    ax1.plot(dates, cum, color="#4cd97b", linewidth=2, marker="o", markersize=5)
+    ax1.fill_between(dates, cum, alpha=0.12, color="#4cd97b")
     ax1.axhline(0, color="#556", linewidth=0.8)
-    ax1.set_title(f"P&L cumulé : {cum[-1]:+.2f}€  ({len(trades)} trades, "
-                  f"win rate {d['stats']['win_rate']}%)", fontsize=12)
+    ax1.set_title(f"P&L cumulé : {cum[-1]:+.2f}€ en {d['span_days']} jours "
+                  f"(≈{d['per_day']:+.2f}€/j) — {len(trades)} trades, "
+                  f"win rate {d['stats']['win_rate']}%", fontsize=11)
     ax1.set_ylabel("€")
-    ax2.bar(range(len(pnl)), pnl,
+    # Annote chaque point avec le nom du trade
+    for x, y, t in zip(dates, cum, trades):
+        ax1.annotate(t["name"], (x, y), textcoords="offset points",
+                     xytext=(0, 8), fontsize=7, ha="center", color="#9ab")
+    ax2.bar(dates, pnl, width=1.6,
             color=["#4cd97b" if v >= 0 else "#ff6b6b" for v in pnl])
     ax2.axhline(0, color="#556", linewidth=0.8)
     ax2.set_ylabel("€ / trade")
-    ax2.set_xticks(range(len(labels)))
-    ax2.set_xticklabels(labels, fontsize=7)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+    ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
+    fig.autofmt_xdate(rotation=0, ha="center")
     fig.tight_layout()
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=110)
@@ -248,11 +296,13 @@ def render_png() -> bytes | None:
 def summary_text() -> str:
     """Résumé texte compact pour la légende Telegram."""
     s = stats.get_stats()
+    d = build_data()
     cash = portfolio.get_cash()
     pf   = s["profit_factor"] if s["profit_factor"] is not None else "—"
     return (
         f"📊 DASHBOARD\n"
-        f"P&L réalisé : {s['realized_pnl']:+.2f}€ ({s['nb_closed']} trades)\n"
+        f"P&L réalisé : {s['realized_pnl']:+.2f}€ ({s['nb_closed']} trades "
+        f"en {d['span_days']}j ≈ {d['per_day']:+.2f}€/j)\n"
         f"P&L latent : {s['unrealized_pnl']:+.2f}€ | Total : {s['total_pnl']:+.2f}€\n"
         f"Win rate : {s['win_rate']}% ({s['nb_wins']}W/{s['nb_losses']}L) | "
         f"Profit factor : {pf}\n"
