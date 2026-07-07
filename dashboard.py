@@ -155,7 +155,7 @@ _HTML = """<!DOCTYPE html>
 
 <h2>P&L cumulé dans le temps <span class="muted">(taille du point ◉ = cash engagé sur le deal)</span></h2>
 <canvas id="cum" height="90"></canvas>
-<h2>P&L par trade</h2><canvas id="bars" height="90"></canvas>
+<h2>P&L par trade <span class="muted">(nom / date / cash engagé)</span></h2><canvas id="bars" height="90"></canvas>
 
 <h2>Trades clôturés</h2>
 <div>
@@ -225,13 +225,17 @@ new Chart(document.getElementById('cum'), {{
   options: {{ scales: {{ x: timeScale }},
              plugins: {{ legend: {{ display: false }}, tooltip: tt }} }}
 }});
+// Un emplacement par trade (espacement régulier) : lisible même quand
+// plusieurs trades tombent le même jour.
 new Chart(document.getElementById('bars'), {{
   type: 'bar',
-  data: {{ datasets: [{{ data: D.trades.map(t => ({{ x: t.date_iso, y: t.pnl }})),
-    backgroundColor: D.trades.map(t => t.pnl >= 0 ? '#4cd97b' : '#ff6b6b'),
-    barThickness: 8 }}] }},
-  options: {{ scales: {{ x: timeScale }},
-             plugins: {{ legend: {{ display: false }}, tooltip: tt }} }}
+  data: {{
+    labels: D.trades.map(t => [t.name,
+      t.date_iso.slice(8,10) + '/' + t.date_iso.slice(5,7), t.invested + '€']),
+    datasets: [{{ data: D.trades.map(t => t.pnl),
+      backgroundColor: D.trades.map(t => t.pnl >= 0 ? '#4cd97b' : '#ff6b6b') }}]
+  }},
+  options: {{ plugins: {{ legend: {{ display: false }}, tooltip: tt }} }}
 }});
 </script></body></html>"""
 
@@ -296,36 +300,43 @@ def render_png() -> bytes | None:
     invested = [t["invested"] for t in trades]
 
     plt.style.use("dark_background")
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7), sharex=True,
+    # PAS de sharex : le haut est en TEMPS réel (trajectoire), le bas en
+    # UN EMPLACEMENT PAR TRADE (détails lisibles même si les dates se touchent).
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 7),
                                    gridspec_kw={"height_ratios": [2, 1]})
     ax1.plot(dates, cum, color="#4cd97b", linewidth=2, zorder=2)
     ax1.fill_between(dates, cum, alpha=0.12, color="#4cd97b", zorder=1)
-    # Taille du point ∝ cash engagé sur le deal + montant annoté dessous
+    # Taille du point ∝ cash engagé — les détails chiffrés sont dans le
+    # graphique du bas (aucun texte ici : les trades rapprochés restent nets)
     i_min, i_max = min(invested), max(invested)
     sizes = [40 + (200 * (v - i_min) / (i_max - i_min) if i_max > i_min else 40)
              for v in invested]
     ax1.scatter(dates, cum, s=sizes, color="#4cd97b",
                 edgecolor="#7a9bd4", linewidth=1.5, zorder=3)
-    for x, y, v in zip(dates, cum, invested):
-        ax1.annotate(f"{v:.0f}€", (x, y), textcoords="offset points",
-                     xytext=(0, -16), fontsize=6.5, ha="center", color="#7a9bd4")
     ax1.axhline(0, color="#556", linewidth=0.8)
     ax1.set_title(f"P&L cumulé : {cum[-1]:+.2f}€ en {d['span_days']} jours "
                   f"(≈{d['per_day']:+.2f}€/j) — ROI {d['avg_roi']:+.2f}% "
                   f"sur ~{d['avg_invested']:.0f}€/deal, win rate {d['stats']['win_rate']}%",
                   fontsize=10)
     ax1.set_ylabel("€")
-    # Annote chaque point avec le nom du trade
-    for x, y, t in zip(dates, cum, trades):
-        ax1.annotate(t["name"], (x, y), textcoords="offset points",
-                     xytext=(0, 8), fontsize=7, ha="center", color="#9ab")
-    ax2.bar(dates, pnl, width=1.6,
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
+    ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
+
+    # Bas : un emplacement par trade (espacement régulier), toutes les infos
+    # en étiquette — jamais de chevauchement même à dates identiques.
+    xs = range(len(trades))
+    ax2.bar(xs, pnl, width=0.6,
             color=["#4cd97b" if v >= 0 else "#ff6b6b" for v in pnl])
+    for i, (v, inv) in enumerate(zip(pnl, invested)):
+        ax2.annotate(f"{v:+.0f}€", (i, v), textcoords="offset points",
+                     xytext=(0, 4 if v >= 0 else -11), fontsize=7,
+                     ha="center", color="#dde")
     ax2.axhline(0, color="#556", linewidth=0.8)
     ax2.set_ylabel("€ / trade")
-    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%d/%m"))
-    ax2.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate(rotation=0, ha="center")
+    ax2.set_xticks(list(xs))
+    ax2.set_xticklabels(
+        [f"{t['name']}\n{t['date_iso'][8:10]}/{t['date_iso'][5:7]}\n{t['invested']:.0f}€"
+         for t in trades], fontsize=6.5)
     fig.tight_layout()
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=110)
