@@ -91,6 +91,25 @@ def _auto_gmail_check():
     if not _market_day() or not GMAIL_USER or not GMAIL_APP_PASSWORD:
         return
     notifications = gmail_sync.check_and_notify(GMAIL_USER, GMAIL_APP_PASSWORD)
+    if not notifications:
+        return
+    # Un mail BD "stratégie finalisée" = un ordre exécuté (SL/TP touché).
+    # Si Playwright est connecté, on SYNCHRONISE directement : le sync lit
+    # l'ordre exécuté sur BD, clôture la position au prix réel et met tout à
+    # jour tout seul (aucun /vendu manuel). Sinon, on retombe sur le message
+    # d'invite manuel.
+    import bot_mode
+    import playwright_session
+    if bot_mode.is_playwright() and playwright_session.is_connected():
+        try:
+            import sync_engine
+            playwright_session.run(
+                lambda page: sync_engine.sync(page, telegram_bot.send, silent=True),
+                timeout=90,
+            )
+            return
+        except Exception as e:
+            print(f"[gmail→sync] {e}")
     for msg in gmail_sync.format_notifications(notifications):
         telegram_bot.send(msg)
 

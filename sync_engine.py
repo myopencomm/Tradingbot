@@ -170,8 +170,15 @@ def sync(page, send_fn, silent: bool = False) -> bool:
     # L'ordre de vente exécuté sur BD donne le prix réel de sortie (volet TP
     # ou SL). Le cash BD, déjà synchronisé plus haut, inclut le produit de la
     # vente — on ne l'ajoute donc PAS une deuxième fois.
+    # Protections EXÉCUTÉES = tout ordre au statut "Exécuté" portant un prix
+    # d'exécution ou un seuil/profit. On ne filtre PAS sur sens=="Vente" : BD
+    # attache souvent le bracket TP/SL à l'ordre d'ACHAT (sens lu "Achat"), donc
+    # un SL/TP déclenché apparaît sur un ordre "Achat" — c'est bien une SORTIE.
+    # Le garde-fou anti-fausse-clôture (07/07) tient : un achat rempli dont les
+    # protections sont encore actives a le statut "En cours", pas "Exécuté".
     executed_sells = [o for o in bd.get("orders", [])
-                      if o.get("statut") == "Exécuté" and o.get("sens") == "Vente"]
+                      if o.get("statut") == "Exécuté"
+                      and (o.get("exec_price") or o.get("seuil") or o.get("profit"))]
 
     for local_key in list(local):
         if local_key in matched_local_keys:
