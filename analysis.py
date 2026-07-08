@@ -52,6 +52,35 @@ SCAN_UNIVERSE = [
 PARIS = pytz.timezone("Europe/Paris")
 
 
+def _lessons_block() -> str:
+    """Bloc de leçons (brique 3) à injecter dans les prompts de validation.
+    Vide tant qu'il n'y a pas assez de trades tagués — jamais bloquant."""
+    try:
+        import lessons
+        b = lessons.build_lessons_block()
+        return f"\n{b}\n" if b else ""
+    except Exception:
+        return ""
+
+
+def _entry_ctx(tech: dict, pctx: dict, thesis: str, source: str,
+               regime: str = "") -> dict:
+    """Assemble le contexte d'entrée mémorisé pour la boucle d'apprentissage
+    (brique 1) : indicateurs au moment de la décision + thèse + régime."""
+    tech = tech or {}
+    pctx = pctx or {}
+    return {
+        "source":      source,
+        "regime":      regime,
+        "rsi":         tech.get("rsi"),
+        "momentum_1m": tech.get("momentum_1m"),
+        "vol_ratio":   tech.get("vol_ratio"),
+        "perf_1y":     pctx.get("perf_1y"),
+        "from_52w_low": pctx.get("from_52w_low"),
+        "thesis":      (thesis or "").strip()[:200],
+    }
+
+
 def _trigger_autonomous(send_fn) -> None:
     """Si le mode autonome est actif + Playwright connecté, entre immédiatement
     sur les opportunités validées à l'instant, sans attendre le check planifié."""
@@ -364,7 +393,7 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
 
             prompt = f"""{TRADER_SYSTEM}
 {ANALYSIS_RULES}
-{TICKER_RULES}
+{_lessons_block()}{TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
 ⚡ MODE GAIN RÉDUIT — TRADE COURT TERME (1 à 5 jours)
@@ -448,6 +477,7 @@ Si ACHAT → 1ère ligne EXACTEMENT (symbole {g_sym}, le titre cote en {g_cur}) 
                 t, entry, sl_v, tp_v,
                 reason=val.splitlines()[0][:150],
                 source="court_terme",
+                context=_entry_ctx(tech, pctx, val.splitlines()[0], "court_terme"),
             )
         except Exception as e:
             print(f"[gain réduit] {t}: {e}")
@@ -620,7 +650,7 @@ MISSION
                          f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
                 val_prompt = f"""{TRADER_SYSTEM}
 {ANALYSIS_RULES}
-{SCREEN_DIRECTIVE}
+{_lessons_block()}{SCREEN_DIRECTIVE}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
@@ -679,6 +709,8 @@ Si ACHAT → format (utilise {sym} comme symbole monétaire, le titre cote en {c
                             float(tp_m.group(1).replace(",", ".")),
                             reason=val.splitlines()[0][:150],
                             source="briefing",
+                            context=_entry_ctx(tech, pctx, val.splitlines()[0],
+                                               "briefing"),
                         )
                 except Exception as _pe:
                     print(f"[briefing] pending_opp store error {t}: {_pe}")
@@ -1520,7 +1552,7 @@ Conditions favorables. Scan momentum standard."""
 
             validate_prompt = f"""{TRADER_SYSTEM}
 {ANALYSIS_RULES}
-{SCREEN_DIRECTIVE}
+{_lessons_block()}{SCREEN_DIRECTIVE}
 {TICKER_RULES}
 {FORMAT_TELEGRAM}
 {ctx_v}
@@ -1639,6 +1671,8 @@ Si ACHAT : format exact (symbole monétaire {q_sym}, le titre cote en {q_cur}) :
                         float(tp_m.group(1).replace(",", ".")),
                         reason=val.splitlines()[0][:150],
                         source="scan",
+                        context=_entry_ctx(tech, pctx, val.splitlines()[0],
+                                           "scan", regime),
                     )
             except Exception as _pe:
                 print(f"[scan] pending_opp store error {t}: {_pe}")

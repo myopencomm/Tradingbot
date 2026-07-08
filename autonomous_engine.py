@@ -121,6 +121,16 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     fx  = prices.fx_to_eur(quote_cur)      # 1 unité devise → EUR
     sym = prices.currency_symbol(quote_cur)
 
+    # Garde-fou piloté par les données : après une série de pertes, on RÉDUIT
+    # la taille (2 pertes → 75%, 3 → 50%, 4+ → 35%) — on prend moins de risque
+    # quand ça enchaîne, sans attendre une décision de l'IA.
+    import lessons
+    factor = lessons.size_factor()
+    if factor < 1.0:
+        available = available * factor
+        send_fn(f"🛡️ Série de {lessons.loss_streak()} perte(s) → taille réduite à "
+                f"{int(factor*100)}% ({available:.0f}€) sur {ticker}.")
+
     entry_eur = entry * fx
     qty  = max(1, int(available / entry_eur))
     cost_eur = qty * entry_eur
@@ -323,6 +333,17 @@ def run_entry_cycle(send_fn) -> None:
                 if not market_open_for(ticker):
                     print(f"[Auto] {ticker} : marché fermé pour ce titre — "
                           f"opportunité conservée pour le prochain cycle")
+                    continue
+
+                # Garde-fou piloté par les données : ne pas re-rentrer sur un
+                # titre qui vient de coûter une perte (< 10 jours). L'IA peut
+                # le re-proposer par momentum ; les données disent d'attendre.
+                import lessons
+                loss = lessons.recent_loss(ticker, days=10)
+                if loss:
+                    send_fn(f"⏸️ {ticker} : écarté — perte récente le {loss.get('date')} "
+                            f"({loss.get('pnl')}€). Cooldown 10 jours pour éviter de répéter.")
+                    portfolio.clear_pending_opportunity(ticker)
                     continue
 
                 quote = prices.get_quote(ticker)

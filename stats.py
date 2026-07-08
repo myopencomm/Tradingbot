@@ -25,10 +25,22 @@ def save_history(data: dict):
 
 def record_close(name: str, ticker: str, qty: int, entry_price: float,
                  exit_price: float, fees: float = 0.0) -> float:
-    """Enregistre un trade clôturé et retourne le P&L net."""
+    """Enregistre un trade clôturé (+ contexte d'entrée et post-mortem) et
+    retourne le P&L net."""
+    import portfolio
     data = load_history()
     pnl = round((exit_price - entry_price) * qty - fees, 2)
-    data["closed_trades"].append({
+    result = "win" if pnl > 0 else "loss"
+
+    # Brique 2 : récupère le POURQUOI de l'entrée et en tire des leçons.
+    ctx = portfolio.get_entry_context(ticker) or portfolio.get_entry_context(name)
+    try:
+        import lessons
+        tags = lessons.post_mortem(ctx, entry_price, exit_price, result)
+    except Exception:
+        tags = []
+
+    record = {
         "name":         name,
         "ticker":       ticker,
         "qty":          qty,
@@ -36,10 +48,16 @@ def record_close(name: str, ticker: str, qty: int, entry_price: float,
         "exit_price":   exit_price,
         "fees":         fees,
         "pnl":          pnl,
-        "result":       "win" if pnl > 0 else "loss",
+        "result":       result,
         "date":         datetime.now(PARIS).strftime("%Y-%m-%d"),
-    })
+        "source":       ctx.get("source", "inconnu"),
+        "entry_context": ctx,
+        "lessons":      tags,
+    }
+    data["closed_trades"].append(record)
     save_history(data)
+    portfolio.clear_entry_context(ticker)
+    portfolio.clear_entry_context(name)
     return pnl
 
 

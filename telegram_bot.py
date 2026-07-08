@@ -147,6 +147,7 @@ BOT_COMMANDS = [
     ("cash",       "Cash dispo  |  /cash 1234 le definir"),
     ("stats",      "Bilan : win rate, P&L, profit factor"),
     ("dashboard",  "Graphique P&L + resume visuel"),
+    ("lessons",    "Ce que le bot a appris de ses trades"),
     ("morning",    "Briefing du jour (macro + positions + opps)"),
     ("scan",       "Meilleures opportunites avec mon cash"),
     ("research",   "Analyser une action — /research TICKER"),
@@ -1481,6 +1482,29 @@ def send_photo(image_bytes: bytes, caption: str = "", chat_id: str = None) -> bo
         return False
 
 
+def cmd_lessons(args, cid):
+    """/lessons — ce que le bot a appris de ses trades passés + garde-fous actifs."""
+    try:
+        import lessons
+        block = lessons.build_lessons_block()
+        streak = lessons.loss_streak()
+        factor = lessons.size_factor()
+        parts = [block] if block else [
+            "Pas encore assez de trades tagués (min 3) pour dégager des leçons.\n"
+            "La boucle d'apprentissage démarre : chaque nouveau trade enregistre "
+            "sa thèse et ses indicateurs d'entrée."
+        ]
+        parts.append(
+            f"\nGARDE-FOUS ACTIFS\n"
+            f"- Série de pertes en cours : {streak}\n"
+            f"- Taille des prochaines entrées : {int(factor*100)}% du budget\n"
+            f"- Cooldown : pas de re-entrée sur un titre perdu depuis < 10 jours"
+        )
+        send("🧠 APPRENTISSAGE DU BOT\n\n" + "\n".join(parts), cid)
+    except Exception as e:
+        send(f"Erreur lessons : {e}", cid)
+
+
 def cmd_dashboard(args, cid):
     """/dashboard — graphique P&L + résumé, et lien vers la version locale."""
     def _do():
@@ -1682,6 +1706,24 @@ def cmd_ordre(args, cid):
                     order_data or {}, ticker, side, qty, "meta",
                     limit_price=entree, validity=validity, sl=sl, tp=tp,
                 )
+                # Boucle d'apprentissage : mémorise le contexte d'entrée. Si le
+                # titre vient d'un scan/briefing, un contexte riche existe déjà
+                # (on ne l'écrase pas) ; sinon on capte au moins RSI/momentum.
+                if order_data and not portfolio.get_entry_context(ticker):
+                    try:
+                        tech = prices.get_technicals(ticker) or {}
+                        pctx = prices.get_price_context(ticker) or {}
+                        portfolio.set_entry_context(ticker, {
+                            "source": "manuel", "entry": entree,
+                            "rsi": tech.get("rsi"), "momentum_1m": tech.get("momentum_1m"),
+                            "vol_ratio": tech.get("vol_ratio"),
+                            "perf_1y": pctx.get("perf_1y"),
+                            "from_52w_low": pctx.get("from_52w_low"),
+                            "tp_pct": round((tp - entree) / entree * 100, 1) if entree else None,
+                            "thesis": "ordre manuel",
+                        })
+                    except Exception:
+                        pass
             elif type_arg == "limite":
                 if len(args) < 5:
                     send("Limite requiert un prix : /ordre acheter TICKER QTE limite PRIX [validite]", cid)
@@ -2033,6 +2075,7 @@ COMMANDS = {
     "/testordre": cmd_testordre,
     "/capture": cmd_capture,
     "/dashboard": cmd_dashboard,
+    "/lessons": cmd_lessons,
     "/ordre": cmd_ordre,
     "/oui": cmd_oui,
     "/non": cmd_non,

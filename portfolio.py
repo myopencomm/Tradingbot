@@ -34,8 +34,17 @@ def get_pending_opportunities() -> list:
 
 
 def add_pending_opportunity(ticker: str, entry: float, sl: float, tp: float,
-                             reason: str = "", source: str = "briefing"):
-    """Stocke une opportunité validée pour que le moteur autonome puisse l'exploiter."""
+                             reason: str = "", source: str = "briefing",
+                             context: dict | None = None):
+    """Stocke une opportunité validée pour que le moteur autonome puisse
+    l'exploiter. `context` (thèse, régime, indicateurs) est mémorisé pour la
+    boucle d'apprentissage — voir set_entry_context / stats.record_close."""
+    if context:
+        ctx = dict(context)
+        ctx.setdefault("source", source)
+        ctx.setdefault("entry", round(entry, 4))
+        ctx.setdefault("tp_pct", round((tp - entry) / entry * 100, 1) if entry else None)
+        set_entry_context(ticker, ctx)
     import pytz
     from datetime import datetime, timedelta
     PARIS = pytz.timezone("Europe/Paris")
@@ -126,6 +135,36 @@ def remove_position(name: str):
     data.get("positions", {}).pop(name.upper(), None)
     data.get("pending_orders", {}).pop(name.upper(), None)
     save(data)
+
+
+# ── Contexte d'entrée (brique 1 de la boucle d'apprentissage) ────────────────
+# À chaque décision d'achat on mémorise le POURQUOI (thèse, régime, indicateurs,
+# source). Sans ça, le trade clôturé n'est qu'un chiffre et le bot ne peut pas
+# relire ses décisions. Clé = symbole de base (ex "AC" pour AC.PA), pour survivre
+# aux variations de suffixe. Consommé + effacé par stats.record_close().
+
+def _base_sym(ticker: str) -> str:
+    return (ticker or "").upper().split(".")[0]
+
+
+def set_entry_context(ticker: str, ctx: dict):
+    from datetime import datetime
+    import pytz
+    data = load()
+    ctx = dict(ctx)
+    ctx.setdefault("captured_at", datetime.now(pytz.timezone("Europe/Paris")).isoformat())
+    data.setdefault("entry_contexts", {})[_base_sym(ticker)] = ctx
+    save(data)
+
+
+def get_entry_context(ticker: str) -> dict:
+    return load().get("entry_contexts", {}).get(_base_sym(ticker), {})
+
+
+def clear_entry_context(ticker: str):
+    data = load()
+    if data.get("entry_contexts", {}).pop(_base_sym(ticker), None) is not None:
+        save(data)
 
 
 def add_pending_order(name: str, ticker: str, qty: int, entry_price: float,
