@@ -369,64 +369,34 @@ def run_entry_cycle(send_fn) -> None:
                           f"> budget {available:.0f}€")
                     continue
 
-                # ── Research pré-achat — UNIQUEMENT pour les opportunités
-                # anciennes (briefing/scan, validées il y a des heures : des
-                # news ont pu tomber). Les trades court_terme viennent d'être
-                # validés à l'instant par l'analyse gain réduit (données
-                # fraîches + graphique) : re-researcher immédiatement est
-                # redondant et donnait un droit de veto systématique à une
-                # analyse MOINS bien informée — aucun trade ne passait jamais.
-                verdict_line = ""
+                # ── Gate pré-achat — SOURCE DE DÉCISION UNIQUE ───────────────
+                # Les opportunités court_terme viennent d'être validées à
+                # l'instant (données fraîches) → passage direct. Les autres
+                # (briefing/scan validées il y a des heures) repassent par le
+                # MÊME validate_candidate en mode confirm : mêmes règles, mêmes
+                # leçons, même parsing que le scan — plus de veto sur des
+                # critères divergents.
                 if opp.get("source") == "court_terme":
                     send_fn(f"⚡ {ticker} : validé à l'instant en gain réduit — passage direct à l'ordre.")
                 else:
-                    send_fn(f"🔍 Vérification research avant achat autonome — {ticker}…")
-                    research_lines: list[str] = []
-
-                    def _capture(msg, _buf=research_lines):
-                        _buf.append(msg)
-                        send_fn(msg)
-
+                    send_fn(f"🔍 Contrôle pré-achat autonome — {ticker}…")
                     try:
                         import analysis as _analysis
-                        _analysis.research_ticker(_capture, ticker, "", confirm_mode=True)
+                        res = _analysis.validate_candidate(ticker, mode="confirm",
+                                                           cash=portfolio.get_cash())
                     except Exception as e:
-                        send_fn(f"⚠️ {ticker} : research échoué ({e}) — achat annulé par précaution")
+                        send_fn(f"⚠️ {ticker} : contrôle échoué ({e}) — achat annulé par précaution")
                         portfolio.clear_pending_opportunity(ticker)
                         continue
-
-                    # ── Parse du verdict research ────────────────────────────
-                    # PRIORITÉ à la ligne "SIGNAL : X" (format imposé au prompt).
-                    # Ne JAMAIS chercher "ACHAT" en substring libre : une réponse
-                    # NEUTRE contient souvent "Pourquoi pas ACHAT :" → faux positif.
-                    import re as _re
-                    full_text = "\n".join(research_lines)
-                    verdict = None
-                    for line in full_text.splitlines():
-                        m = _re.search(r"SIGNAL\s*[:\-]?\s*.{0,3}(ACHAT|NEUTRE|ÉVITER|EVITER)",
-                                       line.upper())
-                        if m:
-                            verdict = m.group(1).replace("EVITER", "ÉVITER")
-                            verdict_line = line.strip()[:120]
-                            break
-                    if verdict is None:
-                        # Fallback : premier mot-clé des 8 premières lignes, ordre
-                        # de priorité PRUDENT (éviter > neutre > achat).
-                        head = " ".join(full_text.upper().splitlines()[:8])
-                        for kw in ("ÉVITER", "EVITER", "NEUTRE", "ACHAT"):
-                            if kw in head:
-                                verdict = kw.replace("EVITER", "ÉVITER")
-                                break
-
-                    if verdict != "ACHAT":
+                    if res.get("verdict") != "ACHAT":
                         send_fn(
-                            f"🔴 {ticker} : research dit {verdict or 'verdict illisible'} — "
-                            f"achat autonome annulé.\n"
-                            + (f"« {verdict_line} »\n" if verdict_line else "")
-                            + f"Opportunité supprimée. Lance /scan pour une nouvelle analyse."
+                            f"🔴 {ticker} : contrôle pré-achat = EXCLUS — achat annulé.\n"
+                            f"« {res.get('reason', 'défaut disqualifiant')} »\n"
+                            f"Opportunité supprimée. Lance /scan pour une nouvelle analyse."
                         )
                         portfolio.clear_pending_opportunity(ticker)
                         continue
+                    send_fn(f"✅ {ticker} : contrôle pré-achat confirme ACHAT — passage de l'ordre…")
 
                 # Re-vérifie le prix après le research (~30-60s se sont écoulés)
                 quote2 = prices.get_quote(ticker)
@@ -443,14 +413,7 @@ def run_entry_cycle(send_fn) -> None:
                     portfolio.clear_pending_opportunity(ticker)
                     continue
 
-                if opp.get("source") != "court_terme":
-                    send_fn(
-                        f"✅ {ticker} : research confirme ACHAT — passage de l'ordre…"
-                        + (f"\n« {verdict_line} »" if verdict_line else "")
-                    )
-                # ────────────────────────────────────────────────────────────────────
-
-                # Adapte l'entrée au cours réel post-research
+                # Adapte l'entrée au cours réel post-contrôle
                 actual_entry = round(price2, 3)
                 source_tag   = f"[{opp.get('source','briefing')}] " + opp.get("reason", "")[:80]
 

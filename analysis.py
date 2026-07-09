@@ -340,6 +340,232 @@ def _breach_warning(ticker: str, pru: float, sl: float) -> str | None:
     return None
 
 
+def _parse_verdict(val: str) -> tuple[str, str]:
+    """
+    Source UNIQUE de lecture d'un verdict IA (ACHAT / EXCLUS).
+    L'IA peut écrire un en-tête société avant de dire EXCLU : on cherche sur les
+    premières lignes, pas seulement en début de texte. Retourne (verdict, raison).
+    Utilisé par TOUS les chemins de décision — garantit un jugement cohérent.
+    """
+    lines = val.strip().splitlines()
+    head = "\n".join(lines[:5]).upper()
+    if "EXCLU" in head or "ÉVITER" in head or "EVITER" in head:
+        reason = "écarté"
+        for line in lines:
+            u = line.upper()
+            if "EXCLU" in u or "ÉVITER" in u or "EVITER" in u:
+                reason = line.split("—", 1)[1].strip()[:70] if "—" in line else line.strip()[:70]
+                break
+        return "EXCLUS", reason
+    return "ACHAT", ""
+
+
+def _regime_instructions(regime: str, regime_summary: str,
+                         rel: float, index_mom: float) -> str:
+    """Bloc d'instructions spécifique au régime — inchangé, factorisé ici pour
+    être partagé par le scan et le briefing."""
+    if regime == "CORRECTION":
+        return f"""
+RÉGIME : CORRECTION ({regime_summary})
+Ce titre est sélectionné pour sa force relative ({rel:+.1f}% vs indice à {index_mom:+.1f}%).
+
+MISSION CORRECTION — critères ACHAT valides dans ce contexte :
+1. FORCE RELATIVE : l'action résiste ou monte pendant que l'indice baisse → thèse valide.
+2. BÉNÉFICIAIRE MACRO : la cause probable de la correction (BCE hawkish → banques ;
+   tensions géo → défense/énergie ; récession → pharma/utilities/consommation de base ;
+   correction tech → value/industrielles) bénéficie directement à ce secteur.
+3. REBOND TECHNIQUE QUALITÉ : RSI < 35, titre de qualité, tendance LT intacte,
+   catalyseur de rebond identifiable.
+
+Signal EXCLUS si : momentum positif MAIS corrélé à l'indice (force relative nulle),
+ou si secteur cyclique sans thèse macro claire en contexte de correction."""
+    if regime == "NEUTRAL":
+        return f"""
+RÉGIME : NEUTRE ({regime_summary})
+Marché sans tendance d'indice claire, MAIS les titres en momentum propre restent
+tradeables — c'est justement là qu'on trouve les surperformances. Un momentum haussier
+individuel (tendance + volume + RSI < 78) est VALIDE même sans catalyseur daté.
+Préfère les titres avec force relative positive vs l'indice. Gestion du SL serrée."""
+    return f"""
+RÉGIME : HAUSSIER ({regime_summary})
+Conditions favorables. Scan momentum standard."""
+
+
+def validate_candidate(ticker: str, *, mode: str = "standard",
+                       regime: str = "BULL", regime_summary: str = "",
+                       index_mom: float = 0.0, item: dict | None = None,
+                       cash: float = 0.0, ai=None) -> dict:
+    """
+    SOURCE DE DÉCISION UNIQUE — tous les chemins (scan, briefing, gain réduit,
+    gate pré-achat autonome) appellent cette fonction. Elle rassemble les
+    données, construit le prompt canonique (règles + leçons + directive selon
+    le mode) et parse le verdict de façon cohérente.
+
+    La stratégie d'analyse IA est IDENTIQUE à celle du scan actuel — seul le
+    `mode` fait varier l'objectif de TP et le cadrage :
+      - "standard"    : TP ≥ +{_TP}% (briefing, scan)
+      - "confirm"     : dernier contrôle pré-achat (défaut disqualifiant only)
+      - "gain_reduit" : TP +{FALLBACK_TP_MIN_PCT:.0f} à +{FALLBACK_TP_MAX_PCT:.0f}%, SL ≤ TP
+
+    Retourne un dict : verdict, entry, sl, tp, tp_pct, risk, reason, raw,
+    context (pour la boucle d'apprentissage), + infos société/devise.
+    """
+    ai = ai or get_provider()
+    ctx = _trading_context()
+    today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
+    item = item or {}
+
+    q = prices.get_quote(ticker)
+    price = q.get("price")
+    out = {"ticker": ticker, "verdict": "EXCLUS", "reason": "cours indisponible",
+           "price": price, "raw": ""}
+    if not price:
+        return out
+    cur = q.get("currency") or "EUR"
+    sym = prices.currency_symbol(cur)
+    fx  = prices.fx_to_eur(cur)
+
+    tech   = prices.get_technicals(ticker) or {}
+    funds  = prices.get_fundamentals(ticker) or {}
+    pctx   = prices.get_price_context(ticker) or {}
+    yf_news = prices.get_yf_news(ticker, max_items=4)
+    web    = research.research_stock(ticker)
+    cats   = research.search_catalysts(ticker)
+    social = research.get_social_sentiment(ticker)
+
+    company_name = funds.get("name", ticker)
+    company_sector = funds.get("sector", "")
+    company_label = f"{company_name} ({ticker})" + (f" — {company_sector}" if company_sector else "")
+
+    # Blocs de données — format identique au scan actuel
+    pctx_block = ""
+    if pctx:
+        pctx_block = (f"\nCONTEXTE 52 SEMAINES\n"
+                      f"- Performance 1 an : {pctx['perf_1y']:+}%"
+                      + (f" | 3 mois : {pctx['perf_3m']:+}%" if "perf_3m" in pctx else "") + "\n"
+                      f"- Cours actuel : +{pctx['from_52w_low']}% au-dessus du plus bas 52s, "
+                      f"{pctx['from_52w_high']}% vs plus haut 52s\n")
+    tech_block = ""
+    if tech:
+        rel = item.get("rel_strength")
+        rel_line = (f"- Force relative vs indice : {rel:+.1f}% (indice : {index_mom:+.1f}%)\n"
+                    if rel is not None else "")
+        score_line = f"- Score quant : {item['score']:+.1f}\n" if item.get("score") is not None else ""
+        tech_block = (f"\nINDICATEURS TECHNIQUES\n"
+                      f"- RSI 14j : {tech.get('rsi', 'N/A')}\n"
+                      f"- Momentum 1 mois : {tech.get('momentum_1m', 'N/A'):+}%\n"
+                      f"- Volume ratio : {tech.get('vol_ratio', 'N/A')}x moyenne 20j\n"
+                      f"{rel_line}{score_line}")
+    funds_lines = []
+    if funds.get("analyst_target"):
+        funds_lines.append(f"- Objectif analyste : {funds['analyst_target']}")
+    if funds.get("next_earnings"):
+        funds_lines.append(f"- Prochains résultats : {funds['next_earnings']}")
+    if "analyst_buy" in funds:
+        funds_lines.append(f"- Consensus : {funds['analyst_buy']} Achat / "
+                           f"{funds['analyst_hold']} Neutre / {funds['analyst_sell']} Vente")
+    funds_block = ("\nFONDAMENTAUX\n" + "\n".join(funds_lines)) if funds_lines else ""
+    news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
+    news_block = ("\nACTUALITÉS\n" + "\n".join(news_lines)) if news_lines else ""
+    social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
+    chart_txt = _analyze_chart(ticker, ai)
+    chart_block = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
+    ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
+             f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
+
+    data_blocks = f"{pctx_block}{tech_block}{funds_block}{news_block}{social_block}{chart_block}"
+
+    # ── Prompt selon le mode — la stratégie d'analyse reste celle du scan ────
+    if mode == "gain_reduit":
+        directive = f"""⚡ MODE GAIN RÉDUIT — TRADE COURT TERME (1 à 5 jours)
+Aucune opportunité à +{_TP}% n'a passé la validation aujourd'hui. Ta mission :
+un trade COURT à objectif RÉDUIT mais très atteignable, plutôt que rien.
+Ce candidat est dans le top du filtre quantitatif momentum du jour.
+RÈGLES DU TRADE COURT :
+- TP : +{FALLBACK_TP_MIN_PCT:.0f}% à +{FALLBACK_TP_MAX_PCT:.0f}% — cale-le SOUS la première résistance.
+  Ici une résistance proche est une CIBLE à exploiter, PAS un motif d'exclusion.
+- SL : serré, sous le dernier support — en %, jamais plus de la moitié du TP visé.
+- Momentum sain exigé : tendance 1 mois positive, RSI < 75, pas de couteau qui tombe.
+- EXCLUS si résultats ou événement binaire dans les 5 prochains jours."""
+        tp_line = (f"{company_name} ({ticker}) — Entrée : {price}{sym}  "
+                   f"SL : X{sym} (-X%)  TP : X{sym} (+X%)")
+        rules_head = f"{ANALYSIS_RULES}\n{_lessons_block()}{TICKER_RULES}"
+    elif mode == "confirm":
+        directive = f"""{SCREEN_DIRECTIVE}
+⚡ MODE CONFIRMATION PRÉ-ACHAT — PRIME SUR TON INSTINCT DE PRUDENCE :
+Ce titre a DÉJÀ été validé ACHAT aujourd'hui par l'analyse complète. Ton rôle
+N'EST PAS de re-juger l'opportunité : c'est un DERNIER contrôle pour détecter un
+défaut DISQUALIFIANT (couteau qui tombe, RSI > 80, news invalidante, OPA
+plafonnée, illiquidité réelle). « volume faible », « résistance proche »,
+« consolidation », « attendre un repli » ne sont PAS des défauts disqualifiants.
+Si aucun défaut disqualifiant concret → ACHAT."""
+        tp_line = (f"{company_name} ({ticker}){(' — ' + company_sector) if company_sector else ''}\n"
+                   f"- Entrée : {price}{sym}  SL : X{sym} (-{_SL}%)  "
+                   f"TP : X{sym} (+X% — minimum +{_TP}%)")
+        rules_head = f"{ANALYSIS_RULES}\n{_lessons_block()}{directive}\n{TICKER_RULES}"
+        directive = ""  # déjà inclus dans rules_head
+    else:  # standard
+        rel = item.get("rel_strength", 0.0)
+        directive = _regime_instructions(regime, regime_summary or regime, rel, index_mom)
+        tp_line = (f"{company_name} ({ticker}){(' — ' + company_sector) if company_sector else ''}\n"
+                   f"- Cours actuel : {price}{sym} | Entrée : X  SL : X (-{_SL}%)  "
+                   f"TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)")
+        rules_head = f"{ANALYSIS_RULES}\n{_lessons_block()}{SCREEN_DIRECTIVE}\n{TICKER_RULES}"
+
+    prompt = f"""{TRADER_SYSTEM}
+{rules_head}
+{FORMAT_TELEGRAM}
+{ctx_v}
+AUJOURD'HUI : {today_str}
+{directive}
+SOCIÉTÉ ANALYSÉE : {company_label} — JE NE DÉTIENS PAS. CASH DISPONIBLE : {cash}€.
+Cours actuel : {price}{sym} (devise {cur})
+{data_blocks}
+RECHERCHE WEB
+{web}
+
+CATALYSEURS IMMINENTS
+{cats}
+
+Signal ACHAT ou EXCLUS ?
+RÈGLE : si le titre ne répond pas aux critères → EXCLUS — [raison 5 mots]
+RÈGLE : si le ticker viole une contrainte du contexte personnel → EXCLUS — [raison]
+Si ACHAT : format exact (symbole {sym}, le titre cote en {cur}) :
+{tp_line}
+- Société : [1 phrase]
+- Secteur maintenant : [1 phrase — pourquoi porteur EN CE MOMENT]
+- Thèse : [CATALYSEUR daté] OU [FORCE RELATIVE] OU [MOMENTUM + niveau invalidation]
+- Raison : 1 phrase
+- Risque : LOW / MEDIUM / HIGH"""
+
+    val = _strip_markdown(ai.complete(prompt, max_tokens=400))
+    verdict, reason = _parse_verdict(val)
+
+    entry_m = re.search(r"Entr[ée]e?\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+    sl_m    = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+    tp_m    = re.search(r"\bTP\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+    entry = float(entry_m.group(1).replace(",", ".")) if entry_m else price
+    sl_v  = float(sl_m.group(1).replace(",", ".")) if sl_m else None
+    tp_v  = float(tp_m.group(1).replace(",", ".")) if tp_m else None
+    risk_m = re.search(r"Risque\s*:?\s*(LOW|MEDIUM|HIGH)", val, re.I)
+
+    # Garde-fou commun : une opportunité valide DOIT avoir entrée+SL+TP cohérents
+    if verdict == "ACHAT" and not (sl_v and tp_v and sl_v < entry < tp_v):
+        verdict, reason = "EXCLUS", reason or "niveaux entrée/SL/TP incohérents"
+
+    out.update({
+        "verdict": verdict, "reason": reason, "raw": _validate_tickers(val),
+        "entry": round(entry, 4), "sl": sl_v, "tp": tp_v,
+        "tp_pct": round((tp_v / entry - 1) * 100, 1) if (tp_v and entry) else None,
+        "risk": risk_m.group(1).upper() if risk_m else "MEDIUM",
+        "currency": cur, "sym": sym, "fx": fx,
+        "company_name": company_name, "company_sector": company_sector,
+        "company_label": company_label, "tech": tech, "pctx": pctx, "funds": funds,
+        "context": _entry_ctx(tech, pctx, val.splitlines()[0] if val else "", mode, regime),
+    })
+    return out
+
+
 def _small_gain_pass(ai, candidates: list[dict], cash: float,
                      ctx: str, today_str: str) -> tuple[list[str], list[str]]:
     """
@@ -357,85 +583,20 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
     for c in candidates[:3]:
         t = c["ticker"]
         try:
-            q = prices.get_quote(t)
-            price = q.get("price")
-            if not price:
-                continue
-            g_cur = q.get("currency") or "EUR"
-            g_sym = prices.currency_symbol(g_cur)
-            g_fx  = prices.fx_to_eur(g_cur)
-
-            tech  = prices.get_technicals(t)
-            funds = prices.get_fundamentals(t)
-            pctx  = prices.get_price_context(t)
-            yf_n  = prices.get_yf_news(t, max_items=3)
-
-            tech_b = ""
-            if tech:
-                tech_b = (f"\nTECHNICALS : RSI {tech.get('rsi','N/A')} | "
-                          f"Momentum 1 mois {tech.get('momentum_1m','N/A'):+}% | "
-                          f"Vol ratio {tech.get('vol_ratio','N/A')}x\n")
-            if pctx:
-                tech_b += (f"52 SEMAINES : perf 1 an {pctx['perf_1y']:+}% | "
-                           f"+{pctx['from_52w_low']}% vs plus bas | "
-                           f"{pctx['from_52w_high']}% vs plus haut\n")
-            funds_b = ""
-            if funds.get("next_earnings"):
-                funds_b = f"\nRésultats le : {funds['next_earnings']}\n"
-            news_b = ("\nNEWS : " + " | ".join(n["title"] for n in yf_n)) if yf_n else ""
-            chart_txt = _analyze_chart(t, ai)
-            chart_b   = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
-
-            company_name  = funds.get("name", t)
-            company_label = f"{company_name} ({t})"
-            ctx_v = (f"\nCONTEXTE PERSONNEL — contraintes à respecter "
-                     f"(toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
-
-            prompt = f"""{TRADER_SYSTEM}
-{ANALYSIS_RULES}
-{_lessons_block()}{TICKER_RULES}
-{FORMAT_TELEGRAM}
-{ctx_v}
-⚡ MODE GAIN RÉDUIT — TRADE COURT TERME (1 à 5 jours)
-Aucune opportunité à +{_TP}% n'a passé la validation aujourd'hui. Ta mission :
-un trade COURT à objectif RÉDUIT mais très atteignable, plutôt que rien.
-Ce candidat est dans le top du filtre quantitatif momentum du jour.
-
-AUJOURD'HUI : {today_str} | SOCIÉTÉ : {company_label} | COURS RÉEL : {price}{g_sym} (devise {g_cur})
-{tech_b}{funds_b}{news_b}{chart_b}
-RÈGLES DU TRADE COURT :
-- TP : +{FALLBACK_TP_MIN_PCT:.0f}% à +{FALLBACK_TP_MAX_PCT:.0f}% — cale-le SOUS la première résistance.
-  Ici une résistance proche est une CIBLE à exploiter, PAS un motif d'exclusion.
-- SL : serré, sous le dernier support — en %, jamais plus de la moitié du TP visé.
-- Momentum sain exigé : tendance 1 mois positive, RSI < 75, pas de couteau qui tombe.
-- EXCLUS si résultats ou événement binaire dans les 5 prochains jours.
-
-Signal ACHAT ou EXCLUS ? Réponds par le verdict en PREMIÈRE ligne, sans analyse avant.
-Si EXCLUS → EXCLUS — [raison 5 mots max]
-Si ACHAT → 1ère ligne EXACTEMENT (symbole {g_sym}, le titre cote en {g_cur}) :
-{company_name} ({t}) — Entrée : {price}{g_sym}  SL : X{g_sym} (-X%)  TP : X{g_sym} (+X%)
-- Thèse courte : [niveau technique visé + niveau qui invalide]
-- Risque : LOW/MEDIUM/HIGH"""
-
-            val = _strip_markdown(ai.complete(prompt, max_tokens=300))
-            excl = next((l for l in val.splitlines()
-                         if l.strip().upper().startswith("EXCLU")), None)
-            entry_m = re.search(r"Entr[ée]e?\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
-            sl_m    = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
-            tp_m    = re.search(r"\bTP\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
-
-            if excl or not (entry_m and sl_m and tp_m):
-                reason = (excl or "réponse malformée")
-                reason = reason.split("—", 1)[1].strip()[:60] if "—" in reason else reason[:60]
-                rejected.append(f"- {company_label} : {reason}")
+            # SOURCE DE DÉCISION UNIQUE — même moteur que le scan, mode gain_reduit
+            res = validate_candidate(t, mode="gain_reduit", cash=cash, ai=ai, item=c)
+            company_label = res.get("company_label", t)
+            if res.get("verdict") != "ACHAT":
+                rejected.append(f"- {company_label} : {res.get('reason', 'écarté')}")
                 continue
 
-            entry = float(entry_m.group(1).replace(",", "."))
-            sl_v  = float(sl_m.group(1).replace(",", "."))
-            tp_v  = float(tp_m.group(1).replace(",", "."))
-            if not (sl_v < entry < tp_v):
-                rejected.append(f"- {company_label} : niveaux incohérents (SL {sl_v} / TP {tp_v})")
-                continue
+            price = res["price"]
+            g_cur, g_sym, g_fx = res["currency"], res["sym"], res["fx"]
+            tech, pctx = res.get("tech", {}), res.get("pctx", {})
+            val   = res["raw"]
+            entry = res["entry"]
+            sl_v  = res["sl"]
+            tp_v  = res["tp"]
             # Plafonne le TP dans la fourchette gain réduit
             tp_max = round(entry * (1 + FALLBACK_TP_MAX_PCT / 100), 2)
             if tp_v > tp_max:
@@ -600,117 +761,30 @@ MISSION
             for t in raw_tickers[:10]:
                 if t.upper() in held_tickers:
                     continue
-                q = prices.get_quote(t)
-                current_price = q.get("price")
+                # SOURCE DE DÉCISION UNIQUE — même moteur que scan/gate, mode standard
+                _reg = (regime_data or {}).get("label", "BULL")
+                _idx = (regime_data or {}).get("index_mom_avg", 0.0) or 0.0
+                res = validate_candidate(t, mode="standard", regime=_reg,
+                                         regime_summary=_reg, index_mom=_idx,
+                                         cash=cash, ai=ai)
+                current_price = res.get("price")
                 if not current_price:
                     continue
-                cur = q.get("currency") or "EUR"
-                sym = prices.currency_symbol(cur)
-
-                tech   = prices.get_technicals(t)
-                funds  = prices.get_fundamentals(t)
-                pctx   = prices.get_price_context(t)
-                yf_n   = prices.get_yf_news(t, max_items=4)
-                social = research.get_social_sentiment(t)
-                web    = research.research_stock(t)
-                cats   = research.search_catalysts(t)
-
-                tech_b = ""
-                if tech:
-                    tech_b = (
-                        f"\nTECHNICALS : RSI {tech.get('rsi','N/A')} | "
-                        f"Momentum {tech.get('momentum_1m','N/A'):+}% | "
-                        f"Vol ratio {tech.get('vol_ratio','N/A')}x\n"
-                    )
-                if pctx:
-                    tech_b += (
-                        f"52 SEMAINES : perf 1 an {pctx['perf_1y']:+}% | "
-                        f"+{pctx['from_52w_low']}% vs plus bas | "
-                        f"{pctx['from_52w_high']}% vs plus haut\n"
-                    )
-                funds_b = ""
-                fl = []
-                if funds.get("analyst_target"):
-                    fl.append(f"Objectif analyste : {funds['analyst_target']}")
-                if funds.get("next_earnings"):
-                    fl.append(f"Résultats le : {funds['next_earnings']}")
-                if fl:
-                    funds_b = "\n" + " | ".join(fl) + "\n"
-
-                company_name = funds.get("name", t)
-                company_sector = funds.get("sector", "")
-                company_label = f"{company_name} ({t})" + (f" — {company_sector}" if company_sector else "")
-
-                social_b  = f"\nSENTIMENT : {social}" if social and "aucune donnée" not in social else ""
-                news_b    = ("\nNEWS : " + " | ".join(n["title"] for n in yf_n[:3])) if yf_n else ""
-                chart_txt = _analyze_chart(t, ai)
-                chart_b   = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
-
-                ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
-                         f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
-                val_prompt = f"""{TRADER_SYSTEM}
-{ANALYSIS_RULES}
-{_lessons_block()}{SCREEN_DIRECTIVE}
-{TICKER_RULES}
-{FORMAT_TELEGRAM}
-{ctx_v}
-AUJOURD'HUI : {today_str}. SOCIÉTÉ : {company_label}. COURS RÉEL : {current_price}{sym} (devise {cur}). CASH DISPO : {cash}€.
-{tech_b}{funds_b}{social_b}{news_b}{chart_b}
-RECHERCHE WEB : {web}
-CATALYSEURS : {cats}
-
-Signal ACHAT ou NEUTRE/ÉVITER ?
-Ta réponse DOIT commencer directement par le verdict — AUCUNE analyse avant.
-Si NEUTRE/ÉVITER → PREMIÈRE ligne : EXCLUS — [défaut disqualifiant en 5 mots max]
-  La raison DOIT être un des défauts disqualifiants de la directive (couteau qui tombe,
-  RSI > 80, news invalidante, OPA plafonnée, illiquidité) ou une violation du contexte
-  personnel. « sous résistance », « upside analyste insuffisant », « pas de catalyseur »
-  ne sont PAS des raisons valides d'exclusion.
-Si le ticker viole une contrainte du contexte personnel → réponds : EXCLUS — [raison]
-Si ACHAT → format (utilise {sym} comme symbole monétaire, le titre cote en {cur}) :
-{company_name} ({t}){(" — " + company_sector) if company_sector else ""} — Entrée : {current_price}{sym}  SL : X{sym} (-{_SL}%)  TP : X{sym} (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
-- Société : [1 phrase — ce que fait la société, son positionnement clé]
-- Secteur maintenant : [1 phrase — pourquoi ce secteur est porteur EN CE MOMENT pour ce trade court terme]
-- Thèse : [CATALYSEUR : événement + date après {today_str}] OU [MOMENTUM : tendance + niveau qui invalide]
-- Raison : 1 phrase  Risque : LOW/MEDIUM/HIGH"""
-
-                val = _strip_markdown(ai.complete(val_prompt, max_tokens=400))
-                # Détection EXCLUS robuste : l'IA place parfois le verdict en FIN
-                # d'analyse malgré la consigne — on cherche sur toutes les lignes.
-                excl_line = next(
-                    (l for l in val.splitlines() if l.strip().upper().startswith("EXCLU")),
-                    None,
-                )
-                # Garde-fou : une opportunité valide DOIT contenir Entrée + SL + TP.
-                # Sinon c'est une exclusion implicite ou une réponse malformée.
-                has_levels = (
-                    re.search(r"Entr[ée]e?\s*:", val)
-                    and re.search(r"\bSL\s*:", val)
-                    and re.search(r"\bTP\s*:", val)
-                )
-                if excl_line or not has_levels:
-                    src = excl_line or (val.strip().splitlines()[0] if val.strip() else "écarté")
-                    reason = src.split("—", 1)[1].strip()[:70] if "—" in src else src.strip()[:70]
+                company_name = res.get("company_name", t)
+                if res.get("verdict") != "ACHAT":
                     label = f"{company_name} ({t})" if company_name != t else t
-                    rejected_morning.append(f"- {label} : {reason}")
+                    rejected_morning.append(f"- {label} : {res.get('reason', 'écarté')}")
                     continue
-                val = _validate_tickers(val)
+                val = res["raw"]
                 opportunities.append(val)
-                # Stocke pour le moteur autonome (Option B)
+                # Stocke pour le moteur autonome
                 try:
-                    entry_m = re.search(r"Entr[ée]e?\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
-                    sl_m    = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
-                    tp_m    = re.search(r"\bTP\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
-                    if entry_m and sl_m and tp_m:
+                    if res.get("sl") and res.get("tp"):
                         portfolio.add_pending_opportunity(
-                            t,
-                            float(entry_m.group(1).replace(",", ".")),
-                            float(sl_m.group(1).replace(",", ".")),
-                            float(tp_m.group(1).replace(",", ".")),
+                            t, res["entry"], res["sl"], res["tp"],
                             reason=val.splitlines()[0][:150],
                             source="briefing",
-                            context=_entry_ctx(tech, pctx, val.splitlines()[0],
-                                               "briefing"),
+                            context=res.get("context"),
                         )
                 except Exception as _pe:
                     print(f"[briefing] pending_opp store error {t}: {_pe}")
@@ -1455,148 +1529,21 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                 _upd(f"🔍 Analyse {t}... ({_scan_idx + 1}/{len(top_candidates)})")
             except Exception:
                 pass
-            q = prices.get_quote(t)
-            current_price = q.get("price")
+            # SOURCE DE DÉCISION UNIQUE — même moteur que briefing/gate, mode standard
+            res = validate_candidate(t, mode="standard", regime=regime,
+                                     regime_summary=regime_summary, index_mom=index_mom,
+                                     item=item, cash=cash, ai=ai)
+            current_price = res.get("price")
             if not current_price:
                 continue
-            q_cur = q.get("currency") or "EUR"
-            q_sym = prices.currency_symbol(q_cur)
-            q_fx  = prices.fx_to_eur(q_cur)
-
-            tech    = prices.get_technicals(t)
-            funds   = prices.get_fundamentals(t)
-            pctx    = prices.get_price_context(t)
-            yf_news = prices.get_yf_news(t, max_items=4)
-            web     = research.research_stock(t)
-            cats    = research.search_catalysts(t)
-            social  = research.get_social_sentiment(t)
-
-            pctx_block = ""
-            if pctx:
-                pctx_block = (
-                    f"\nCONTEXTE 52 SEMAINES\n"
-                    f"- Performance 1 an : {pctx['perf_1y']:+}%"
-                    + (f" | 3 mois : {pctx['perf_3m']:+}%" if "perf_3m" in pctx else "") + "\n"
-                    f"- Cours actuel : +{pctx['from_52w_low']}% au-dessus du plus bas 52s, "
-                    f"{pctx['from_52w_high']}% vs plus haut 52s\n"
-                )
-
-            tech_block = ""
-            if tech:
-                rel = item.get("rel_strength")
-                rel_line = (f"- Force relative vs indice : {rel:+.1f}% (indice : {index_mom:+.1f}%)\n"
-                            if rel is not None else "")
-                rank = top_candidates.index(item) + 1 if item in top_candidates else "?"
-                score_line = f"- Score quant : {item['score']:+.1f} (rang {rank}/{len(top_candidates)})\n"
-                tech_block = (
-                    f"\nINDICATEURS TECHNIQUES\n"
-                    f"- RSI 14j : {tech.get('rsi', 'N/A')}\n"
-                    f"- Momentum 1 mois : {tech.get('momentum_1m', 'N/A'):+}%\n"
-                    f"- Volume ratio : {tech.get('vol_ratio', 'N/A')}x moyenne 20j\n"
-                    f"{rel_line}{score_line}"
-                )
-
-            funds_lines = []
-            if funds.get("analyst_target"):
-                funds_lines.append(f"- Objectif analyste : {funds['analyst_target']}")
-            if funds.get("next_earnings"):
-                funds_lines.append(f"- Prochains résultats : {funds['next_earnings']}")
-            if "analyst_buy" in funds:
-                funds_lines.append(
-                    f"- Consensus : {funds['analyst_buy']} Achat / "
-                    f"{funds['analyst_hold']} Neutre / {funds['analyst_sell']} Vente"
-                )
-            funds_block = ("\nFONDAMENTAUX\n" + "\n".join(funds_lines)) if funds_lines else ""
-
-            news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
-            news_b = ("\nACTUALITÉS\n" + "\n".join(news_lines)) if news_lines else ""
-
-            company_name = funds.get("name", t)
-            company_sector = funds.get("sector", "")
-            company_label = f"{company_name} ({t})" + (f" — {company_sector}" if company_sector else "")
-
-            social_b  = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
-            chart_txt = _analyze_chart(t, ai)
-            chart_b   = f"\nANALYSE GRAPHIQUE (vision IA)\n{chart_txt}\n" if chart_txt else ""
-            ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
-                     f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
-
-            # Instructions spécifiques selon le régime
-            rel = item.get("rel_strength", 0.0)
-            if regime == "CORRECTION":
-                regime_instructions = f"""
-RÉGIME : CORRECTION ({regime_summary})
-Ce titre est sélectionné pour sa force relative ({rel:+.1f}% vs indice à {index_mom:+.1f}%).
-
-MISSION CORRECTION — critères ACHAT valides dans ce contexte :
-1. FORCE RELATIVE : l'action résiste ou monte pendant que l'indice baisse → thèse valide.
-2. BÉNÉFICIAIRE MACRO : la cause probable de la correction (BCE hawkish → banques ;
-   tensions géo → défense/énergie ; récession → pharma/utilities/consommation de base ;
-   correction tech → value/industrielles) bénéficie directement à ce secteur.
-3. REBOND TECHNIQUE QUALITÉ : RSI < 35, titre de qualité, tendance LT intacte,
-   catalyseur de rebond identifiable.
-
-Signal EXCLUS si : momentum positif MAIS corrélé à l'indice (force relative nulle),
-ou si secteur cyclique sans thèse macro claire en contexte de correction."""
-            elif regime == "NEUTRAL":
-                regime_instructions = f"""
-RÉGIME : NEUTRE ({regime_summary})
-Marché sans tendance d'indice claire, MAIS les titres en momentum propre restent
-tradeables — c'est justement là qu'on trouve les surperformances. Un momentum haussier
-individuel (tendance + volume + RSI < 78) est VALIDE même sans catalyseur daté.
-Préfère les titres avec force relative positive vs l'indice. Gestion du SL serrée."""
-            else:  # BULL
-                regime_instructions = f"""
-RÉGIME : HAUSSIER ({regime_summary})
-Conditions favorables. Scan momentum standard."""
-
-            validate_prompt = f"""{TRADER_SYSTEM}
-{ANALYSIS_RULES}
-{_lessons_block()}{SCREEN_DIRECTIVE}
-{TICKER_RULES}
-{FORMAT_TELEGRAM}
-{ctx_v}
-AUJOURD'HUI : {today_str}
-{regime_instructions}
-
-SOCIÉTÉ ANALYSÉE : {company_label} — JE NE DÉTIENS PAS. CASH DISPONIBLE : {cash}€.
-Cours actuel : {current_price}{q_sym} (devise {q_cur})
-{pctx_block}{tech_block}{funds_block}{news_b}{social_b}{chart_b}
-
-RECHERCHE WEB
-{web}
-
-CATALYSEURS IMMINENTS
-{cats}
-
-Signal ACHAT ou EXCLUS ?
-RÈGLE : si le titre ne répond pas aux critères du régime → EXCLUS — [raison 5 mots]
-RÈGLE : si le ticker viole une contrainte du contexte personnel → EXCLUS — [raison]
-Si ACHAT : format exact (symbole monétaire {q_sym}, le titre cote en {q_cur}) :
-{company_name} ({t}){(" — " + company_sector) if company_sector else ""}
-- Cours actuel : {current_price}{q_sym} | Entrée : X  SL : X (-{_SL}%)  TP : X (+X% — minimum +{_TP}%, plus si le potentiel le justifie)
-- Société : [1 phrase — ce que fait la société, son positionnement clé]
-- Secteur maintenant : [1 phrase — pourquoi ce secteur est porteur EN CE MOMENT pour ce trade court terme]
-- Thèse : [CATALYSEUR daté] OU [FORCE RELATIVE — raison] OU [MOMENTUM + niveau invalidation]
-- Raison : 1 phrase
-- Risque : LOW / MEDIUM / HIGH"""
-
-            val = _strip_markdown(ai.complete(validate_prompt, max_tokens=400))
-            # Détection EXCLU robuste : l'IA peut écrire l'en-tête de la société
-            # sur la première ligne avant de dire EXCLU sur la suivante.
-            # On cherche dans les 5 premières lignes, pas seulement startswith.
-            first_lines = "\n".join(val.strip().splitlines()[:5]).upper()
-            if "EXCLU" in first_lines:
-                # Extrait la raison depuis la ligne qui contient EXCLU
-                reason = "écarté"
-                for line in val.splitlines():
-                    if "EXCLU" in line.upper():
-                        reason = line.split("—", 1)[1].strip()[:70] if "—" in line else line.strip()[:70]
-                        break
+            q_cur, q_sym, q_fx = res["currency"], res["sym"], res["fx"]
+            company_name = res.get("company_name", t)
+            company_sector = res.get("company_sector", "")
+            if res.get("verdict") != "ACHAT":
                 label = f"{company_name} ({t})" if company_name != t else t
-                rejected.append(f"- {label} : {reason}")
+                rejected.append(f"- {label} : {res.get('reason', 'écarté')}")
                 continue
-            val = _validate_tickers(val)
+            val = res["raw"]
 
             # Feature scan→ordre : sizing affiché + commande prête à l'emploi.
             # Budget configurable via .env : POSITION_BUDGET_PCT / POSITION_BUDGET_MAX
@@ -1671,8 +1618,7 @@ Si ACHAT : format exact (symbole monétaire {q_sym}, le titre cote en {q_cur}) :
                         float(tp_m.group(1).replace(",", ".")),
                         reason=val.splitlines()[0][:150],
                         source="scan",
-                        context=_entry_ctx(tech, pctx, val.splitlines()[0],
-                                           "scan", regime),
+                        context=res.get("context"),
                     )
             except Exception as _pe:
                 print(f"[scan] pending_opp store error {t}: {_pe}")
