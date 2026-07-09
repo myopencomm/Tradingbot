@@ -300,6 +300,7 @@ TradingBot/
 | `/cash [montant]` | Voir ou mettre à jour le cash disponible |
 | `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor |
 | `/dashboard` | Graphique P&L cumulé + résumé visuel (image) — voir section [Dashboard](#dashboard-visuel) |
+| `/lessons` | Ce que le bot a appris de ses trades passés + garde-fous actifs — voir section [Apprentissage](#boucle-dapprentissage) |
 
 ### Positions
 
@@ -559,6 +560,24 @@ GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 | **Automatique** | Le bot vérifie Gmail à chaque check (9h, 12h, 15h, 17h) |
 | **À la demande** | `/syncmail` — vérifie immédiatement |
 | **Manuel** | `/vendu NOM [PRIX]` — si Gmail n'est pas configuré |
+
+---
+
+## Boucle d'apprentissage
+
+Un LLM n'apprend pas par entraînement ici, mais le bot **accumule et réutilise** l'expérience de ses trades en trois temps :
+
+1. **Capture** — à chaque décision d'achat (scan, briefing, gain réduit, ordre manuel), le *pourquoi* est mémorisé : thèse, régime de marché, RSI/momentum/volume à l'entrée, source.
+2. **Post-mortem** — à la clôture, le bot croise le contexte d'entrée avec le résultat et tague automatiquement le défaut (ex. « entrée en surchauffe RSI ≥ 70 », « gap sous le SL — titre peu liquide »).
+3. **Leçons réinjectées** — les schémas perdants sont agrégés et rappelés à l'IA dans **tous** les prompts de validation, pour éviter de répéter les mêmes erreurs.
+
+**Garde-fous pilotés par les données** (indépendants de l'IA) :
+- **Cooldown 10 jours** : pas de re-entrée sur un titre qui vient de perdre.
+- **Réduction de taille en série de pertes** : 2 pertes → 75 %, 3 → 50 %, 4+ → 35 % du budget.
+
+`/lessons` affiche à tout moment ce que le bot a retenu et les garde-fous actifs.
+
+> **Source de décision unique** : le jugement ACHAT/EXCLUS est produit par **une seule fonction** (`validate_candidate`) que tous les chemins appellent (scan, briefing, gain réduit, contrôle pré-achat autonome). Même stratégie d'analyse, mêmes règles, mêmes leçons partout — seul l'objectif de TP varie selon le mode.
 
 ---
 
