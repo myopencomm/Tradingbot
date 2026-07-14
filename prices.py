@@ -145,9 +145,18 @@ def get_yf_news(ticker: str, max_items: int = 6) -> list[dict]:
 
 
 def get_technicals(ticker: str) -> dict:
-    """RSI 14j, momentum 1 mois, ratio volume vs moyenne 20 séances."""
+    """Indicateurs techniques pour la sélection momentum validée par la recherche.
+
+    - rsi / momentum_1m / vol_ratio : historiques (consommés partout).
+    - mom_12_1 : momentum 12 mois HORS dernier mois (Jegadeesh & Titman 1993) —
+      le signal de formation ; le momentum 1 mois seul s'inverse (Jegadeesh 1990).
+    - above_ma200 / ma200_dist_pct : filtre de tendance long terme.
+    - atr_pct : ATR 14j en % du cours — sert au SL adapté à la volatilité.
+    - vol_ratio_20_250 : volatilité réalisée 20j / 1 an — >1.5 = titre en
+      régime de volatilité élevée → taille réduite (Barroso & Santa-Clara 2015).
+    """
     try:
-        hist = yf.Ticker(ticker).history(period="3mo")
+        hist = yf.Ticker(ticker).history(period="1y")
         if len(hist) < 22:
             return {}
         closes  = hist["Close"]
@@ -163,7 +172,40 @@ def get_technicals(ticker: str) -> dict:
         vol_last = float(volumes.iloc[-2])
         vol_avg  = float(volumes.iloc[-21:-1].mean())
         vol_r    = round(vol_last / vol_avg, 2) if vol_avg else None
-        return {"rsi": rsi, "momentum_1m": mom_1m, "vol_ratio": vol_r}
+        out = {"rsi": rsi, "momentum_1m": mom_1m, "vol_ratio": vol_r}
+
+        # Momentum 12-1 : perf du début de l'historique (≈12 mois) jusqu'à il y
+        # a 1 mois. Avec < 10 mois d'historique (IPO récente) : non calculable.
+        if len(closes) >= 210:
+            out["mom_12_1"] = round(float((closes.iloc[-22] / closes.iloc[0] - 1) * 100), 1)
+
+        # MM200 (filtre de tendance)
+        if len(closes) >= 200:
+            ma200 = float(closes.rolling(200).mean().iloc[-1])
+            cur   = float(closes.iloc[-1])
+            out["above_ma200"]    = cur > ma200
+            out["ma200_dist_pct"] = round((cur / ma200 - 1) * 100, 1)
+
+        # ATR 14j en % du cours (True Range classique)
+        if {"High", "Low"}.issubset(hist.columns) and len(hist) >= 15:
+            prev_close = closes.shift(1)
+            tr = (hist["High"] - hist["Low"]).combine(
+                (hist["High"] - prev_close).abs(), max).combine(
+                (hist["Low"] - prev_close).abs(), max)
+            atr = float(tr.rolling(14).mean().iloc[-1])
+            cur = float(closes.iloc[-1])
+            if cur:
+                out["atr_pct"] = round(atr / cur * 100, 2)
+
+        # Régime de volatilité du titre : réalisée 20j vs 1 an
+        rets = closes.pct_change().dropna()
+        if len(rets) >= 60:
+            vol_20  = float(rets.iloc[-20:].std())
+            vol_all = float(rets.std())
+            if vol_all:
+                out["vol_ratio_20_250"] = round(vol_20 / vol_all, 2)
+
+        return out
     except Exception as e:
         print(f"⚠️ Technicals error {ticker}: {e}")
         return {}
@@ -293,7 +335,7 @@ def get_market_regime() -> dict:
 
         idx_data = {}
         for ticker, key in [("^FCHI", "cac"), ("^GSPC", "spy")]:
-            hist = yf.Ticker(ticker).history(period="2mo").dropna(subset=["Close"])
+            hist = yf.Ticker(ticker).history(period="1y").dropna(subset=["Close"])
             if len(hist) < 20:
                 continue
             cur   = float(hist["Close"].iloc[-1])
@@ -303,30 +345,49 @@ def get_market_regime() -> dict:
                 "vs_mm20": round((cur / mm20 - 1) * 100, 1),
                 "mom1m":   round(mom1m, 1),
             }
+            # Filtre de tendance long terme (MM200) : le VIX seul rate les
+            # marchés qui plafonnent sans paniquer (juin-juillet 2026 : VIX < 20
+            # mais CAC sous son pic — toutes les pertes entrées dans ce régime).
+            if len(hist) >= 200:
+                mm200 = float(hist["Close"].rolling(200).mean().iloc[-1])
+                idx_data[key]["above_ma200"] = cur > mm200
+                idx_data[key]["vs_mm200"]    = round((cur / mm200 - 1) * 100, 1)
 
         cac_vs   = idx_data.get("cac", {}).get("vs_mm20", 0.0)
         spy_vs   = idx_data.get("spy", {}).get("vs_mm20", 0.0)
         above_mm = sum(1 for v in [cac_vs, spy_vs] if v > -1.0)
         avg_mom  = sum(idx_data.get(k, {}).get("mom1m", 0) for k in ("cac", "spy")) / 2
+        ma200_flags = [d.get("above_ma200") for d in idx_data.values()
+                       if d.get("above_ma200") is not None]
+        nb_above_ma200 = sum(1 for f in ma200_flags if f)
 
         if vix > 40:
             label = "CRISIS"
-        elif vix > 28 or above_mm == 0:
+        elif vix > 28 or above_mm == 0 or (ma200_flags and nb_above_ma200 == 0):
+            # Indices sous leur MM200 = tendance long terme cassée → régime
+            # défensif (force relative uniquement), même si le VIX reste calme.
             label = "CORRECTION"
-        elif vix > 20 or above_mm < 2 or avg_mom < -2:
+        elif vix > 20 or above_mm < 2 or avg_mom < -2 or (ma200_flags and nb_above_ma200 < len(ma200_flags)):
             label = "NEUTRAL"
         else:
             label = "BULL"
 
         cac_str = f"CAC {cac_vs:+.1f}% vs MM20" if "cac" in idx_data else ""
         spy_str = f"SPY {spy_vs:+.1f}% vs MM20" if "spy" in idx_data else ""
-        summary = f"RÉGIME {label} | VIX {vix}" + (f" | {cac_str}" if cac_str else "") + (f" | {spy_str}" if spy_str else "")
+        ma_str  = (f"MM200 : {nb_above_ma200}/{len(ma200_flags)} indices au-dessus"
+                   if ma200_flags else "")
+        summary = (f"RÉGIME {label} | VIX {vix}"
+                   + (f" | {cac_str}" if cac_str else "")
+                   + (f" | {spy_str}" if spy_str else "")
+                   + (f" | {ma_str}" if ma_str else ""))
 
         return {
             "label":         label,
             "vix":           round(vix, 1),
             "cac_vs_mm20":   idx_data.get("cac", {}).get("vs_mm20"),
             "spy_vs_mm20":   idx_data.get("spy", {}).get("vs_mm20"),
+            "cac_vs_mm200":  idx_data.get("cac", {}).get("vs_mm200"),
+            "spy_vs_mm200":  idx_data.get("spy", {}).get("vs_mm200"),
             "index_mom_avg": round(avg_mom, 1),
             "summary":       summary,
         }

@@ -226,13 +226,15 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
 | **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +3% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
 | **Positions HOLD long terme** | `/hold TICKER` : sortie du périmètre bot (pas d'alertes, hors P&L trading, jamais proposée à la vente) |
-| **Mode gain réduit** | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) à rentabilité nette de frais contrôlée |
+| **Sélection momentum validée** | Momentum 12 mois (hors dernier mois) + cours > MM200 + entrée sur repli sain (RSI 35-65) — voir [Stratégie](#stratégie-de-sélection--validée-par-la-recherche-académique) |
+| **Sizing par le risque** | Perte au SL = 1% du budget autonome, SL ≈ 2×ATR, taille réduite si volatilité élevée ou série de pertes |
+| **Mode gain réduit** (opt-in) | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) — désactivé par défaut (`SMALL_GAIN_MODE=on` pour l'activer) |
 | **Dashboard visuel** | http://localhost:8642 (accès Tailscale possible) + `/dashboard` Telegram : P&L cumulé, cash engagé, ROI, trades filtrables |
 | **Instructions d'ordres** | Format Bourse Direct step-by-step, prêt à saisir sur mobile ou web |
 | **Import screenshot** | Envoyez vos captures d'écran — le bot lit et importe automatiquement |
 | **Import CSV** | Envoyez l'export Bourse Direct — importe avec SL/TP par défaut |
 | **IA pluggable** | 5 providers : Groq, Gemini (gratuits), Anthropic, OpenAI, Mistral |
-| **Indicateurs techniques** | RSI 14j, momentum 1 mois, ratio volume — filtre avant analyse IA |
+| **Indicateurs techniques** | RSI 14j, momentum 1 mois et 12-1, MM200, ATR 14j, volatilité réalisée, ratio volume — filtre avant analyse IA |
 | **Catalyseurs imminents** | Recherche résultats, contrats, OPA, rachats — signaux +10% et plus |
 | **Sentiment marché temps réel** | VIX + CNN Fear & Greed injectés dans chaque briefing |
 | **Sync Gmail Bourse Direct** | Détecte auto les emails "Finalisation de votre stratégie" et clôture les positions |
@@ -388,7 +390,7 @@ TradingBot/
 >
 > **Horaires par marché** : un titre US n'est acheté qu'entre 15h35 et 21h55 Paris (Euronext : 9h05-17h25) — les opportunités US validées le matin attendent l'ouverture de Wall Street.
 >
-> **Mode gain réduit** : quand aucune opportunité à +10% ne passe la validation, le bot re-teste les meilleurs candidats en trade court (TP +3 à +8% calé sous la première résistance, SL ≤ TP en %, horizon 1-5 jours) — la rentabilité nette de frais reste contrôlée. Objectif : gagner un peu chaque jour plutôt que rien.
+> **Mode gain réduit** (désactivé par défaut — `SMALL_GAIN_MODE=on` pour l'activer) : quand aucune opportunité à +10% ne passe la validation, le bot re-teste les meilleurs candidats en trade court (TP +3 à +8%, horizon 1-5 jours). Désactivé car forcer un trade quand rien ne passe est le schéma « overtrading » documenté (Barber & Odean 2000) — zéro trade est un résultat acceptable.
 >
 > **Trailing stop réel** : dès **+3%** (autonome) ou **+BREAKEVEN_THRESHOLD%** (manuel), le bot **remplace l'ordre Expert sur BD** avec le SL remonté au PRU — automatique, TP inchangé, uniquement pour les positions protégées par un ordre Expert actif (les positions historiques sans ordre ne sont jamais touchées).
 
@@ -497,7 +499,7 @@ Le mode Autonome permet au bot de gérer un **budget isolé** en totale indépen
 
 ### Ce que le bot fait seul
 
-1. **Recherche** — À chaque check planifié (9h, 12h, 15h, 17h), il filtre ~100 actions via RSI / momentum / volume, puis valide les 5 meilleurs candidats avec l'IA
+1. **Recherche** — À chaque check planifié (9h, 12h, 15h, 17h), il filtre ~100 actions selon la stratégie validée par la recherche (momentum 12 mois hors dernier mois, cours > MM200, zone d'entrée RSI 35-65), puis valide les meilleurs candidats avec l'IA (contrôle qualitatif : news, OPA, événements binaires)
 2. **Entrée** — Place un ordre Expert achat (entrée + SL + TP) sur Bourse Direct — le SL et le TP sont garantis côté BD
 3. **Trailing stop** — Quand la position atteint **+3%** du PRU, relève le SL au PRU (P&L ≥ 0 garanti)
 4. **Sortie** — Les ordres Expert sur BD gèrent les sorties automatiquement (SL ou TP atteint). Le bot détecte la sortie et vous notifie
@@ -637,6 +639,17 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-14 — Phase 1 : stratégie alignée sur la recherche académique
+- **Sélection 12-1** : le screen quantitatif classe par momentum 12 mois HORS dernier mois (Jegadeesh & Titman 1993) — plus jamais par momentum 1 mois, dont les gagnants s'inversent (cause des achats de sommets de 06-07/2026)
+- **Filtre MM200** : achat uniquement au-dessus de la MM200 (titre + indices) ; le régime passe en CORRECTION si CAC et S&P sont sous leur MM200 même avec VIX calme
+- **Zone d'entrée RSI 35-65** + veto quantitatif dur à RSI > 70, inviolable par l'IA
+- **SL adapté à la volatilité** : ≈ 2×ATR borné 3-10%, élargi si l'IA propose un stop dans le bruit ; TP ≥ 1.5× la distance du SL (ratio R/R minimum)
+- **Sizing par le risque** : perte au SL = 1% du budget autonome (fini le all-in), coût ≤ 30% du budget, taille ÷2 si volatilité 20j > 1.5× la normale (Barroso & Santa-Clara 2015)
+- **Prompts IA neutralisés** : suppression de « penche vers ACHAT » et « prime sur ton instinct de prudence » — décision symétrique, l'IA est un contrôle qualitatif (news, OPA, événements binaires)
+- **Gain réduit opt-in** : mode désactivé par défaut (`SMALL_GAIN_MODE`) — l'overtrading forcé détruit la performance retail (Barber & Odean 2000)
+- **Limite marchande** : l'entrée autonome se place 0.3% au-dessus du cours pour exécution immédiate — plus de limite qui traîne sous le marché
+- Nouveaux paramètres `.env` : `RSI_ENTRY_MIN/MAX`, `RSI_HARD_MAX`, `ATR_SL_MULT`, `MIN/MAX_SL_PCT`, `MIN_RR`, `RISK_PER_TRADE_PCT`, `MAX_POSITION_PCT`, `VOL_SCALE_TRIGGER`, `SMALL_GAIN_MODE`
+
 ### 2026-07-14
 - **`/hold TICKER [off]`** : position HOLD long terme, **hors gestion bot** — plus d'alertes SL/TP ni trailing, exclue du P&L trading (`/stats`), jamais proposée à la vente/swap par l'IA (le sync BD continue de suivre qté/PRU)
 - **Annulation auto des ordres d'entrée périmés** : un achat limite autonome non exécuté à la clôture du marché du titre est annulé sur BD (cycle d'entrée + sync horaire) ; annulation immédiate si une validation ultérieure rend EXCLUS sur le même titre. Motif : anti-sélection — un limite qui traîne ne se remplit que quand le momentum s'est retourné (cas AF.PA)
@@ -688,24 +701,54 @@ Pour un usage continu, activez `./bot.sh autostart` : démarrage au boot + relan
 
 ---
 
+## Stratégie de sélection — validée par la recherche académique
+
+Depuis 07/2026, la sélection suit les résultats **répliqués** de la littérature financière — plus de chasse aux hausses du mois :
+
+| Principe | Implémentation | Référence |
+|---|---|---|
+| Le momentum rentable se mesure sur **12 mois HORS dernier mois** ; les gagnants du dernier mois **s'inversent** | Classement par `mom_12_1`, plus jamais par momentum 1 mois | Jegadeesh & Titman 1993 (*JF*) ; Jegadeesh 1990 ; Lehmann 1990 |
+| Filtre de tendance long terme | Achat uniquement si cours **> MM200** (titre ET indices — le régime passe en CORRECTION si CAC et S&P sont sous leur MM200, même avec un VIX calme) | Moskowitz, Ooi & Pedersen 2012 (*JFE*) |
+| Pas d'entrée en surchauffe : on achète le **repli sain dans la tendance** | Zone d'entrée RSI 35-65, **veto quantitatif dur à RSI > 70** (indépendant de l'IA) | réversion court terme, Jegadeesh 1990 |
+| Les stops aident les stratégies momentum s'ils sont hors du bruit | SL ≈ **2×ATR** sous l'entrée, borné 3-10% ; TP ≥ **1.5×** la distance du SL | Kaminski & Lo 2014 (*J. Financial Markets*) |
+| Dimensionner par le **risque**, pas par le budget | Perte au SL = **1% du budget autonome** ; coût ≤ 30% du budget | fractional Kelly (MacLean, Thorp & Ziemba 2011) |
+| Réduire la voilure quand la volatilité monte | Taille **÷2** si vol 20j > 1.5× la vol 1 an du titre + réduction en série de pertes | Barroso & Santa-Clara 2015 (*JFE*) ; Moreira & Muir 2017 |
+| L'overtrading détruit la performance retail | Mode « gain réduit » (trades courts forcés) **désactivé par défaut** — zéro trade est un résultat acceptable | Barber & Odean 2000 (*JF*) ; Novy-Marx & Velikov 2016 |
+
+L'IA reste dans la boucle comme **contrôle qualitatif symétrique** (news invalidante, OPA plafonnée, événement binaire imminent, illiquidité) — elle ne peut plus contourner les garde-fous quantitatifs, et aucune directive ne la pousse vers l'achat.
+
+> Aucune stratégie ne gagne à tous les coups : les meilleures stratégies documentées gagnent 50-60% du temps et font leur performance sur l'asymétrie gain/perte et le contrôle du risque. Méfiez-vous de quiconque promet le contraire.
+
 ## Règles de trading par défaut
 
-- **Stop-loss** : -7% sur PRU
-- **Take-profit** : +10% sur PRU (minimum — l'IA peut viser plus haut si le potentiel le justifie)
+- **Stop-loss** : technique, ≈ 2×ATR sous l'entrée, borné 3-10% (fallback -7% fixe pour les positions manuelles sans ATR)
+- **Take-profit** : ≥ 1.5× la distance du SL, +10% typique (l'IA peut viser plus haut si le potentiel le justifie)
 - **Trailing stop** : SL relevé au PRU à +5% (positions manuelles) / +3% (mode autonome)
-- **Taille de position suggérée** (`/scan`) : 50% du cash, plafonné à 800€
+- **Taille autonome** : risque au SL = 1% du budget, coût ≤ 30% du budget · **Taille suggérée** (`/scan`) : 50% du cash, plafonné à 800€
 - Modifiables dans `.env` :
 
 ```env
-DEFAULT_SL_PCT=7          # stop-loss en % sous le PRU
+DEFAULT_SL_PCT=7          # stop-loss fixe fallback en % sous le PRU
 DEFAULT_TP_PCT=10         # take-profit minimum en % au-dessus du PRU
 BREAKEVEN_THRESHOLD=5     # trailing stop positions manuelles : % au-dessus du PRU
-POSITION_BUDGET_PCT=50    # % du cash investi par nouvelle position
+POSITION_BUDGET_PCT=50    # % du cash investi par nouvelle position (suggestions /scan)
 POSITION_BUDGET_MAX=800   # plafond en € par position (à adapter à votre capital)
+
+RSI_ENTRY_MIN=35          # zone d'entrée saine (pullback dans la tendance)
+RSI_ENTRY_MAX=65          # au-delà : on attend le repli
+RSI_HARD_MAX=70           # veto dur à l'achat, indépendant du verdict IA
+ATR_SL_MULT=2.0           # distance SL = 2×ATR 14j
+MIN_SL_PCT=3              # SL jamais plus serré (bruit du titre)
+MAX_SL_PCT=10             # au-delà : titre trop volatil → exclu
+MIN_RR=1.5                # TP ≥ 1.5× la distance du SL
+RISK_PER_TRADE_PCT=1.0    # perte au SL en % du budget autonome
+MAX_POSITION_PCT=30       # coût max d'une position en % du budget autonome
+VOL_SCALE_TRIGGER=1.5     # vol 20j > 1.5× vol 1 an → taille réduite de moitié
 
 BROKERAGE_FEE=1.98        # frais de courtage BD par ordre (aller-retour = 2×)
 MIN_NET_GAIN_FEE_RATIO=5  # gain brut au TP requis : au moins N× les frais A/R
 
+SMALL_GAIN_MODE=off       # trades courts forcés quand rien ne passe (déconseillé)
 FALLBACK_TP_MIN_PCT=3     # mode gain réduit : TP minimum des trades courts
 FALLBACK_TP_MAX_PCT=8     # mode gain réduit : TP maximum des trades courts
 

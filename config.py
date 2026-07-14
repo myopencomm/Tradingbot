@@ -45,6 +45,38 @@ GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 DEFAULT_SL_PCT = float(os.getenv("DEFAULT_SL_PCT", "7"))
 DEFAULT_TP_PCT = float(os.getenv("DEFAULT_TP_PCT", "10"))
 
+# ── Stratégie momentum validée par la recherche (Phase 1, 07/2026) ───────────
+# Formation 12 mois HORS dernier mois (Jegadeesh & Titman 1993) : le momentum
+# 1 mois seul TEND À S'INVERSER (Jegadeesh 1990, Lehmann 1990) — on ne chasse
+# plus les hausses du mois. Entrée uniquement au-dessus de la MM200 (filtre de
+# tendance, Moskowitz-Ooi-Pedersen 2012) et hors surchauffe court terme.
+RSI_ENTRY_MIN = float(os.getenv("RSI_ENTRY_MIN", "35"))   # zone d'entrée saine
+RSI_ENTRY_MAX = float(os.getenv("RSI_ENTRY_MAX", "65"))   # > 65 = on attend le repli
+RSI_HARD_MAX  = float(os.getenv("RSI_HARD_MAX", "70"))    # veto dur à l'achat
+
+# Stops adaptés à la volatilité du titre (Kaminski & Lo 2014 : les stops
+# aident les stratégies momentum) : distance SL ≈ ATR_SL_MULT × ATR14,
+# bornée [MIN_SL_PCT, MAX_SL_PCT]. TP ≥ MIN_RR × distance SL.
+ATR_SL_MULT = float(os.getenv("ATR_SL_MULT", "2.0"))
+MIN_SL_PCT  = float(os.getenv("MIN_SL_PCT", "3"))
+MAX_SL_PCT  = float(os.getenv("MAX_SL_PCT", "10"))
+MIN_RR      = float(os.getenv("MIN_RR", "1.5"))
+
+# Sizing par le RISQUE (fractional-Kelly conservateur) : la perte au SL vaut
+# RISK_PER_TRADE_PCT % du budget autonome — plus jamais tout le budget sur un
+# trade. Coût plafonné à MAX_POSITION_PCT % du budget. Réduction de moitié si
+# la volatilité 20j du titre dépasse VOL_SCALE_TRIGGER × sa volatilité 1 an
+# (volatility scaling, Barroso & Santa-Clara 2015).
+RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "1.0"))
+MAX_POSITION_PCT   = float(os.getenv("MAX_POSITION_PCT", "30"))
+VOL_SCALE_TRIGGER  = float(os.getenv("VOL_SCALE_TRIGGER", "1.5"))
+
+# Mode GAIN RÉDUIT (trades courts forcés quand rien ne passe) : DÉSACTIVÉ par
+# défaut — c'est le schéma « overtrading » documenté (Barber & Odean 2000) et
+# il a produit les entrées en surchauffe de 07/2026. SMALL_GAIN_MODE=on pour
+# le réactiver en connaissance de cause.
+SMALL_GAIN_MODE = os.getenv("SMALL_GAIN_MODE", "off").strip().lower() in ("on", "true", "1", "yes")
+
 # Sizing d'une nouvelle position : % du cash, plafonné en €
 POSITION_BUDGET_PCT = float(os.getenv("POSITION_BUDGET_PCT", "50"))
 POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "800"))

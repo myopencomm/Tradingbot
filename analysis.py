@@ -12,7 +12,10 @@ from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT,
                     POSITION_BUDGET_PCT, POSITION_BUDGET_MAX,
                     BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO,
-                    FALLBACK_TP_MIN_PCT, FALLBACK_TP_MAX_PCT)
+                    FALLBACK_TP_MIN_PCT, FALLBACK_TP_MAX_PCT,
+                    RSI_ENTRY_MIN, RSI_ENTRY_MAX, RSI_HARD_MAX,
+                    ATR_SL_MULT, MIN_SL_PCT, MAX_SL_PCT, MIN_RR,
+                    SMALL_GAIN_MODE)
 
 # ── Univers de scan (~100 actions Bourse Direct) ──────────────────────────────
 # Le filtre quantitatif (RSI/momentum/volume) élimine les tickers invalides
@@ -74,6 +77,9 @@ def _entry_ctx(tech: dict, pctx: dict, thesis: str, source: str,
         "regime":      regime,
         "rsi":         tech.get("rsi"),
         "momentum_1m": tech.get("momentum_1m"),
+        "mom_12_1":    tech.get("mom_12_1"),
+        "above_ma200": tech.get("above_ma200"),
+        "atr_pct":     tech.get("atr_pct"),
         "vol_ratio":   tech.get("vol_ratio"),
         "perf_1y":     pctx.get("perf_1y"),
         "from_52w_low": pctx.get("from_52w_low"),
@@ -107,21 +113,32 @@ _TP = f"{DEFAULT_TP_PCT:.0f}"
 _scan_lock = threading.Lock()
 
 TRADER_SYSTEM = f"""Tu es un expert trader actif sur tous les marchés accessibles via Bourse Direct (France).
-Compte-titres ordinaire (CTO), horizon court à moyen terme (jours à quelques semaines).
-Règles strictes: stop-loss -{_SL}% sur PRU, objectif minimum +{_TP}%, pas de levier.
-TP STRETCH : +{_TP}% est un MINIMUM, pas un plafond. Si l'objectif analyste ou le
-catalyseur justifie davantage, vise plus haut — et indique TOUJOURS le TP exact
-en prix ET en % pour que l'ordre puisse être passé tel quel.
+Compte-titres ordinaire (CTO), horizon swing/momentum : semaines à quelques mois —
+on laisse courir les gagnants, on coupe vite les perdants. Pas de levier.
+Règles strictes :
+- STOP-LOSS technique : sous le dernier support, ≈ 2×ATR sous l'entrée
+  (l'ATR 14j est fourni), jamais plus de {MAX_SL_PCT:.0f}% ni moins de {MIN_SL_PCT:.0f}%.
+- TAKE-PROFIT : minimum {MIN_RR:.1f}× la distance du SL (ratio risque/rendement),
+  objectif type +{_TP}%. +{_TP}% est un MINIMUM, pas un plafond : si le potentiel
+  le justifie, vise plus haut — indique TOUJOURS le TP exact en prix ET en %.
 Univers : Euronext Paris/Growth, Euronext Amsterdam/Bruxelles, NYSE, NASDAQ, LSE, Xetra — tout ce qu'on peut acheter sur Bourse Direct.
 Priorité au meilleur rapport risque/rendement, peu importe le marché."""
 
 ANALYSIS_RULES = f"""
 RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
-- RSI : survente = RSI < 30. Zone 30-70 : sain. RSI 70-78 : EXTENSION, PAS un
-  motif d'exclusion en soi — dans une tendance haussière confirmée (momentum positif,
-  cours > MM20/MM50) c'est NORMAL et tradeable en momentum, avec gestion serrée du SL.
-  RSI > 80 : surachat extrême → prudence, attendre repli ou EXCLUS.
+- STRATÉGIE DE FOND (validée par la recherche académique) : on achète la FORCE
+  ÉTABLIE (momentum 12 mois hors dernier mois positif, cours > MM200) au moment
+  d'un REPLI SAIN — jamais la surchauffe du mois en cours. Le momentum 1 mois
+  seul S'INVERSE statistiquement : un titre qui vient de faire +15% sur le mois
+  avec RSI > {RSI_HARD_MAX:.0f} est un MAUVAIS point d'entrée, pas un signal d'achat.
+- RSI : survente = RSI < 30. Zone d'ENTRÉE saine : {RSI_ENTRY_MIN:.0f}-{RSI_ENTRY_MAX:.0f}
+  (pullback dans une tendance haussière au-dessus de la MM200).
+  RSI > {RSI_HARD_MAX:.0f} : PAS de nouvelle entrée — attendre le repli (réversion
+  court terme documentée). Ce seuil est appliqué aussi par un garde-fou
+  quantitatif indépendant de ton verdict.
   Ne jamais parler de « survente relative » pour un RSI à 40-50.
+- MM200 : cours sous la MM200 = tendance long terme non confirmée → EXCLUS
+  (sauf mission CORRECTION explicite avec force relative).
 - COUTEAU QUI TOMBE : si perf 1 an < -30% OU cours à moins de +15% du plus bas
   52 semaines → risque HIGH obligatoire, et ACHAT uniquement avec un catalyseur
   de RETOURNEMENT précis et daté. Des résultats trimestriels ordinaires ne
@@ -130,9 +147,13 @@ RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
   baisse (les analystes abaissent progressivement). Ne JAMAIS utiliser un
   objectif analyste comme TP ni comme preuve d'upside court terme — mention
   indicative uniquement.
-- TP : doit être atteignable dans l'horizon du trade (jours à semaines).
-  Plafond +{2 * DEFAULT_TP_PCT:.0f}% sauf événement binaire daté (OPA en cours,
-  décision FDA). Une mégacap ne fait pas +50% sur des résultats trimestriels.
+- SL : technique, sous le dernier support, ≈ {ATR_SL_MULT:.0f}×ATR sous l'entrée,
+  borné {MIN_SL_PCT:.0f}-{MAX_SL_PCT:.0f}%. Si {ATR_SL_MULT:.0f}×ATR dépasse {MAX_SL_PCT:.0f}%,
+  le titre est trop volatil pour la taille de compte → EXCLUS.
+- TP : minimum {MIN_RR:.1f}× la distance du SL, atteignable dans l'horizon du
+  trade (semaines à quelques mois). Plafond +{2 * DEFAULT_TP_PCT:.0f}% sauf événement
+  binaire daté (OPA en cours, décision FDA). Une mégacap ne fait pas +50% sur
+  des résultats trimestriels.
 - OPA / OFFRE DE RACHAT — RÈGLE ABSOLUE : si une OPA, offre de rachat ou fusion
   est en cours à un prix P, le cours ne peut PHYSIQUEMENT pas dépasser P (sauf
   surenchère). Le TP DOIT être ≤ P. Si le spread (P − cours_actuel) / cours_actuel
@@ -141,44 +162,44 @@ RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
   Une OPA n'est PAS un catalyseur haussier au-delà du prix d'offre — c'est un plafond dur.
   Si la recherche web mentionne une OPA, une acquisition, un rachat ou un "takeover bid"
   sur ce titre → vérifier immédiatement le prix d'offre avant tout autre raisonnement.
-- TRADE MOMENTUM : l'absence de catalyseur daté n'est PAS un motif d'exclusion.
-  Si tendance haussière confirmée — perf 3 mois positive ET momentum 1 mois
-  positif ET RSI < 78 — c'est une thèse ACHAT VALIDE de plein droit :
-  TP +{DEFAULT_TP_PCT:.0f}% à +{1.5 * DEFAULT_TP_PCT:.0f}%, risque MEDIUM minimum,
-  précise le niveau technique qui invalide la thèse (support/SL).
-  Jamais sur un couteau qui tombe.
+- CATALYSEUR : l'absence de catalyseur daté n'est PAS un motif d'exclusion —
+  le momentum 12 mois + tendance MM200 EST la thèse. Mais un événement binaire
+  IMMINENT (résultats < 5 jours, décision réglementaire) sur une position
+  swing = risque HIGH, à signaler.
 - SENTIMENT SOCIAL : signal d'appoint — jamais un argument principal d'achat.
-- DOUTE : un trade momentum propre (tendance + volume + RSI < 78) n'est PAS un
-  « doute » — c'est validable. N'EXCLUS que sur un vrai défaut : couteau qui tombe,
-  surachat extrême (RSI > 80), illiquidité, thèse contredite par les news, OPA plafonnée.
-  Ne rejette pas un bon momentum par excès de prudence : le but est de TROUVER des
-  trades à +{_TP}%, pas de tout écarter.
 """
 
-# Directive DOMINANTE injectée dans les prompts de validation. Recadre la mission :
-# le candidat a DÉJÀ passé un filtre quantitatif de momentum. Le rôle de l'IA est de
-# CONFIRMER ou de trouver un défaut DISQUALIFIANT concret — pas d'exiger un catalyseur.
+# Directive injectée dans les prompts de validation. Cadre la mission : le
+# candidat a passé un filtre quantitatif VALIDÉ (momentum 12-1 + MM200 + zone
+# RSI saine). Le rôle de l'IA : décision SYMÉTRIQUE — chercher les défauts
+# disqualifiants que les chiffres ne voient pas (news, OPA, illiquidité,
+# événement binaire), sans exiger de catalyseur ni forcer l'achat.
 SCREEN_DIRECTIVE = f"""
-⚠️ DIRECTIVE PRIORITAIRE — elle PRIME sur ton instinct de prudence :
-Ce candidat a déjà passé un filtre quantitatif (tendance haussière + volume confirmés).
-Un momentum haussier propre EST une thèse d'achat VALIDE en soi : tendance positive +
-RSI < 78 + cours au-dessus des moyennes mobiles → ACHAT légitime, TP +{_TP}%, SL -{_SL}%.
+CADRE DE DÉCISION — ce candidat a passé le filtre quantitatif validé par la
+recherche : momentum 12 mois (hors dernier mois) positif, cours > MM200, RSI
+en zone d'entrée {RSI_ENTRY_MIN:.0f}-{RSI_ENTRY_MAX:.0f} (pullback, pas surchauffe).
+La thèse quantitative est donc SOLIDE a priori. Ton rôle est le contrôle
+QUALITATIF que les chiffres ne voient pas. Décide de façon SYMÉTRIQUE :
+ne force ni l'achat ni la prudence.
 
-Tu n'as PAS besoin d'un catalyseur daté pour valider un momentum. NE SONT PAS des
-motifs d'exclusion (ne les utilise JAMAIS pour rejeter un momentum sain) :
-- « pas de catalyseur » / « pas d'événement avant telle date »
+NE SONT PAS des motifs d'exclusion :
+- « pas de catalyseur daté » (le momentum 12 mois + tendance EST la thèse)
 - « objectif analyste sous le cours » (cible 12 mois, en retard sur le prix)
-- « consolidation » / « post-pic » / « sous résistance » sur une tendance haussière
-- sentiment de marché « fear » général (ce n'est pas spécifique au titre)
+- sentiment de marché « fear » général (non spécifique au titre)
+- un repli récent du cours : c'est précisément le point d'entrée recherché,
+  tant que le support tient et que la tendance MM200 est intacte
 
-EXCLUS UNIQUEMENT sur un défaut DISQUALIFIANT concret et spécifique au titre :
-- couteau qui tombe (perf 1 an < -30% ou cours < +15% du plus bas 52s)
-- surachat extrême : RSI > 80
-- une NEWS précise qui invalide la tendance (profit warning, scandale, perte de contrat)
+SONT des motifs d'EXCLUSION légitimes :
+- une NEWS précise qui invalide la tendance (profit warning, scandale, perte
+  de contrat, guidance abaissée)
 - OPA plafonnée (spread < +{_TP}%)
+- événement binaire imminent (résultats/décision < 5 jours) — trop de risque de gap
 - illiquidité réelle / société en difficulté financière
-Si aucun de ces défauts n'est présent → c'est un ACHAT. Dans le doute sur un momentum
-propre, penche vers ACHAT, pas vers EXCLUS.
+- structure technique cassée : support majeur perdu, cours repassé sous MM200
+- couteau qui tombe (perf 1 an < -30% ou cours < +15% du plus bas 52s)
+Si tu hésites entre ACHAT et EXCLUS sans défaut concret identifié, dis ACHAT
+avec risque MEDIUM et un SL rigoureux ; si tu as identifié un défaut de la
+liste, dis EXCLUS et cite-le précisément.
 """
 
 TICKER_RULES = """
@@ -393,13 +414,14 @@ ou si secteur cyclique sans thèse macro claire en contexte de correction."""
     if regime == "NEUTRAL":
         return f"""
 RÉGIME : NEUTRE ({regime_summary})
-Marché sans tendance d'indice claire, MAIS les titres en momentum propre restent
-tradeables — c'est justement là qu'on trouve les surperformances. Un momentum haussier
-individuel (tendance + volume + RSI < 78) est VALIDE même sans catalyseur daté.
-Préfère les titres avec force relative positive vs l'indice. Gestion du SL serrée."""
+Marché sans tendance d'indice claire. Les titres en momentum 12 mois propre
+au-dessus de leur MM200 restent tradeables, mais EXIGE une force relative
+positive vs l'indice (le filtre quantitatif l'a déjà vérifiée — confirme
+qu'aucune news ne l'explique par un facteur non répétable). Gestion du SL serrée."""
     return f"""
 RÉGIME : HAUSSIER ({regime_summary})
-Conditions favorables. Scan momentum standard."""
+Conditions favorables. Scan momentum standard (12 mois hors dernier mois,
+entrée sur repli sain)."""
 
 
 def validate_candidate(ticker: str, *, mode: str = "standard",
@@ -462,9 +484,19 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
         rel_line = (f"- Force relative vs indice : {rel:+.1f}% (indice : {index_mom:+.1f}%)\n"
                     if rel is not None else "")
         score_line = f"- Score quant : {item['score']:+.1f}\n" if item.get("score") is not None else ""
+        m121 = tech.get("mom_12_1")
+        m121_line = (f"- Momentum 12 mois (hors dernier mois) : {m121:+}% — signal de formation\n"
+                     if m121 is not None else "")
+        ma_dist = tech.get("ma200_dist_pct")
+        ma_line = (f"- Cours vs MM200 : {ma_dist:+}% ({'AU-DESSUS' if tech.get('above_ma200') else 'SOUS la MM200 ⚠️'})\n"
+                   if ma_dist is not None else "")
+        atr = tech.get("atr_pct")
+        atr_line = (f"- ATR 14j : {atr}% du cours → SL technique ≈ -{min(max(ATR_SL_MULT * atr, MIN_SL_PCT), MAX_SL_PCT):.1f}%\n"
+                    if atr else "")
         tech_block = (f"\nINDICATEURS TECHNIQUES\n"
                       f"- RSI 14j : {tech.get('rsi', 'N/A')}\n"
                       f"- Momentum 1 mois : {tech.get('momentum_1m', 'N/A'):+}%\n"
+                      f"{m121_line}{ma_line}{atr_line}"
                       f"- Volume ratio : {tech.get('vol_ratio', 'N/A')}x moyenne 20j\n"
                       f"{rel_line}{score_line}")
     funds_lines = []
@@ -496,20 +528,21 @@ RÈGLES DU TRADE COURT :
 - TP : +{FALLBACK_TP_MIN_PCT:.0f}% à +{FALLBACK_TP_MAX_PCT:.0f}% — cale-le SOUS la première résistance.
   Ici une résistance proche est une CIBLE à exploiter, PAS un motif d'exclusion.
 - SL : serré, sous le dernier support — en %, jamais plus de la moitié du TP visé.
-- Momentum sain exigé : tendance 1 mois positive, RSI < 75, pas de couteau qui tombe.
+- Momentum sain exigé : tendance 1 mois positive, RSI < {RSI_HARD_MAX:.0f}, pas de couteau qui tombe.
 - EXCLUS si résultats ou événement binaire dans les 5 prochains jours."""
         tp_line = (f"{company_name} ({ticker}) — Entrée : {price}{sym}  "
                    f"SL : X{sym} (-X%)  TP : X{sym} (+X%)")
         rules_head = f"{ANALYSIS_RULES}\n{_lessons_block()}{TICKER_RULES}"
     elif mode == "confirm":
         directive = f"""{SCREEN_DIRECTIVE}
-⚡ MODE CONFIRMATION PRÉ-ACHAT — PRIME SUR TON INSTINCT DE PRUDENCE :
-Ce titre a DÉJÀ été validé ACHAT aujourd'hui par l'analyse complète. Ton rôle
-N'EST PAS de re-juger l'opportunité : c'est un DERNIER contrôle pour détecter un
-défaut DISQUALIFIANT (couteau qui tombe, RSI > 80, news invalidante, OPA
-plafonnée, illiquidité réelle). « volume faible », « résistance proche »,
-« consolidation », « attendre un repli » ne sont PAS des défauts disqualifiants.
-Si aucun défaut disqualifiant concret → ACHAT."""
+⚡ MODE CONFIRMATION PRÉ-ACHAT :
+Ce titre a été validé ACHAT aujourd'hui par l'analyse complète. Ton rôle est un
+DERNIER contrôle avant l'ordre réel : vérifie qu'aucun défaut disqualifiant de
+la liste ci-dessus n'est apparu ou n'a été manqué (news invalidante, OPA
+plafonnée, événement binaire imminent, illiquidité, structure cassée, RSI
+repassé > {RSI_HARD_MAX:.0f}). Ne re-juge pas l'attractivité générale de
+l'opportunité — mais si un défaut CONCRET est présent, EXCLUS sans hésiter :
+mieux vaut un trade raté qu'une perte évitable."""
         tp_line = (f"{company_name} ({ticker}){(' — ' + company_sector) if company_sector else ''}\n"
                    f"- Entrée : {price}{sym}  SL : X{sym} (-{_SL}%)  "
                    f"TP : X{sym} (+X% — minimum +{_TP}%)")
@@ -563,6 +596,43 @@ Si ACHAT : format exact (symbole {sym}, le titre cote en {cur}) :
     # Garde-fou commun : une opportunité valide DOIT avoir entrée+SL+TP cohérents
     if verdict == "ACHAT" and not (sl_v and tp_v and sl_v < entry < tp_v):
         verdict, reason = "EXCLUS", reason or "niveaux entrée/SL/TP incohérents"
+
+    # ── Garde-fous QUANTITATIFS — indépendants du verdict IA ─────────────────
+    # La recherche est sans ambiguïté sur ces points ; aucun prompt ne doit
+    # pouvoir les contourner (les achats en surchauffe de 06-07/2026 venaient
+    # d'une directive qui écrasait la prudence de l'IA).
+    if verdict == "ACHAT":
+        rsi_now  = tech.get("rsi")
+        above_ma = tech.get("above_ma200")
+        atr      = tech.get("atr_pct")
+        if rsi_now is not None and rsi_now > RSI_HARD_MAX:
+            # Réversion court terme (Jegadeesh 1990) : pas d'entrée en surchauffe
+            verdict, reason = "EXCLUS", (f"surchauffe court terme (RSI {rsi_now} > "
+                                         f"{RSI_HARD_MAX:.0f}) — attendre le repli")
+        elif above_ma is False:
+            verdict, reason = "EXCLUS", "cours sous la MM200 — tendance long terme non confirmée"
+        elif atr and ATR_SL_MULT * atr > MAX_SL_PCT:
+            verdict, reason = "EXCLUS", (f"trop volatil ({ATR_SL_MULT:.0f}×ATR = "
+                                         f"{ATR_SL_MULT * atr:.1f}% > SL max {MAX_SL_PCT:.0f}%)")
+    if verdict == "ACHAT" and sl_v and tp_v:
+        sl_pct = (entry - sl_v) / entry * 100
+        # SL dans le bruit du titre → élargi à ATR_SL_MULT×ATR (borné) : un stop
+        # plus serré que la volatilité normale se fait toucher sans signal.
+        atr = tech.get("atr_pct")
+        if atr:
+            tech_sl = min(max(ATR_SL_MULT * atr, MIN_SL_PCT), MAX_SL_PCT)
+            if sl_pct < tech_sl * 0.75:
+                sl_v   = round(entry * (1 - tech_sl / 100), 4)
+                sl_pct = tech_sl
+                val   += (f"\n(SL élargi à -{tech_sl:.1f}% = {ATR_SL_MULT:.0f}×ATR — "
+                          f"le SL proposé était dans le bruit du titre)")
+        if sl_pct > MAX_SL_PCT:
+            verdict, reason = "EXCLUS", f"SL requis -{sl_pct:.1f}% > max {MAX_SL_PCT:.0f}% — trop volatil"
+        else:
+            rr = ((tp_v - entry) / entry * 100) / sl_pct if sl_pct else 0
+            if rr < MIN_RR:
+                verdict, reason = "EXCLUS", (f"ratio risque/rendement {rr:.1f} < {MIN_RR:.1f} "
+                                             f"(TP +{(tp_v - entry) / entry * 100:.1f}% vs SL -{sl_pct:.1f}%)")
 
     # Cohérence décision ↔ ordres réels : si un ordre d'entrée AUTONOME est
     # encore en attente sur BD pour ce titre et que la décision du jour est
@@ -813,10 +883,12 @@ MISSION
                     print(f"[briefing] pending_opp store error {t}: {_pe}")
 
         # ── Passe 3 : GAIN RÉDUIT si rien ne passe à +TP% ────────────────────
-        # Mieux vaut un petit trade net de frais que zéro trade : re-teste les
-        # 3 meilleurs candidats quant avec un TP court terme réduit.
+        # DÉSACTIVÉE par défaut (SMALL_GAIN_MODE) : forcer un trade quand rien
+        # ne passe est le schéma « overtrading » documenté (Barber & Odean
+        # 2000) — c'est cette passe qui proposait AF.PA à résistance en 07/2026.
+        # Zéro trade est un résultat acceptable.
         small_opps, small_rejected = [], []
-        if cash >= 1000 and not opportunities and quant:
+        if SMALL_GAIN_MODE and cash >= 1000 and not opportunities and quant:
             print(f"[briefing] 0 opportunité à +{_TP}% — passe gain réduit sur "
                   f"{[c['ticker'] for c in quant[:3]]}")
             small_opps, small_rejected = _small_gain_pass(ai, quant, cash, ctx, today_str)
@@ -1332,14 +1404,28 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
                   regime: str = "BULL", index_mom: float = 0.0) -> list[dict]:
     """
     Filtre quantitatif parallèle sur tout l'univers de scan.
-    Les filtres et le score s'adaptent au régime de marché :
 
-    BULL       : momentum > -8%, RSI 28-75. Score = mom × vol.
-    NEUTRAL    : momentum > -5%, RSI 28-74. Score = 60% mom + 40% force_relative.
-    CORRECTION : RSI 28-74, force_relative > 0 (action > indice). Score = rel × vol.
-                 Fallback si 0 candidats : force_relative > -3%.
+    STRATÉGIE VALIDÉE PAR LA RECHERCHE (Phase 1, 07/2026) — on classe par
+    momentum 12 mois HORS dernier mois (Jegadeesh & Titman 1993), PLUS JAMAIS
+    par momentum 1 mois : à cet horizon les gagnants s'inversent (Jegadeesh
+    1990, Lehmann 1990) — c'est ce qui a produit les achats de sommets
+    (RSI 65-75, +11-18% sur le mois) et la série de pertes de 06-07/2026.
+
+    Filtres communs BULL/NEUTRAL :
+      - cours > MM200 (filtre de tendance — Moskowitz-Ooi-Pedersen 2012)
+      - mom_12_1 > 0 (formation momentum positive)
+      - RSI dans [RSI_ENTRY_MIN, RSI_ENTRY_MAX] : on achète le PULLBACK dans
+        la tendance, pas la surchauffe
+      - momentum 1 mois > -12% (le repli est OK, l'effondrement non)
+
+    BULL       : score = mom_12_1 (plafonné à 80 pour écarter les loteries).
+    NEUTRAL    : idem + force relative > 0 exigée. Score = 0.5×mom_12_1 + 0.5×rel.
+    CORRECTION : défensif — force_relative > 0, RSI 28-70, cours > MM200.
+                 Score = rel. Fallback si 0 candidats : force_relative > -3%.
     CRISIS     : retourne [] immédiatement, aucun trade.
     """
+    from config import RSI_ENTRY_MIN, RSI_ENTRY_MAX
+
     if regime == "CRISIS":
         return []
 
@@ -1349,34 +1435,44 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
         tech = prices.get_technicals(ticker)
         if not tech:
             return None
-        rsi = tech.get("rsi")
-        mom = tech.get("momentum_1m")
-        vol = tech.get("vol_ratio") or 1.0
+        rsi  = tech.get("rsi")
+        mom  = tech.get("momentum_1m")
+        vol  = tech.get("vol_ratio") or 1.0
+        m121 = tech.get("mom_12_1")
+        above_ma = tech.get("above_ma200")
         if rsi is None or mom is None:
             return None
 
         rel = round(mom - index_mom, 1)  # force relative vs indice
+        base = {"ticker": ticker, "rsi": rsi, "mom_1m": mom, "mom_12_1": m121,
+                "vol_ratio": vol, "rel_strength": rel,
+                "atr_pct": tech.get("atr_pct"),
+                "above_ma200": above_ma,
+                "vol_ratio_20_250": tech.get("vol_ratio_20_250")}
 
         if regime == "CORRECTION":
-            if rsi > 74 or rsi < 28:
+            if rsi > 70 or rsi < 28 or above_ma is False:
                 return None
-            score = rel * (1 + vol * 0.2)
+            base["score"] = round(rel * (1 + vol * 0.2), 2)
             # Premier passage : rel > 0 (mieux que l'indice)
-            return {"ticker": ticker, "rsi": rsi, "mom_1m": mom,
-                    "vol_ratio": vol, "rel_strength": rel, "score": score}
+            return base
 
-        elif regime == "NEUTRAL":
-            if rsi > 74 or rsi < 28 or mom < -5:
+        # BULL / NEUTRAL — mêmes fondations, exigence de force relative en NEUTRAL
+        if above_ma is not True:          # MM200 inconnue (IPO) = pas de thèse tendance
+            return None
+        if m121 is None or m121 <= 0:
+            return None
+        if not (RSI_ENTRY_MIN <= rsi <= RSI_ENTRY_MAX):
+            return None
+        if mom < -12:
+            return None
+        if regime == "NEUTRAL":
+            if rel <= 0:
                 return None
-            score = (0.6 * mom + 0.4 * rel) * (1 + vol * 0.2)
-
+            base["score"] = round(0.5 * min(m121, 80) + 0.5 * rel, 2)
         else:  # BULL
-            if rsi > 75 or rsi < 28 or mom < -8:
-                return None
-            score = mom * (1 + vol * 0.2)
-
-        return {"ticker": ticker, "rsi": rsi, "mom_1m": mom,
-                "vol_ratio": vol, "rel_strength": rel, "score": round(score, 2)}
+            base["score"] = round(min(m121, 80), 2)
+        return base
 
     results = []
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -1647,9 +1743,9 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             except Exception as _pe:
                 print(f"[scan] pending_opp store error {t}: {_pe}")
 
-        # ── Passe GAIN RÉDUIT si rien ne passe à +TP% ─────────────────────────
+        # ── Passe GAIN RÉDUIT si rien ne passe à +TP% (opt-in SMALL_GAIN_MODE) ─
         small_opps, small_rejected = [], []
-        if not opportunities and screened:
+        if SMALL_GAIN_MODE and not opportunities and screened:
             print(f"[scan] 0 opportunité à +{_TP}% — passe gain réduit sur "
                   f"{[c['ticker'] for c in screened[:3]]}")
             _ctx = _trading_context()

@@ -212,22 +212,47 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     fx  = prices.fx_to_eur(quote_cur)      # 1 unité devise → EUR
     sym = prices.currency_symbol(quote_cur)
 
-    # Garde-fou piloté par les données : après une série de pertes, on RÉDUIT
-    # la taille (2 pertes → 75%, 3 → 50%, 4+ → 35%) — on prend moins de risque
-    # quand ça enchaîne, sans attendre une décision de l'IA.
+    # ── SIZING PAR LE RISQUE (Phase 1, 07/2026) ──────────────────────────────
+    # Fini le all-in (AF.PA : 992€ sur 1000€ de budget). La perte au SL vaut
+    # RISK_PER_TRADE_PCT % du budget autonome total (fractional-Kelly
+    # conservateur), coût plafonné à MAX_POSITION_PCT % du budget et au cash
+    # disponible. Deux réducteurs de risque se cumulent :
+    #  - série de pertes : 2 → 75%, 3 → 50%, 4+ → 35% (garde-fou données)
+    #  - volatilité du titre élevée (20j > VOL_SCALE_TRIGGER × 1 an) → moitié
+    #    (volatility scaling, Barroso & Santa-Clara 2015)
+    from config import RISK_PER_TRADE_PCT, MAX_POSITION_PCT, VOL_SCALE_TRIGGER
     import lessons
+
+    budget_total = portfolio.get_autonomous_config().get("budget_total", 0.0) or available
+    risk_eur = budget_total * RISK_PER_TRADE_PCT / 100
+
     factor = lessons.size_factor()
     if factor < 1.0:
-        available = available * factor
-        send_fn(f"🛡️ Série de {lessons.loss_streak()} perte(s) → taille réduite à "
-                f"{int(factor*100)}% ({available:.0f}€) sur {ticker}.")
+        risk_eur *= factor
+        send_fn(f"🛡️ Série de {lessons.loss_streak()} perte(s) → risque réduit à "
+                f"{int(factor*100)}% ({risk_eur:.0f}€ max au SL) sur {ticker}.")
+
+    tech_sizing = prices.get_technicals(ticker) or {}
+    vol_r = tech_sizing.get("vol_ratio_20_250")
+    if vol_r and vol_r > VOL_SCALE_TRIGGER:
+        risk_eur *= 0.5
+        send_fn(f"🌊 {ticker} : volatilité 20j à {vol_r:.1f}× sa normale annuelle "
+                f"→ risque réduit de moitié ({risk_eur:.0f}€ max au SL).")
 
     entry_eur = entry * fx
-    qty  = max(1, int(available / entry_eur))
-    cost_eur = qty * entry_eur
-    if cost_eur > available * 1.01:
-        qty -= 1
+    sl_dist_eur = max((entry - sl) * fx, entry_eur * 0.005)  # garde division
+    qty = int(risk_eur / sl_dist_eur)
+
+    # Plafonds : % du budget et cash réellement disponible
+    cost_cap = min(available, budget_total * MAX_POSITION_PCT / 100)
+    if qty * entry_eur > cost_cap:
+        qty = int(cost_cap / entry_eur)
     if qty < 1:
+        send_fn(
+            f"🚫 {ticker} : titre trop cher pour le budget de risque — "
+            f"1 titre à {entry_eur:.0f}€ dépasse le plafond ({cost_cap:.0f}€) ou "
+            f"le risque au SL ({risk_eur:.0f}€). Aucune entrée."
+        )
         return False
     cost_eur = round(qty * entry_eur, 2)
 
@@ -251,14 +276,16 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     # post-mortem à la clôture est aveugle ("perte sans signal d'alerte" à tort).
     if not portfolio.get_entry_context(ticker):
         try:
-            tech = prices.get_technicals(ticker) or {}
             pctx = prices.get_price_context(ticker) or {}
             portfolio.set_entry_context(ticker, {
                 "source":      "autonome (capture filet de sécurité)",
                 "thesis":      (reason or "")[:150],
-                "rsi":         tech.get("rsi"),
-                "momentum_1m": tech.get("momentum_1m"),
-                "vol_ratio":   tech.get("vol_ratio"),
+                "rsi":         tech_sizing.get("rsi"),
+                "momentum_1m": tech_sizing.get("momentum_1m"),
+                "mom_12_1":    tech_sizing.get("mom_12_1"),
+                "above_ma200": tech_sizing.get("above_ma200"),
+                "atr_pct":     tech_sizing.get("atr_pct"),
+                "vol_ratio":   tech_sizing.get("vol_ratio"),
                 "perf_1y":     pctx.get("perf_1y"),
                 "from_52w_low": pctx.get("from_52w_low"),
                 "entry":       round(entry, 4),
@@ -551,8 +578,13 @@ def run_entry_cycle(send_fn) -> None:
                     portfolio.clear_pending_opportunity(ticker)
                     continue
 
-                # Adapte l'entrée au cours réel post-contrôle
-                actual_entry = round(price2, 3)
+                # Limite MARCHANDE : légèrement AU-DESSUS du cours pour une
+                # exécution immédiate. Une limite posée sous/au cours ne se
+                # remplit que si le prix retombe dessus — c'est-à-dire quand le
+                # momentum a déjà tourné (anti-sélection, cas AF.PA 07/2026).
+                # Le surcoût max est de 0.3% ; l'ordre non exécuté est annulé
+                # à la clôture par cancel_stale_entry_orders.
+                actual_entry = round(price2 * 1.003, 3)
                 source_tag   = f"[{opp.get('source','briefing')}] " + opp.get("reason", "")[:80]
 
                 success = _place_order(ticker, actual_entry, sl, tp, available, source_tag, send_fn)
@@ -568,6 +600,11 @@ def run_entry_cycle(send_fn) -> None:
         # conservées : validation IA gain réduit PUIS research pré-achat.
         global _last_smallgain_ts
         try:
+            from config import SMALL_GAIN_MODE
+            if not SMALL_GAIN_MODE:
+                print("[Auto] Aucune opportunité exploitable — gain réduit désactivé "
+                      "(SMALL_GAIN_MODE=off) : zéro trade est un résultat acceptable.")
+                return
             pending_now = portfolio.get_pending_opportunities()
             has_ct = any(o.get("source") == "court_terme" for o in pending_now)
             if has_ct or time.time() - _last_smallgain_ts < SMALLGAIN_COOLDOWN:
