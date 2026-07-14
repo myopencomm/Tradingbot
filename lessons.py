@@ -23,6 +23,12 @@ def post_mortem(ctx: dict, entry: float, exit_price: float, result: str) -> list
     Retourne une liste de tags explicatifs (courts, réutilisables en agrégat).
     `ctx` = contexte d'entrée mémorisé (portfolio.get_entry_context).
     """
+    # Contexte vide = la capture a raté (bug), PAS "aucun signal d'alerte".
+    # Taguer "perte sans signal" sur un contexte absent empoisonne les leçons :
+    # AF.PA 07/2026 avait RSI ~71 à résistance, tagué à tort "sans alerte".
+    if not ctx:
+        return ["contexte d'entrée non capturé (bug de capture) — leçon inexploitable"]
+
     tags = []
     rsi = ctx.get("rsi")
     mom = ctx.get("momentum_1m")

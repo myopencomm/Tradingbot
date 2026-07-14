@@ -64,6 +64,12 @@ def check_positions(send_fn) -> None:
     status_lines = [f"📊 STATUS {now}"]
 
     for name, cfg in positions.items():
+        # Position HOLD long terme : hors gestion bot — affichage informatif
+        # uniquement, aucune alerte SL/TP/breakeven.
+        if cfg.get("hold"):
+            status_lines.append(f"  🔒 {name}: HOLD long terme — hors gestion bot")
+            continue
+
         quote = prices.get_quote(cfg["ticker"])
         price = quote.get("price")
         sym   = prices.currency_symbol(quote.get("currency", "EUR"))

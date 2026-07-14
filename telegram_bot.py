@@ -153,6 +153,7 @@ BOT_COMMANDS = [
     ("research",   "Analyser une action — /research TICKER"),
     ("add",        "Acheter (deduit le cash) — TICKER QTE PRU SL TP"),
     ("remove",     "Retirer une position — /remove TICKER"),
+    ("hold",       "HOLD long terme, hors gestion bot — /hold TICKER [off]"),
     ("sl",         "Changer le stop-loss — /sl TICKER PRIX"),
     ("tp",         "Changer le take-profit — /tp TICKER PRIX"),
     ("vendu",      "Enregistrer une vente — /vendu NOM [PRIX]"),
@@ -231,6 +232,7 @@ def cmd_help(args, cid):
         "GERER MES POSITIONS (dans le bot)\n"
         "/add TICKER QTE PRU SL TP — acheter (deduit le cash)\n"
         "/remove TICKER — retirer\n"
+        "/hold TICKER [off] — HOLD long terme, hors gestion bot\n"
         "/sl TICKER PRIX — changer le stop-loss\n"
         "/tp TICKER PRIX — changer le take-profit\n"
         "\n"
@@ -314,6 +316,18 @@ def cmd_status(args, cid):
     total_pnl = 0
 
     for name, cfg in positions.items():
+        # HOLD long terme : affichage informatif, hors P&L trading, pas d'alerte
+        if cfg.get("hold"):
+            q = prices.get_quote(cfg["ticker"])
+            price = q.get("price")
+            sym = prices.currency_symbol(q.get("currency", "EUR"))
+            px = f"{sym}{price}" if price else "cours indispo"
+            lines.append(
+                f"🔒 {name} ({cfg['ticker']}) — HOLD long terme, hors gestion bot\n"
+                f"  {cfg['qty']} titres | PRU {sym}{cfg['entry_price']} | {px}"
+            )
+            continue
+
         q = prices.get_quote(cfg["ticker"])
         price = q.get("price")
         if price:
@@ -351,7 +365,7 @@ def cmd_status(args, cid):
         else:
             lines.append(f"{name}: prix indisponible | PRU {cfg['entry_price']}€")
 
-    lines.append(f"\nP&L total positions: {total_pnl:+.0f}€")
+    lines.append(f"\nP&L total positions gérées (hors HOLD): {total_pnl:+.0f}€")
 
     pending = data.get("pending_orders", {})
     if pending:
@@ -498,6 +512,43 @@ def cmd_remove(args, cid):
         return
     portfolio.remove_position(name)
     send(f"Position {name} supprimee.", cid)
+
+
+def cmd_hold(args, cid):
+    # /hold TICKER [off] — marque une position HOLD long terme (hors gestion bot) :
+    # plus d'alertes SL/TP, hors P&L trading, jamais proposée à la vente/swap.
+    if not args:
+        holds = {k: v for k, v in portfolio.get_positions().items() if v.get("hold")}
+        if holds:
+            lines = ["🔒 Positions HOLD long terme (hors gestion bot) :"]
+            for name, cfg in holds.items():
+                lines.append(f"  {name} ({cfg['ticker']}) — {cfg.get('hold_note', '')}")
+            lines.append("\n/hold TICKER off pour remettre en gestion")
+            send("\n".join(lines), cid)
+        else:
+            send("Aucune position HOLD.\nUsage: /hold TICKER [off]", cid)
+        return
+    positions = portfolio.get_positions()
+    name = _find_position(args[0], positions)
+    if not name:
+        send(f"Position '{args[0]}' introuvable.\nPositions: {list(positions.keys())}", cid)
+        return
+    off = len(args) > 1 and args[1].lower() in ("off", "non", "no")
+    from datetime import datetime
+    note = f"HOLD long terme (décision du {datetime.now().strftime('%d/%m/%Y')}) — hors gestion bot"
+    portfolio.set_hold(name, not off, note)
+    if off:
+        send(f"🔓 {name} remis en gestion bot : alertes SL/TP et P&L trading réactivés.", cid)
+    else:
+        send(
+            f"🔒 {name} marqué HOLD long terme — hors gestion bot :\n"
+            f"- plus d'alertes SL/TP ni trailing stop\n"
+            f"- exclu du P&L trading (/stats)\n"
+            f"- jamais proposé à la vente ou au swap par l'IA\n"
+            f"- le sync BD continue de suivre la quantité/PRU\n"
+            f"/hold {name} off pour annuler",
+            cid,
+        )
 
 
 def cmd_sl(args, cid):
@@ -1250,6 +1301,25 @@ def _tuto_avance(cid):
         "Seules les positions protegees par un\n"
         "Expert actif sont gerees (les positions\n"
         "historiques sans ordre ne sont pas touchees).",
+        cid,
+    )
+    time.sleep(0.4)
+    send(
+        "Fonctions avancees — HOLD long terme\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "/hold TICKER → sort une position du\n"
+        "perimetre de gestion du bot :\n"
+        "\n"
+        "→ plus d'alertes SL/TP ni trailing\n"
+        "→ exclue du P&L trading (/stats)\n"
+        "→ jamais proposee a la vente/swap par l'IA\n"
+        "→ le sync BD suit toujours qte/PRU\n"
+        "\n"
+        "Pour les lignes de fond de portefeuille\n"
+        "qu'on garde des annees, hors trading.\n"
+        "\n"
+        "  /hold          → liste les HOLD\n"
+        "  /hold TICKER off → remet en gestion",
         cid,
     )
     time.sleep(0.4)
@@ -2083,6 +2153,7 @@ COMMANDS = {
     "/cash": cmd_cash,
     "/add": cmd_add,
     "/remove": cmd_remove,
+    "/hold": cmd_hold,
     "/sl": cmd_sl,
     "/tp": cmd_tp,
     "/buy": cmd_buy,

@@ -78,9 +78,11 @@ def get_stats() -> dict:
     best  = max(closed, key=lambda t: t["pnl"]) if closed else None
     worst = min(closed, key=lambda t: t["pnl"]) if closed else None
 
-    # P&L latent des positions ouvertes
+    # P&L latent des positions ouvertes GÉRÉES par le bot. Les positions HOLD
+    # long terme (hold: true, ex ILMN) sont hors périmètre trading : leur
+    # latent n'entre pas dans le bilan du bot.
     unrealized_pnl = 0.0
-    positions = portfolio.get_positions()
+    positions = portfolio.get_managed_positions()
     for cfg in positions.values():
         q = prices.get_quote(cfg["ticker"])
         price = q.get("price")

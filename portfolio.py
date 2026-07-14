@@ -21,8 +21,49 @@ def get_positions() -> dict:
     return load().get("positions", {})
 
 
+def get_managed_positions() -> dict:
+    """Positions gérées par le bot — exclut les HOLD long terme (`hold: true`),
+    qui restent visibles mais hors alertes SL/TP, hors P&L trading et hors
+    propositions de vente/swap."""
+    return {k: v for k, v in get_positions().items() if not v.get("hold")}
+
+
+def set_hold(name: str, on: bool, note: str = "") -> bool:
+    """Marque/démarque une position HOLD long terme (hors gestion bot)."""
+    data = load()
+    pos = data.get("positions", {}).get(name.upper())
+    if not pos:
+        return False
+    if on:
+        pos["hold"] = True
+        if note:
+            pos["hold_note"] = note
+    else:
+        pos.pop("hold", None)
+        pos.pop("hold_note", None)
+    save(data)
+    return True
+
+
 def get_cash() -> float:
     return load().get("cash_available", 0)
+
+
+def market_close_expiry(ticker: str):
+    """Clôture du marché DU TITRE aujourd'hui (heure de Paris) — pas question
+    d'agir sur une validation du matin le lendemain sans re-validation.
+    US (pas de suffixe) : 21h55 ; Euronext/autres : 17h30. Si la clôture est
+    déjà passée : 9h00 le lendemain (fenêtre minimale avant re-validation)."""
+    import pytz
+    from datetime import datetime, timedelta
+    PARIS = pytz.timezone("Europe/Paris")
+    now = datetime.now(PARIS)
+    is_us = "." not in ticker.upper()
+    close_h, close_m = (21, 55) if is_us else (17, 30)
+    expires = now.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
+    if now >= expires:
+        expires = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    return expires
 
 
 def get_pending_opportunities() -> list:
@@ -46,17 +87,10 @@ def add_pending_opportunity(ticker: str, entry: float, sl: float, tp: float,
         ctx.setdefault("tp_pct", round((tp - entry) / entry * 100, 1) if entry else None)
         set_entry_context(ticker, ctx)
     import pytz
-    from datetime import datetime, timedelta
+    from datetime import datetime
     PARIS = pytz.timezone("Europe/Paris")
     now     = datetime.now(PARIS)
-    # Expire à la clôture du marché DU TITRE (heure de Paris) — pas question
-    # d'agir sur une opportunité du matin le lendemain sans re-validation.
-    # US (pas de suffixe) : 21h55 ; Euronext/autres : 17h30.
-    is_us = "." not in ticker.upper()
-    close_h, close_m = (21, 55) if is_us else (17, 30)
-    expires = now.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
-    if now >= expires:
-        expires = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    expires = market_close_expiry(ticker)
     data = load()
     opps = data.get("pending_opportunities", [])
     opps = [o for o in opps if o.get("ticker") != ticker]  # déduplique
@@ -80,14 +114,24 @@ def get_auto_pending_orders() -> dict:
     return load().get("auto_pending_orders", {})
 
 
-def add_auto_pending_order(ticker: str, qty: int, entry: float, sl: float, tp: float):
+def add_auto_pending_order(ticker: str, qty: int, entry: float, sl: float, tp: float,
+                           order_id: str = None, expires_at: str = None):
+    """`order_id` (BD) et `expires_at` permettent l'ANNULATION AUTO d'un ordre
+    d'entrée resté non exécuté à la clôture : un ordre limite qui traîne ne se
+    remplit que quand le momentum s'est retourné contre nous (cas AF.PA 07/2026,
+    ordre valide 31/12 rempli à la cassure baissière → SL)."""
     import pytz
     from datetime import datetime
     data = load()
-    data.setdefault("auto_pending_orders", {})[ticker.upper()] = {
+    rec = {
         "qty": qty, "entry": entry, "sl": sl, "tp": tp,
         "placed_at": datetime.now(pytz.timezone("Europe/Paris")).isoformat(),
     }
+    if order_id:
+        rec["order_id"] = str(order_id)
+    if expires_at:
+        rec["expires_at"] = expires_at
+    data.setdefault("auto_pending_orders", {})[ticker.upper()] = rec
     save(data)
 
 

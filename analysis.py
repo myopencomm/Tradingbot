@@ -278,6 +278,10 @@ def _portfolio_snapshot() -> str:
         f"💰 Cash: {cash}€",
         "📁 Positions (UNIQUEMENT ces positions sont actives — ignorer tout autre mention) :",
     ]
+    # Les HOLD long terme sortent du périmètre de gestion : listés à part avec
+    # interdiction explicite pour l'IA de proposer vente, swap ou protection.
+    holds = {k: v for k, v in positions.items() if v.get("hold")}
+    positions = {k: v for k, v in positions.items() if not v.get("hold")}
     for name, cfg in positions.items():
         quote = prices.get_quote(cfg["ticker"])
         price = quote.get("price")
@@ -307,6 +311,13 @@ def _portfolio_snapshot() -> str:
                 )
         else:
             lines.append(f"  {name}: prix indisponible | PRU {cfg['entry_price']}€ | {cfg['qty']}t")
+
+    if holds:
+        lines.append("🔒 HOLD LONG TERME — HORS GESTION (ne JAMAIS proposer de vente, "
+                     "swap, SL/TP ou analyse pour ces titres) :")
+        for name, cfg in holds.items():
+            lines.append(f"  {name} ({cfg['ticker']}): {cfg['qty']}t | "
+                         f"{cfg.get('hold_note', 'hold long terme')}")
 
     pending = data.get("pending_orders", {})
     if pending:
@@ -552,6 +563,18 @@ Si ACHAT : format exact (symbole {sym}, le titre cote en {cur}) :
     # Garde-fou commun : une opportunité valide DOIT avoir entrée+SL+TP cohérents
     if verdict == "ACHAT" and not (sl_v and tp_v and sl_v < entry < tp_v):
         verdict, reason = "EXCLUS", reason or "niveaux entrée/SL/TP incohérents"
+
+    # Cohérence décision ↔ ordres réels : si un ordre d'entrée AUTONOME est
+    # encore en attente sur BD pour ce titre et que la décision du jour est
+    # EXCLUS, la thèse qui a motivé l'ordre est contredite → annulation
+    # immédiate (sinon l'ordre attend une exécution par cassure baissière —
+    # cas AF.PA 07/2026).
+    if verdict == "EXCLUS":
+        try:
+            import autonomous_engine
+            autonomous_engine.cancel_auto_order_if_rejected(ticker, reason or "EXCLUS")
+        except Exception as _ce:
+            print(f"[validate] cancel auto order {ticker}: {_ce}")
 
     out.update({
         "verdict": verdict, "reason": reason, "raw": _validate_tickers(val),
@@ -842,7 +865,8 @@ def monthly_breach_review(send_fn) -> None:
     """Revue mensuelle (1er du mois) des positions dont le SL est dépassé."""
     data = portfolio.load()
     positions = data.get("positions", {})
-    breach = {k: v for k, v in positions.items() if v.get("sl_breach_notified")}
+    breach = {k: v for k, v in positions.items()
+              if v.get("sl_breach_notified") and not v.get("hold")}
 
     if not breach:
         return

@@ -224,7 +224,8 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Trailing stop automatique** | À +5% (manuel) / +3% (autonome), l'ordre Expert est **remplacé sur BD** avec le SL au PRU (P&L ≥ 0 garanti) |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
-| **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +3% → sortie détectée → réinvestissement |
+| **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +3% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
+| **Positions HOLD long terme** | `/hold TICKER` : sortie du périmètre bot (pas d'alertes, hors P&L trading, jamais proposée à la vente) |
 | **Mode gain réduit** | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) à rentabilité nette de frais contrôlée |
 | **Dashboard visuel** | http://localhost:8642 (accès Tailscale possible) + `/dashboard` Telegram : P&L cumulé, cash engagé, ROI, trades filtrables |
 | **Instructions d'ordres** | Format Bourse Direct step-by-step, prêt à saisir sur mobile ou web |
@@ -308,6 +309,7 @@ TradingBot/
 |---|---|
 | `/add TICKER QTY PRU SL TP` | Ajouter une position manuellement |
 | `/remove TICKER` | Supprimer une position |
+| `/hold TICKER [off]` | Marquer HOLD long terme : **hors gestion bot** — plus d'alertes SL/TP ni trailing, exclu du P&L trading (`/stats`), jamais proposé à la vente/swap par l'IA. Le sync BD continue de suivre qté/PRU. Sans argument : liste les HOLD |
 | `/sl TICKER PRIX` | Mettre à jour le stop-loss |
 | `/tp TICKER PRIX` | Mettre à jour le take-profit |
 
@@ -506,6 +508,7 @@ Le mode Autonome permet au bot de gérer un **budget isolé** en totale indépen
 - **SL/TP obligatoires** — aucune entrée sans protection Expert BD
 - **Playwright requis pour les entrées** — si la session expire, le bot ne peut plus entrer mais les positions existantes restent protégées par leurs ordres Expert sur BD
 - **Marché ouvert uniquement** — aucune entrée en dehors des heures 9h05–17h35
+- **Annulation auto des ordres d'entrée périmés** — un ordre d'achat limite non exécuté à la clôture du marché du titre est **annulé sur BD** (vérifié à chaque cycle d'entrée + sync horaire). Un limite qui traîne ne se remplit que quand le cours retombe à travers — c'est-à-dire quand la thèse momentum est déjà morte (anti-sélection). Idem si une validation ultérieure rend EXCLUS sur le même titre : l'ordre en attente est annulé immédiatement
 
 ### Exemple d'utilisation
 
@@ -567,8 +570,8 @@ GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 
 Un LLM n'apprend pas par entraînement ici, mais le bot **accumule et réutilise** l'expérience de ses trades en trois temps :
 
-1. **Capture** — à chaque décision d'achat (scan, briefing, gain réduit, ordre manuel), le *pourquoi* est mémorisé : thèse, régime de marché, RSI/momentum/volume à l'entrée, source.
-2. **Post-mortem** — à la clôture, le bot croise le contexte d'entrée avec le résultat et tague automatiquement le défaut (ex. « entrée en surchauffe RSI ≥ 70 », « gap sous le SL — titre peu liquide »).
+1. **Capture** — à chaque décision d'achat (scan, briefing, gain réduit, ordre manuel), le *pourquoi* est mémorisé : thèse, régime de marché, RSI/momentum/volume à l'entrée, source. Le contrôle pré-achat autonome rafraîchit ce contexte au moment réel de l'achat, et un **filet de sécurité** dans le passage d'ordre capture a minima les indicateurs techniques si aucun chemin amont ne l'a fait — aucun trade ne se clôture plus avec un contexte vide.
+2. **Post-mortem** — à la clôture, le bot croise le contexte d'entrée avec le résultat et tague automatiquement le défaut (ex. « entrée en surchauffe RSI ≥ 70 », « gap sous le SL — titre peu liquide »). Un contexte manquant est tagué comme **bug de capture**, jamais comme « perte sans signal d'alerte » — une leçon fausse est pire que pas de leçon.
 3. **Leçons réinjectées** — les schémas perdants sont agrégés et rappelés à l'IA dans **tous** les prompts de validation, pour éviter de répéter les mêmes erreurs.
 
 **Garde-fous pilotés par les données** (indépendants de l'IA) :
@@ -633,6 +636,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-14
+- **`/hold TICKER [off]`** : position HOLD long terme, **hors gestion bot** — plus d'alertes SL/TP ni trailing, exclue du P&L trading (`/stats`), jamais proposée à la vente/swap par l'IA (le sync BD continue de suivre qté/PRU)
+- **Annulation auto des ordres d'entrée périmés** : un achat limite autonome non exécuté à la clôture du marché du titre est annulé sur BD (cycle d'entrée + sync horaire) ; annulation immédiate si une validation ultérieure rend EXCLUS sur le même titre. Motif : anti-sélection — un limite qui traîne ne se remplit que quand le momentum s'est retourné (cas AF.PA)
+- **Capture de contexte blindée** : le contrôle pré-achat autonome rafraîchit le contexte d'entrée au moment réel de l'achat + filet de sécurité dans le passage d'ordre ; un contexte manquant est tagué « bug de capture » au post-mortem, plus jamais « perte sans signal d'alerte » à tort
 
 ### 2026-06-24
 - **Mode Autonome** (`/auto`) : le bot gère un budget isolé en totale autonomie — scan, ordre Expert achat, trailing stop à +3%, notifications Telegram pour chaque action

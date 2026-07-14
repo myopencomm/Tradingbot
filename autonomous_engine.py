@@ -107,6 +107,97 @@ def market_open_for(ticker: str) -> bool:
 
 
 
+# ─── Annulation des ordres d'entrée périmés ─────────────────────────────────
+# Un ordre limite d'ACHAT resté non exécuté après la clôture souffre
+# d'anti-sélection : il ne se remplit plus que si le cours retombe à travers la
+# limite, c'est-à-dire quand la thèse momentum est déjà invalidée (cas AF.PA
+# 07/2026 : limite 13.405 posée pendant que le titre montait à 14.25, remplie
+# des jours plus tard à la cassure baissière → tout droit au SL, -68€).
+
+def _cancel_bd_order(order_id: str) -> bool:
+    import bourse_direct_orders as bd_orders
+    try:
+        res = playwright_session.run(
+            lambda page, oid=order_id: bd_orders.cancel_order(page, oid),
+            timeout=30,
+        )
+        return bool(res)
+    except Exception as e:
+        print(f"[Auto] cancel BD {order_id}: {e}")
+        return False
+
+
+def cancel_stale_entry_orders(send_fn) -> None:
+    """Annule sur BD tout ordre d'entrée autonome non exécuté dont la validité
+    logique (clôture du marché du titre le jour du placement) est dépassée.
+    Appelé au début de chaque cycle d'entrée et par le sync horaire — un ordre
+    expiré pendant une indisponibilité du bot est annulé au retour."""
+    pending = portfolio.get_auto_pending_orders()
+    if not pending:
+        return
+    if not (bot_mode.is_playwright() and playwright_session.is_connected()):
+        return
+    now = datetime.now(PARIS)
+    for ticker, rec in list(pending.items()):
+        exp = rec.get("expires_at")
+        if exp:
+            try:
+                expired = now > datetime.fromisoformat(exp)
+            except Exception:
+                expired = False
+        else:
+            # Enregistrement d'avant cette protection : périmé si placé un jour précédent
+            placed = rec.get("placed_at", "")
+            expired = bool(placed) and placed[:10] < now.strftime("%Y-%m-%d")
+        if not expired:
+            continue
+        oid = rec.get("order_id")
+        if oid and _cancel_bd_order(oid):
+            portfolio.clear_auto_pending_order(ticker)
+            send_fn(
+                f"🗑️ {ticker} : ordre d'entrée autonome EXPIRÉ annulé sur BD "
+                f"(limite {rec.get('entry')} posée le {rec.get('placed_at', '?')[:10]}, "
+                f"jamais exécutée). Un limite qui traîne ne se remplit que si le "
+                f"momentum s'est retourné — budget libéré."
+            )
+        elif not oid:
+            # Pas d'order_id mémorisé : le sync réconciliera si BD l'a annulé,
+            # sinon annulation manuelle nécessaire.
+            send_fn(
+                f"⚠️ {ticker} : ordre d'entrée autonome périmé mais sans order_id "
+                f"mémorisé — annule-le sur BD : /annuler_bd {ticker}"
+            )
+
+
+def cancel_auto_order_if_rejected(ticker: str, reason: str, send_fn=None) -> None:
+    """Une validation vient de rendre EXCLUS sur `ticker` : si un ordre d'entrée
+    autonome est encore en attente sur BD pour ce même titre, la thèse qui a
+    motivé l'ordre est contredite → annulation immédiate (l'ordre ne doit pas
+    rester à attendre une exécution par cassure baissière)."""
+    base = (ticker or "").upper().split(".")[0]
+    pending = portfolio.get_auto_pending_orders()
+    match = next((t for t in pending if t.upper().split(".")[0] == base), None)
+    if not match:
+        return
+    if not (bot_mode.is_playwright() and playwright_session.is_connected()):
+        return
+    rec = pending[match]
+    oid = rec.get("order_id")
+    notify = send_fn or (lambda m: print(f"[Auto] {m}"))
+    if oid and _cancel_bd_order(oid):
+        portfolio.clear_auto_pending_order(match)
+        notify(
+            f"🗑️ {match} : ordre d'entrée autonome ANNULÉ sur BD — une nouvelle "
+            f"validation vient de rejeter ce titre (« {reason[:80]} »). "
+            f"La thèse d'achat n'est plus valide, l'ordre ne doit pas traîner."
+        )
+    elif not oid:
+        notify(
+            f"⚠️ {match} : validation EXCLUS (« {reason[:60]} ») mais ordre autonome "
+            f"en attente sans order_id — annule-le sur BD : /annuler_bd {match}"
+        )
+
+
 # ─── Cycle d'entrée ─────────────────────────────────────────────────────────
 
 def _place_order(ticker: str, entry: float, sl: float, tp: float,
@@ -153,6 +244,28 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         print(f"[Auto] {ticker} : gain {gross_tp_eur:.0f}€ < {roundtrip*MIN_NET_GAIN_FEE_RATIO:.0f}€ — skip frais")
         return False
     net_tp = gross_tp_eur - roundtrip
+
+    # Filet de sécurité boucle d'apprentissage : AUCUN ordre autonome ne part
+    # sans contexte d'entrée mémorisé. Si aucun chemin amont ne l'a capturé,
+    # on enregistre au minimum les indicateurs techniques du moment — sinon le
+    # post-mortem à la clôture est aveugle ("perte sans signal d'alerte" à tort).
+    if not portfolio.get_entry_context(ticker):
+        try:
+            tech = prices.get_technicals(ticker) or {}
+            pctx = prices.get_price_context(ticker) or {}
+            portfolio.set_entry_context(ticker, {
+                "source":      "autonome (capture filet de sécurité)",
+                "thesis":      (reason or "")[:150],
+                "rsi":         tech.get("rsi"),
+                "momentum_1m": tech.get("momentum_1m"),
+                "vol_ratio":   tech.get("vol_ratio"),
+                "perf_1y":     pctx.get("perf_1y"),
+                "from_52w_low": pctx.get("from_52w_low"),
+                "entry":       round(entry, 4),
+                "tp_pct":      round((tp - entry) / entry * 100, 1) if entry else None,
+            })
+        except Exception as _cx:
+            print(f"[Auto] capture contexte filet {ticker}: {_cx}")
 
     fx_note = f" (≈{cost_eur:.0f}€ au taux {sym}→€ {fx:.3f})" if quote_cur != "EUR" else ""
     print(f"[Auto] Entrée : {ticker} {qty}t @ {entry}{sym} SL={sl} TP={tp} ({quote_cur}, coût {cost_eur:.0f}€)")
@@ -225,8 +338,14 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         # position créée à la confirmation → confondue avec une exécution).
         # On enregistre un ordre en attente : il compte dans le budget engagé,
         # et le sync créera la position (flag autonome) à l'exécution réelle.
-        portfolio.add_auto_pending_order(ticker, qty, round(entry, 4),
-                                         round(sl, 4), round(tp, 4))
+        # order_id + expires_at : un ordre d'entrée non exécuté à la clôture du
+        # marché du titre sera ANNULÉ AUTO (cancel_stale_entry_orders) — un
+        # limite qui traîne ne se remplit que si le momentum s'est retourné.
+        portfolio.add_auto_pending_order(
+            ticker, qty, round(entry, 4), round(sl, 4), round(tp, 4),
+            order_id=order_id,
+            expires_at=portfolio.market_close_expiry(ticker).isoformat(),
+        )
 
         send_fn(
             f"✅ ORDRE AUTONOME PLACÉ SUR BD\n"
@@ -278,6 +397,13 @@ def run_entry_cycle(send_fn) -> None:
         return
 
     try:
+        # Purge d'abord les ordres d'entrée périmés : libère le budget engagé
+        # et supprime le risque d'exécution par anti-sélection.
+        try:
+            cancel_stale_entry_orders(send_fn)
+        except Exception as e:
+            print(f"[Auto] cancel stale orders: {e}")
+
         cfg      = portfolio.get_autonomous_config()
         max_pos  = cfg.get("max_positions", MAX_POSITIONS)
         auto_pos = portfolio.get_autonomous_positions()
@@ -397,6 +523,18 @@ def run_entry_cycle(send_fn) -> None:
                         portfolio.clear_pending_opportunity(ticker)
                         continue
                     send_fn(f"✅ {ticker} : contrôle pré-achat confirme ACHAT — passage de l'ordre…")
+                    # Boucle d'apprentissage : mémorise le contexte FRAIS du
+                    # contrôle (RSI/momentum au moment réel de l'achat, pas de
+                    # la validation d'il y a des heures), en gardant la source
+                    # d'origine. Sans ça, un trade peut se clôturer avec un
+                    # contexte vide → post-mortem aveugle (cas AF.PA 07/2026).
+                    try:
+                        fresh_ctx = dict(res.get("context") or {})
+                        if fresh_ctx:
+                            fresh_ctx["source"] = opp.get("source", "briefing")
+                            portfolio.set_entry_context(ticker, fresh_ctx)
+                    except Exception as _cx:
+                        print(f"[Auto] set_entry_context {ticker}: {_cx}")
 
                 # Re-vérifie le prix après le research (~30-60s se sont écoulés)
                 quote2 = prices.get_quote(ticker)
@@ -501,6 +639,8 @@ def trailing_stop_cycle(send_fn) -> None:
     # 1. Positions au-dessus de leur seuil de breakeven
     candidates = []
     for name, pos in positions.items():
+        if pos.get("hold"):
+            continue  # HOLD long terme — hors gestion bot
         entry = pos.get("entry_price")
         if not entry or not pos.get("qty"):
             continue

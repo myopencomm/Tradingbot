@@ -70,6 +70,14 @@ def _hourly_bd_sync():
         )
     except Exception as e:
         print(f"[hourly sync] {e}")
+    # Ordres d'entrée autonomes périmés (non exécutés après la clôture de leur
+    # marché) : annulation sur BD — un limite qui traîne ne se remplit que
+    # quand le momentum s'est retourné contre nous.
+    try:
+        import autonomous_engine
+        autonomous_engine.cancel_stale_entry_orders(telegram_bot.send)
+    except Exception as e:
+        print(f"[hourly cancel stale] {e}")
     # Trailing stop : remonte les SL au PRU sur BD (positions auto +3%,
     # manuelles +5%) — uniquement celles protégées par un Expert actif.
     try:
