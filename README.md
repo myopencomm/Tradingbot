@@ -14,7 +14,7 @@ Bourse Direct ne dispose pas d'API publique. TradingBot comble ce manque : il an
 **Trois modes de fonctionnement :**
 - **Mode Classic** (défaut) : données via Yahoo Finance + import par captures d'écran — aucun accès à votre compte BD requis.
 - **Mode Playwright** (optionnel) : le bot se connecte à Bourse Direct via un navigateur headless, lit vos données en temps réel et **passe des ordres Expert réels depuis Telegram** (achat + SL + TP en un seul ordre, avec confirmation).
-- **Mode Autonome** (optionnel, nécessite Playwright) : le bot gère un **budget isolé en totale autonomie** — il scanne le marché, entre en position, relève le SL au PRU à +3%, et vous notifie pour chaque action.
+- **Mode Autonome** (optionnel, nécessite Playwright) : le bot gère un **budget isolé en totale autonomie** — il scanne le marché, entre en position, relève le SL au PRU à +6%, et vous notifie pour chaque action.
 
 ---
 
@@ -221,10 +221,10 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 |---|---|
 | **Briefing matinal 9h05** | Analyse IA : état des positions + contexte macro + top opportunités |
 | **Surveillance 4×/jour + sync horaire** | Checks 9h / 12h / 15h / 17h (alertes SL/TP) + sync BD silencieux chaque heure : détection automatique des exécutions |
-| **Trailing stop automatique** | À +5% (manuel) / +3% (autonome), l'ordre Expert est **remplacé sur BD** avec le SL au PRU (P&L ≥ 0 garanti) |
+| **Trailing stop automatique** | À +5% (manuel) / +6% (autonome, `AUTO_BREAKEVEN_PCT`), l'ordre Expert est **remplacé sur BD** avec le SL au PRU (P&L ≥ 0 garanti) |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
-| **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +3% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
+| **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +6% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
 | **Positions HOLD long terme** | `/hold TICKER` : sortie du périmètre bot (pas d'alertes, hors P&L trading, jamais proposée à la vente) |
 | **Sélection momentum validée** | Momentum 12 mois (hors dernier mois) + cours > MM200 + entrée sur repli sain (RSI 35-65) — voir [Stratégie](#stratégie-de-sélection--validée-par-la-recherche-académique) |
 | **Sizing par le risque** | Perte au SL = 1% du budget autonome, SL ≈ 2×ATR, taille réduite si volatilité élevée ou série de pertes |
@@ -392,7 +392,7 @@ TradingBot/
 >
 > **Mode gain réduit** (désactivé par défaut — `SMALL_GAIN_MODE=on` pour l'activer) : quand aucune opportunité à +10% ne passe la validation, le bot re-teste les meilleurs candidats en trade court (TP +3 à +8%, horizon 1-5 jours). Désactivé car forcer un trade quand rien ne passe est le schéma « overtrading » documenté (Barber & Odean 2000) — zéro trade est un résultat acceptable.
 >
-> **Trailing stop réel** : dès **+3%** (autonome) ou **+BREAKEVEN_THRESHOLD%** (manuel), le bot **remplace l'ordre Expert sur BD** avec le SL remonté au PRU — automatique, TP inchangé, uniquement pour les positions protégées par un ordre Expert actif (les positions historiques sans ordre ne sont jamais touchées).
+> **Trailing stop réel** : dès **+6%** (autonome, `AUTO_BREAKEVEN_PCT` — le backtest montre qu'à +3% le trail scratchait les futurs gagnants) ou **+BREAKEVEN_THRESHOLD%** (manuel), le bot **remplace l'ordre Expert sur BD** avec le SL remonté au PRU — automatique, TP inchangé, uniquement pour les positions protégées par un ordre Expert actif (les positions historiques sans ordre ne sont jamais touchées).
 
 ### Import & Aide
 
@@ -501,7 +501,7 @@ Le mode Autonome permet au bot de gérer un **budget isolé** en totale indépen
 
 1. **Recherche** — À chaque check planifié (9h, 12h, 15h, 17h), il filtre ~100 actions selon la stratégie validée par la recherche (momentum 12 mois hors dernier mois, cours > MM200, zone d'entrée RSI 35-65), puis valide les meilleurs candidats avec l'IA (contrôle qualitatif : news, OPA, événements binaires)
 2. **Entrée** — Place un ordre Expert achat (entrée + SL + TP) sur Bourse Direct — le SL et le TP sont garantis côté BD
-3. **Trailing stop** — Quand la position atteint **+3%** du PRU, relève le SL au PRU (P&L ≥ 0 garanti)
+3. **Trailing stop** — Quand la position atteint **+6%** du PRU (`AUTO_BREAKEVEN_PCT`), relève le SL au PRU (P&L ≥ 0 garanti)
 4. **Sortie** — Les ordres Expert sur BD gèrent les sorties automatiquement (SL ou TP atteint). Le bot détecte la sortie et vous notifie
 
 ### Limites de sécurité
@@ -529,7 +529,7 @@ Bot : "✅ ACHAT AUTONOME CONFIRMÉ
        SL : 664€ | TP : 800€
        Coût : 720€ | Budget restant : 0€"
 
-[Quelques jours plus tard, à +3%]
+[Quelques jours plus tard, à +6%]
 Bot : "🤖 AUTO BREAKEVEN — ASML
        Position à +3.4% | SL relevé au PRU (720€)
        P&L garanti ≥ 0"
@@ -639,6 +639,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-14 — Phase 2 : backtest + config « recovery »
+- **`backtest.py`** : rejoue le moteur quantitatif sur l'univers de scan avec hypothèses pessimistes et frais réels — compare ancienne logique, Phase 1 et variantes (voir section [Backtest](#backtest-backtestpy))
+- **Trailing breakeven autonome +3% → +6%** (`AUTO_BREAKEVEN_PCT`) : à +3% le trail transformait les futurs gagnants en sorties à zéro — P&L backtest ×9 à +6%
+- **Config « recovery » validée par les données** (compte petit orienté rattrapage) : risque 2.5%/trade, coût ≤ 50% du budget, max 2 positions — moins de trades mais plus gros, pour amortir les frais fixes BD (0.4-0.8% par aller-retour sur des positions de ~500€)
+
 ### 2026-07-14 — Phase 1 : stratégie alignée sur la recherche académique
 - **Sélection 12-1** : le screen quantitatif classe par momentum 12 mois HORS dernier mois (Jegadeesh & Titman 1993) — plus jamais par momentum 1 mois, dont les gagnants s'inversent (cause des achats de sommets de 06-07/2026)
 - **Filtre MM200** : achat uniquement au-dessus de la MM200 (titre + indices) ; le régime passe en CORRECTION si CAC et S&P sont sous leur MM200 même avec VIX calme
@@ -719,11 +724,22 @@ L'IA reste dans la boucle comme **contrôle qualitatif symétrique** (news inval
 
 > Aucune stratégie ne gagne à tous les coups : les meilleures stratégies documentées gagnent 50-60% du temps et font leur performance sur l'asymétrie gain/perte et le contrôle du risque. Méfiez-vous de quiconque promet le contraire.
 
+### Backtest (`backtest.py`)
+
+`venv/bin/python3 backtest.py` rejoue le moteur quantitatif sur l'univers de scan (2023 → aujourd'hui, hypothèses pessimistes : SL prioritaire sur TP dans la même bougie, gaps exécutés à l'open, frais BD 1.98€/ordre). Enseignements de la campagne du 14/07/2026 :
+
+- L'ancienne logique (momentum 1 mois, all-in) perd **-30%** sur la période — la refonte est justifiée.
+- Le moteur 12-1 + MM200 a un edge réel (**+26% brut** sur 3.5 ans) mais les **frais fixes BD consomment tout** sur des positions de ~500€ → il faut **moins de trades, plus gros** (risque 2.5%, coût ≤ 50% du budget, max 2 positions).
+- Le trailing breakeven à **+3% scratchait les futurs gagnants** (win rate 27%→34%, P&L ×9 en passant à +6%) → défaut désormais `AUTO_BREAKEVEN_PCT=6`.
+- Config retenue : **+16% net de frais** sur 3.5 ans (PF 1.22, drawdown max -446€ sur 2000€) — sans compter l'étage IA (news/OPA/catalyseurs), non simulable.
+
+Limites : constituants actuels (biais du survivant, identique pour toutes les configs comparées), pas de FX, moteur quantitatif seul.
+
 ## Règles de trading par défaut
 
 - **Stop-loss** : technique, ≈ 2×ATR sous l'entrée, borné 3-10% (fallback -7% fixe pour les positions manuelles sans ATR)
 - **Take-profit** : ≥ 1.5× la distance du SL, +10% typique (l'IA peut viser plus haut si le potentiel le justifie)
-- **Trailing stop** : SL relevé au PRU à +5% (positions manuelles) / +3% (mode autonome)
+- **Trailing stop** : SL relevé au PRU à +5% (positions manuelles) / +6% (mode autonome, `AUTO_BREAKEVEN_PCT`)
 - **Taille autonome** : risque au SL = 1% du budget, coût ≤ 30% du budget · **Taille suggérée** (`/scan`) : 50% du cash, plafonné à 800€
 - Modifiables dans `.env` :
 

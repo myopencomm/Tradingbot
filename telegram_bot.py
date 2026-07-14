@@ -1288,7 +1288,7 @@ def _tuto_avance(cid):
         "Fonctions avancees — Trailing stop\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         "Quand une position atteint le seuil\n"
-        "(+" + f"{BREAKEVEN_THRESHOLD:.0f}" + "% manuel / +3% autonome) :\n"
+        "(+" + f"{BREAKEVEN_THRESHOLD:.0f}" + "% manuel / +6% autonome) :\n"
         "\n"
         "→ Session BD connectee : l'ordre Expert\n"
         "  est REMPLACE automatiquement sur BD\n"

@@ -103,6 +103,12 @@ TP_ALERTS = os.getenv("TP_ALERTS", "on").strip().lower() not in ("off", "false",
 # Trailing stop : seuil % au-dessus du PRU pour déclencher le relevé du SL au PRU
 BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "5"))
 
+# Seuil breakeven des positions AUTONOMES. Backtest 2023-2026 (backtest.py) :
+# à +3% le trail transformait les futurs gagnants en sorties à zéro (win rate
+# 27% → 34%, P&L +34€ → +320€ en passant à +6%). Le SL remonte au PRU
+# seulement une fois le trade réellement installé.
+AUTO_BREAKEVEN_PCT = float(os.getenv("AUTO_BREAKEVEN_PCT", "6"))
+
 # Scheduler (Paris time, 24h format)
 CHECK_TIMES = ["09:00", "12:00", "15:00", "17:00"]
 ANALYSIS_TIME = "09:05"

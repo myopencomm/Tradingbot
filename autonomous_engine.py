@@ -18,7 +18,8 @@ import bot_mode
 import playwright_session
 
 PARIS = pytz.timezone("Europe/Paris")
-BREAKEVEN_PCT = 3.0   # +3% → trailing stop au PRU
+from config import AUTO_BREAKEVEN_PCT
+BREAKEVEN_PCT = AUTO_BREAKEVEN_PCT  # trailing stop au PRU (défaut +6% — backtest 07/2026)
 MAX_POSITIONS = 2     # Positions autonomes simultanées max
 
 _entry_lock = threading.Lock()
