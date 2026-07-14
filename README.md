@@ -733,6 +733,14 @@ L'IA reste dans la boucle comme **contrôle qualitatif symétrique** (news inval
 - Le trailing breakeven à **+3% scratchait les futurs gagnants** (win rate 27%→34%, P&L ×9 en passant à +6%) → défaut désormais `AUTO_BREAKEVEN_PCT=6`.
 - Config retenue : **+16% net de frais** sur 3.5 ans (PF 1.22, drawdown max -446€ sur 2000€) — sans compter l'étage IA (news/OPA/catalyseurs), non simulable.
 
+**Validation (bootstrap + walk-forward)** — depuis le 15/07/2026, le script ajoute automatiquement un étage de robustesse sur les stratégies livrées (PHASE1, RECOVERY), inspiré des plateformes quant (validation-first) :
+
+- **Bootstrap** (`--boot`, défaut 2000) : rééchantillonne les trades avec remise et recalcule la courbe d'équité à chaque tirage → **IC90%** sur le P&L total, le profit factor et le max drawdown, plus `P(stratégie gagnante)`. Un point unique positif peut être un coup de chance ; si l'IC du P&L inclut 0, l'edge n'est pas distinguable du bruit.
+- **Walk-forward** (`--folds`, défaut 4) : découpe la période en fenêtres consécutives simulées indépendamment → révèle si l'edge tient **hors échantillon** ou repose sur un seul régime.
+- `--no-validate` saute ce bloc (simulation seule).
+
+⚠️ **Ce que la validation révèle (14/07/2026, univers complet)** : le P&L positif agrégé du moteur 12-1 **repose presque entièrement sur la fenêtre du rebond 2023** (PF ~5-7), puis stagne ou perd sur les 3 fenêtres suivantes (1/4 fenêtre gagnante). Le bootstrap donne `P(gagnante)` **< 10%** avec une médiane négative : distribution très asymétrique (beaucoup de petites pertes, quelques gros gagnants rares). Conclusion honnête : **l'edge quantitatif seul n'est pas robuste** — il dépend d'attraper de rares outliers en marché porteur, d'où l'importance critique de l'étage IA (news/catalyseurs) et du régime de marché comme filtres.
+
 Limites : constituants actuels (biais du survivant, identique pour toutes les configs comparées), pas de FX, moteur quantitatif seul.
 
 ## Règles de trading par défaut

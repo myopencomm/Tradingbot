@@ -221,12 +221,77 @@ def sorted_by_exit(closed):
     return [c["pnl"] for c in sorted(closed, key=lambda c: c["exit_date"])]
 
 
+# ── Validation : bootstrap + walk-forward ─────────────────────────────────────
+
+def bootstrap_metrics(closed: list[dict], n_boot: int = 2000, seed: int = 42) -> dict | None:
+    """Intervalle de confiance par rééchantillonnage (bootstrap) des trades.
+
+    Rééchantillonne AVEC REMISE la séquence de trades n_boot fois. Comme le
+    max drawdown dépend de l'ordre, on recalcule la courbe d'équité sur chaque
+    tirage → l'IC90% capture la dispersion réelle de la stratégie, pas un
+    point unique qui peut être un coup de chance. Si l'IC du P&L total inclut
+    0 (ou P(gagnante) proche de 50%), l'edge n'est pas distinguable du bruit.
+    """
+    pnls = np.array([c["pnl"] for c in closed], dtype=float)
+    n = len(pnls)
+    if n == 0:
+        return None
+    rng = np.random.default_rng(seed)
+    tot = np.empty(n_boot)
+    pf = np.empty(n_boot)
+    dd = np.empty(n_boot)
+    for b in range(n_boot):
+        sample = pnls[rng.integers(0, n, n)]
+        tot[b] = sample.sum()
+        wins = sample[sample > 0].sum()
+        loss = sample[sample <= 0].sum()
+        pf[b] = wins / abs(loss) if loss < 0 else np.inf
+        equity = np.concatenate([[BUDGET], BUDGET + np.cumsum(sample)])
+        dd[b] = (equity - np.maximum.accumulate(equity)).min()
+
+    def ci(a: np.ndarray) -> tuple[float, float, float]:
+        return (float(np.percentile(a, 5)),
+                float(np.percentile(a, 50)),
+                float(np.percentile(a, 95)))
+
+    pf_finite = pf[np.isfinite(pf)]
+    return {
+        "n_trades": n,
+        "total_pnl_ci": ci(tot),
+        "profit_factor_ci": ci(pf_finite) if len(pf_finite) else None,
+        "max_dd_ci": ci(dd),
+        "p_profitable": round(float((tot > 0).mean()) * 100, 1),
+    }
+
+
+def walk_forward(ind: dict, dates: pd.DatetimeIndex, regime_ok: pd.Series,
+                 cfg: dict, n_folds: int = 4) -> list[tuple[str, dict]]:
+    """Découpe la période en n_folds fenêtres consécutives et simule chacune
+    indépendamment (positions clôturées en fin de fenêtre). Un edge robuste
+    reste positif hors échantillon dans la majorité des fenêtres ; s'il ne
+    tient que grâce à un seul régime, le walk-forward le révèle."""
+    out = []
+    for fold in np.array_split(dates, n_folds):
+        fd = pd.DatetimeIndex(fold)
+        if len(fd) == 0:
+            continue
+        r = simulate(ind, fd, regime_ok, **cfg)
+        out.append((f"{fd[0].date()} → {fd[-1].date()}", r))
+    return out
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2023-01-01", help="début de la simulation")
     ap.add_argument("--fast", action="store_true", help="univers réduit (30 tickers)")
+    ap.add_argument("--no-validate", action="store_true",
+                    help="saute le bloc bootstrap + walk-forward")
+    ap.add_argument("--boot", type=int, default=2000,
+                    help="nombre de rééchantillonnages bootstrap")
+    ap.add_argument("--folds", type=int, default=4,
+                    help="nombre de fenêtres walk-forward")
     args = ap.parse_args()
 
     universe = SCAN_UNIVERSE[:30] if args.fast else SCAN_UNIVERSE
@@ -279,8 +344,10 @@ def main():
     ]
     print(f"\nSimulation {dates[0].date()} → {dates[-1].date()} "
           f"(budget {BUDGET:.0f}€, frais {FEE}€/ordre)\n" + "=" * 74)
+    results = {}
     for name, cfg in configs:
         r = simulate(ind, dates, regime_ok, **cfg)
+        results[name] = (cfg, r)
         print(f"\n{name}")
         if r["trades"] == 0:
             print("  aucun trade")
@@ -292,6 +359,48 @@ def main():
         print(f"  gain moyen: {r['avg_win']:+.0f}€ | perte moyenne: {r['avg_loss']:+.0f}€ | "
               f"max drawdown: {r['max_dd_eur']:.0f}€")
         print(f"  sorties: {r['exits']}")
+
+    if args.no_validate:
+        return
+
+    # ── Validation des stratégies livrées (PHASE1 + RECOVERY) ─────────────────
+    print("\n" + "=" * 74)
+    print(f"VALIDATION — bootstrap {args.boot}× + walk-forward {args.folds} fenêtres")
+    print("(un point unique peut être un coup de chance ; ici on mesure la dispersion)")
+    print("=" * 74)
+    for name, (cfg, r) in results.items():
+        if not (name.startswith("B. PHASE1") or name.startswith("C. RECOVERY")):
+            continue
+        print(f"\n{name}")
+        if r["trades"] == 0:
+            print("  aucun trade — rien à valider")
+            continue
+        bs = bootstrap_metrics(r["closed"], n_boot=args.boot)
+        lo, mid, hi = bs["total_pnl_ci"]
+        print(f"  bootstrap ({bs['n_trades']} trades rééchantillonnés) :")
+        print(f"    P&L total      IC90% [{lo:+7.0f}€ … {hi:+7.0f}€]  médiane {mid:+.0f}€")
+        if bs["profit_factor_ci"]:
+            lo, mid, hi = bs["profit_factor_ci"]
+            print(f"    profit factor  IC90% [{lo:7.2f}  … {hi:7.2f} ]  médiane {mid:.2f}")
+        lo, mid, hi = bs["max_dd_ci"]
+        print(f"    max drawdown   IC90% [{lo:7.0f}€ … {hi:7.0f}€]  médiane {mid:.0f}€")
+        verdict = "edge réel" if bs["p_profitable"] >= 90 else \
+                  "fragile" if bs["p_profitable"] >= 75 else "indistinct du bruit"
+        print(f"    P(stratégie gagnante) = {bs['p_profitable']}%  → {verdict}")
+        print(f"  walk-forward (hors échantillon, {args.folds} fenêtres) :")
+        pos_folds = 0
+        n_folds_traded = 0
+        for label, fr in walk_forward(ind, dates, regime_ok, cfg, args.folds):
+            if fr["trades"] == 0:
+                print(f"    {label} : aucun trade")
+                continue
+            n_folds_traded += 1
+            if fr["total_pnl"] > 0:
+                pos_folds += 1
+            print(f"    {label} : {fr['trades']:2d} trades | PF {str(fr['profit_factor']):>4} | "
+                  f"P&L {fr['total_pnl']:+6.0f}€ | DD {fr['max_dd_eur']:6.0f}€")
+        if n_folds_traded:
+            print(f"    → {pos_folds}/{n_folds_traded} fenêtres actives gagnantes")
 
 
 if __name__ == "__main__":
