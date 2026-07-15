@@ -1,7 +1,9 @@
 import schedule
 import time
 from datetime import datetime
-from config import CHECK_TIMES, ANALYSIS_TIME, TELEGRAM_TOKEN, AI_PROVIDER, GMAIL_USER, GMAIL_APP_PASSWORD
+from config import (CHECK_TIMES, ANALYSIS_TIME, TELEGRAM_TOKEN, AI_PROVIDER,
+                    GMAIL_USER, GMAIL_APP_PASSWORD,
+                    US_EXTENDED_HOURS, US_CHECK_TIMES, US_SCAN_TIME)
 import monitor
 import analysis
 import telegram_bot
@@ -143,7 +145,28 @@ def run_scheduler():
     )
     schedule.every().monday.at("09:20").do(_weekly_version_check)
     schedule.every().hour.at(":35").do(_hourly_bd_sync)
-    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 | Version: lundi 09:20 | Sync BD silencieux: toutes les heures à :35 (heure Paris)")
+
+    # Séance US : les 4 CHECK_TIMES s'arrêtent à 17:00, mais Wall Street tourne
+    # jusqu'à 22:00 Paris. On prolonge la surveillance (positions/ordres US
+    # uniquement, alertes seules) et on lance un scan US en début de séance.
+    if US_EXTENDED_HOURS:
+        for t in US_CHECK_TIMES:
+            schedule.every().day.at(t).do(
+                lambda: (
+                    monitor.check_pending_orders(telegram_bot.send, us_only=True),
+                    monitor.check_positions(telegram_bot.send, us_only=True),
+                ) if _market_day() else None
+            )
+        if US_SCAN_TIME:
+            schedule.every().day.at(US_SCAN_TIME).do(
+                lambda: analysis.scan_us_opportunities(telegram_bot.send)
+                if _market_day() else None
+            )
+
+    us_sched = (f" | US checks: {', '.join(US_CHECK_TIMES)}"
+                + (f" | Scan US: {US_SCAN_TIME}" if US_SCAN_TIME else "")
+                if US_EXTENDED_HOURS else "")
+    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 | Version: lundi 09:20 | Sync BD silencieux: toutes les heures à :35{us_sched} (heure Paris)")
     while True:
         schedule.run_pending()
         time.sleep(30)

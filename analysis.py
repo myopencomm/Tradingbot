@@ -1506,7 +1506,8 @@ def _extract_tickers(text: str) -> list[str]:
     )))
 
 
-def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=None) -> None:
+def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=None,
+                       universe: list = None, scan_label: str = "") -> None:
     """
     Scanner pro en 3 étapes :
     - Étape 0 : filtre quantitatif parallèle sur ~100 actions réelles (RSI/momentum/volume)
@@ -1516,7 +1517,10 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
     update_fn(text) — édite un message de progression en place (optionnel).
     Si fourni, tous les messages intermédiaires + ticker passent par update_fn.
     Le send_fn est réservé à l'envoi du résultat final.
+    universe — sous-ensemble à scanner (défaut : SCAN_UNIVERSE complet).
+    scan_label — préfixe d'en-tête (ex "🇺🇸 " pour un scan de séance US).
     """
+    universe = universe or SCAN_UNIVERSE
     # Compat : progress_fn ancienne API → update_fn
     if progress_fn and not update_fn:
         _pf = progress_fn
@@ -1561,14 +1565,14 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
         scan_mode = REGIME_SCAN_MODE.get(regime, "standard")
 
         _upd(
-            f"{emoji} {regime_summary}\n"
+            f"{scan_label}{emoji} {regime_summary}\n"
             f"Mode scan : {scan_mode}\n\n"
-            f"Analyse quantitative de {len(SCAN_UNIVERSE)} actions... (~30 sec)"
+            f"Analyse quantitative de {len(universe)} actions... (~30 sec)"
         )
 
         # ── Étape 0 : filtre quantitatif parallèle ───────────────────────────
-        screened = _quant_screen(SCAN_UNIVERSE, held_tickers, regime=regime, index_mom=index_mom)
-        print(f"[scan] régime={regime} | {len(screened)}/{len(SCAN_UNIVERSE)} candidats")
+        screened = _quant_screen(universe, held_tickers, regime=regime, index_mom=index_mom)
+        print(f"[scan] régime={regime} | {len(screened)}/{len(universe)} candidats")
 
         # En CRISIS : analyse positions uniquement, aucun nouveau trade
         if regime == "CRISIS":
@@ -1779,8 +1783,8 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
               f"{len(rejected)} écartée(s). Envoi du résultat final…")
 
         send_fn(
-            f"{emoji} SCAN OPPORTUNITÉS — {regime_summary}\n"
-            f"{len(SCAN_UNIVERSE)} actions scannées · {len(screened)} passent les filtres\n\n"
+            f"{scan_label}{emoji} SCAN OPPORTUNITÉS — {regime_summary}\n"
+            f"{len(universe)} actions scannées · {len(screened)} passent les filtres\n\n"
             + "\n\n".join(result_parts)
             + f"\n\n💰 Cash: {cash}€"
         )
@@ -1800,6 +1804,18 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             print(f"[scan] impossible d'envoyer l'erreur (réseau ?) : {send_err}")
     finally:
         _scan_lock.release()
+
+
+US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
+
+
+def scan_us_opportunities(send_fn) -> None:
+    """Scan d'opportunités limité aux valeurs US, lancé pendant la séance de
+    Wall Street (planifié à US_SCAN_TIME). Même moteur que /scan mais univers
+    restreint aux tickers US → le bot cherche des entrées l'après-midi/soir,
+    plus seulement au briefing de 9h05. Les opportunités validées alimentent le
+    moteur autonome (entrées dès que la séance US est ouverte, 15:35-22:00)."""
+    scan_opportunities(send_fn, universe=US_UNIVERSE, scan_label="🇺🇸 ")
 
 
 def _parse_vision_output(raw: str) -> list[dict]:

@@ -112,3 +112,16 @@ AUTO_BREAKEVEN_PCT = float(os.getenv("AUTO_BREAKEVEN_PCT", "6"))
 # Scheduler (Paris time, 24h format)
 CHECK_TIMES = ["09:00", "12:00", "15:00", "17:00"]
 ANALYSIS_TIME = "09:05"
+
+# ─── Séance US (heure de Paris) ──────────────────────────────────────────────
+# Wall Street (NYSE/NASDAQ) est ouvert 15:30-22:00 Paris, bien après la clôture
+# d'Euronext (17:30). Les 4 CHECK_TIMES s'arrêtant à 17:00, les positions US
+# n'étaient plus surveillées ni scannées pendant leur séance la plus active.
+# US_EXTENDED_HOURS=off pour revenir à l'ancien comportement (Europe seule).
+US_EXTENDED_HOURS = os.getenv("US_EXTENDED_HOURS", "on").strip().lower() not in ("off", "false", "0", "no")
+# Checks positions/ordres LIMITÉS aux valeurs US (alertes SL/TP), pendant la
+# séance US, après la clôture Euronext. Silencieux si aucune position US.
+US_CHECK_TIMES = [t.strip() for t in os.getenv("US_CHECK_TIMES", "18:00,20:00,21:40").split(",") if t.strip()]
+# Scan d'opportunités limité aux valeurs US, peu après l'ouverture de Wall
+# Street (laisse la liquidité se poser). Vide pour désactiver ce scan.
+US_SCAN_TIME = os.getenv("US_SCAN_TIME", "16:00").strip()

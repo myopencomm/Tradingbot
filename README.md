@@ -221,6 +221,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 |---|---|
 | **Briefing matinal 9h05** | Analyse IA : état des positions + contexte macro + top opportunités |
 | **Surveillance 4×/jour + sync horaire** | Checks 9h / 12h / 15h / 17h (alertes SL/TP) + sync BD silencieux chaque heure : détection automatique des exécutions |
+| **Séance US prolongée** | Wall Street tournant jusqu'à 22h Paris, le bot prolonge la surveillance des positions US (checks 18h / 20h / 21h40, alertes seules) et lance un **scan US** à 16h — plus seulement au briefing de 9h05 (`US_EXTENDED_HOURS`) |
 | **Trailing stop automatique** | À +5% (manuel) / +6% (autonome, `AUTO_BREAKEVEN_PCT`), l'ordre Expert est **remplacé sur BD** avec le SL au PRU (P&L ≥ 0 garanti) |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
@@ -281,7 +282,7 @@ TradingBot/
 **Flux de données :**
 `positions.json` est la source de vérité en mode Classic. En mode Playwright, `bourse_direct_reader.py` synchronise les données réelles de BD dans ce même fichier — les deux modes sont compatibles. Les positions autonomes sont taguées `"autonomous": true` dans ce même fichier.
 
-**Scheduler :** `schedule` (Python) — 4 checks SL/TP/jour + briefing 9h05. À chaque check, `autonomous_engine` est invoqué pour surveiller les positions autonomes et tenter de nouvelles entrées si Playwright est connecté.
+**Scheduler :** `schedule` (Python) — 4 checks SL/TP/jour + briefing 9h05. À chaque check, `autonomous_engine` est invoqué pour surveiller les positions autonomes et tenter de nouvelles entrées si Playwright est connecté. **Séance US** (`US_EXTENDED_HOURS=on`, défaut) : checks positions/ordres **US uniquement** à `US_CHECK_TIMES` (18h/20h/21h40, alertes seules — silencieux sans position US) + scan US à `US_SCAN_TIME` (16h). Les entrées/trailing autonomes, eux, tournent déjà chaque heure jusqu'à 22h via le sync horaire.
 
 **IA :** chaque provider expose `complete(prompt)` et `complete_with_image(prompt, bytes)`. Ajouter un provider = hériter de `AIProvider` dans `ai_provider.py`.
 
@@ -388,7 +389,7 @@ TradingBot/
 
 > Le bot opère entièrement seul sur ce budget : il exploite les opportunités validées par le briefing/`/scan` (cycle d'entrée **toutes les heures** + à chaque check), entre en position via un ordre Expert (SL+TP garantis sur BD), et vous notifie pour chaque action. Maximum 2 positions simultanées ; les **ordres en attente comptent dans le budget** (fonds réservés). La position n'est créée qu'à l'**exécution réelle** de l'ordre, détectée par le sync.
 >
-> **Horaires par marché** : un titre US n'est acheté qu'entre 15h35 et 21h55 Paris (Euronext : 9h05-17h25) — les opportunités US validées le matin attendent l'ouverture de Wall Street.
+> **Horaires par marché** : un titre US n'est acheté qu'entre 15h35 et 21h55 Paris (Euronext : 9h05-17h25) — les opportunités US validées le matin attendent l'ouverture de Wall Street. Depuis la **séance US prolongée**, le bot ne se contente plus des opportunités du matin : il **scanne les valeurs US à 16h** et **surveille les positions US jusqu'à 21h40** (alertes SL/TP), pendant les heures les plus actives de Wall Street (`US_EXTENDED_HOURS`, `US_CHECK_TIMES`, `US_SCAN_TIME`).
 >
 > **Mode gain réduit** (désactivé par défaut — `SMALL_GAIN_MODE=on` pour l'activer) : quand aucune opportunité à +10% ne passe la validation, le bot re-teste les meilleurs candidats en trade court (TP +3 à +8%, horizon 1-5 jours). Désactivé car forcer un trade quand rien ne passe est le schéma « overtrading » documenté (Barber & Odean 2000) — zéro trade est un résultat acceptable.
 >
@@ -638,6 +639,12 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-15 — Séance US prolongée
+- **Surveillance des positions US jusqu'à 21h40** : les 4 checks standards s'arrêtaient à 17h, mais Wall Street tourne jusqu'à 22h Paris. Nouveaux checks `US_CHECK_TIMES` (18h/20h/21h40) **limités aux tickers US**, alertes SL/TP seules — silencieux s'il n'y a aucune position US (pas de spam de status le soir)
+- **Scan d'opportunités US à 16h** (`US_SCAN_TIME`) : `scan_us_opportunities()` rejoue le moteur de `/scan` sur le sous-univers US → le bot cherche des entrées pendant la séance américaine, plus seulement au briefing de 9h05
+- Les entrées + trailing autonomes tournaient déjà chaque heure jusqu'à 22h (sync horaire) — seuls les **alertes de position** et le **scan** manquaient à l'appel après 17h
+- Nouveaux paramètres `.env` : `US_EXTENDED_HOURS` (on/off), `US_CHECK_TIMES`, `US_SCAN_TIME` · `monitor.check_positions`/`check_pending_orders` acceptent `us_only=True` ; `scan_opportunities` accepte un `universe` restreint
 
 ### 2026-07-14 — Phase 2 : backtest + config « recovery »
 - **`backtest.py`** : rejoue le moteur quantitatif sur l'univers de scan avec hypothèses pessimistes et frais réels — compare ancienne logique, Phase 1 et variantes (voir section [Backtest](#backtest-backtestpy))

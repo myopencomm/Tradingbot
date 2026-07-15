@@ -1146,6 +1146,7 @@ def _tuto_classic(cid):
         "AUTOMATIQUE\n"
         "  9h05  → briefing IA (macro + positions)\n"
         "  9/12/15/17h → check SL/TP, alertes\n"
+        "  16h → scan US · 18/20/21h40 → check positions US\n"
         "  Lundi 9h10 → analyse de rotation\n"
         "\n"
         "A LA DEMANDE\n"

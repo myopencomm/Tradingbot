@@ -8,13 +8,22 @@ from config import TP_ALERTS, BREAKEVEN_THRESHOLD
 PARIS = pytz.timezone("Europe/Paris")
 
 
-def check_pending_orders(send_fn) -> None:
-    """Vérifie les ordres en attente sur le range intraday des 4 dernières heures."""
+def _is_us(ticker: str) -> bool:
+    """Ticker US (NYSE/NASDAQ) = sans suffixe de place, convention SCAN_UNIVERSE
+    (les valeurs Euronext/Xetra/LSE portent un suffixe .PA/.AS/.BR/.L…)."""
+    return "." not in (ticker or "")
+
+
+def check_pending_orders(send_fn, us_only: bool = False) -> None:
+    """Vérifie les ordres en attente sur le range intraday des 4 dernières heures.
+    us_only : ne traite que les tickers US (séance US, après clôture Euronext)."""
     pending = portfolio.get_pending_orders()
     if not pending:
         return
 
     for name, cfg in pending.items():
+        if us_only and not _is_us(cfg["ticker"]):
+            continue
         rng   = prices.get_intraday_range(cfg["ticker"], hours=4)
         if not rng:
             continue
@@ -48,20 +57,26 @@ def check_pending_orders(send_fn) -> None:
             )
 
 
-def check_positions(send_fn) -> None:
-    """Scan des positions 4x/jour. Alerte si SL ou TP atteint."""
+def check_positions(send_fn, us_only: bool = False) -> None:
+    """Scan des positions 4x/jour. Alerte si SL ou TP atteint.
+    us_only : séance US — ne surveille que les positions US et reste silencieux
+    (alertes uniquement, pas de status de routine) s'il n'y a rien à signaler."""
     data = portfolio.load()
     positions = data.get("positions", {})
+    if us_only:
+        positions = {n: c for n, c in positions.items() if _is_us(c["ticker"])}
     now = datetime.now(PARIS).strftime("%H:%M")
 
-    print(f"\n[{datetime.now(PARIS).strftime('%Y-%m-%d %H:%M:%S')}] Scan positions...")
+    print(f"\n[{datetime.now(PARIS).strftime('%Y-%m-%d %H:%M:%S')}] "
+          f"Scan positions{' US' if us_only else ''}...")
 
     if not positions:
-        send_fn(f"⚠️ STATUS {now} — Aucune position active.")
+        if not us_only:
+            send_fn(f"⚠️ STATUS {now} — Aucune position active.")
         return
 
     alerts = []
-    status_lines = [f"📊 STATUS {now}"]
+    status_lines = [f"📊 STATUS {now}{' 🇺🇸 US' if us_only else ''}"]
 
     for name, cfg in positions.items():
         # Position HOLD long terme : hors gestion bot — affichage informatif
@@ -214,18 +229,25 @@ def check_positions(send_fn) -> None:
         sent_any = True
 
     if not sent_any:
-        send_fn("\n".join(status_lines))
-        print("✅ Status envoyé — pas d'alerte")
+        if us_only:
+            print("✅ Check US — pas d'alerte (status de routine supprimé)")
+        else:
+            send_fn("\n".join(status_lines))
+            print("✅ Status envoyé — pas d'alerte")
 
-    # Mode autonome : surveillance positions + tentative d'entrée
+    # Mode autonome : surveillance des sorties (SL/TP/breakeven) des positions
+    # autonomes. En séance US on NE relance PAS run_entry_cycle : le sync horaire
+    # (:35) le déclenche déjà toutes les heures jusqu'à 22h — inutile de doubler
+    # les tentatives d'entrée (et le spam de messages).
     try:
         import autonomous_engine
         autonomous_engine.check_autonomous_positions(send_fn)
-        import threading
-        threading.Thread(
-            target=autonomous_engine.run_entry_cycle,
-            args=(send_fn,),
-            daemon=True,
-        ).start()
+        if not us_only:
+            import threading
+            threading.Thread(
+                target=autonomous_engine.run_entry_cycle,
+                args=(send_fn,),
+                daemon=True,
+            ).start()
     except Exception as e:
         print(f"[Auto] Erreur cycle autonome : {e}")
