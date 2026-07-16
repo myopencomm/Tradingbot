@@ -15,7 +15,7 @@ from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
                     FALLBACK_TP_MIN_PCT, FALLBACK_TP_MAX_PCT,
                     RSI_ENTRY_MIN, RSI_ENTRY_MAX, RSI_HARD_MAX,
                     ATR_SL_MULT, MIN_SL_PCT, MAX_SL_PCT, MIN_RR,
-                    SMALL_GAIN_MODE)
+                    SMALL_GAIN_MODE, EARNINGS_VETO_DAYS)
 
 # ── Univers de scan (~100 actions Bourse Direct) ──────────────────────────────
 # Le filtre quantitatif (RSI/momentum/volume) élimine les tickers invalides
@@ -53,6 +53,20 @@ SCAN_UNIVERSE = [
 ]
 
 PARIS = pytz.timezone("Europe/Paris")
+
+
+def _earnings_note(next_earnings: str) -> str:
+    """'2026-08-04' → '2026-08-04 (dans 19 j)'. Donne à l'IA le nombre exact de
+    jours pour appliquer le veto numérique EARNINGS_VETO_DAYS sans improviser.
+    Chaîne brute si parsing impossible ; date passée (donnée obsolète) → brute."""
+    if not next_earnings:
+        return ""
+    try:
+        d = datetime.strptime(str(next_earnings)[:10], "%Y-%m-%d").date()
+        days = (d - datetime.now(PARIS).date()).days
+        return f"{next_earnings} (dans {days} j)" if days >= 0 else str(next_earnings)
+    except Exception:
+        return str(next_earnings)
 
 
 def _lessons_block() -> str:
@@ -164,8 +178,9 @@ RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
   sur ce titre → vérifier immédiatement le prix d'offre avant tout autre raisonnement.
 - CATALYSEUR : l'absence de catalyseur daté n'est PAS un motif d'exclusion —
   le momentum 12 mois + tendance MM200 EST la thèse. Mais un événement binaire
-  IMMINENT (résultats < 5 jours, décision réglementaire) sur une position
-  swing = risque HIGH, à signaler.
+  IMMINENT (résultats dans moins de {EARNINGS_VETO_DAYS} jours, décision
+  réglementaire datée) sur une position swing = risque HIGH, à signaler.
+  Au-delà de {EARNINGS_VETO_DAYS} jours, des résultats ne justifient PAS un veto.
 - SENTIMENT SOCIAL : signal d'appoint — jamais un argument principal d'achat.
 """
 
@@ -193,7 +208,13 @@ SONT des motifs d'EXCLUSION légitimes :
 - une NEWS précise qui invalide la tendance (profit warning, scandale, perte
   de contrat, guidance abaissée)
 - OPA plafonnée (spread < +{_TP}%)
-- événement binaire imminent (résultats/décision < 5 jours) — trop de risque de gap
+- résultats (ou décision réglementaire datée) dans MOINS de {EARNINGS_VETO_DAYS} jours
+  — un SL ne protège PAS d'un gap de résultats (le titre ouvre au-delà du stop).
+  RÈGLE STRICTE ET NUMÉRIQUE : ce veto s'applique UNIQUEMENT sous ce seuil. Des
+  résultats dans {EARNINGS_VETO_DAYS} jours OU PLUS ne sont JAMAIS un motif
+  d'exclusion — un swing momentum tient des semaines et croisera de toute façon
+  des résultats. Dans ce cas : signale-les, mets risque MEDIUM, mais VALIDE si
+  le reste tient. N'invente PAS de fenêtre plus large que {EARNINGS_VETO_DAYS} jours.
 - illiquidité réelle / société en difficulté financière
 - structure technique cassée : support majeur perdu, cours repassé sous MM200
 - couteau qui tombe (perf 1 an < -30% ou cours < +15% du plus bas 52s)
@@ -503,7 +524,7 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
     if funds.get("analyst_target"):
         funds_lines.append(f"- Objectif analyste : {funds['analyst_target']}")
     if funds.get("next_earnings"):
-        funds_lines.append(f"- Prochains résultats : {funds['next_earnings']}")
+        funds_lines.append(f"- Prochains résultats : {_earnings_note(funds['next_earnings'])}")
     if "analyst_buy" in funds:
         funds_lines.append(f"- Consensus : {funds['analyst_buy']} Achat / "
                            f"{funds['analyst_hold']} Neutre / {funds['analyst_sell']} Vente")
@@ -529,7 +550,8 @@ RÈGLES DU TRADE COURT :
   Ici une résistance proche est une CIBLE à exploiter, PAS un motif d'exclusion.
 - SL : serré, sous le dernier support — en %, jamais plus de la moitié du TP visé.
 - Momentum sain exigé : tendance 1 mois positive, RSI < {RSI_HARD_MAX:.0f}, pas de couteau qui tombe.
-- EXCLUS si résultats ou événement binaire dans les 5 prochains jours."""
+- EXCLUS si résultats ou événement binaire daté dans moins de {EARNINGS_VETO_DAYS} jours
+  (un trade court tiendrait le gap) — au-delà, non bloquant."""
         tp_line = (f"{company_name} ({ticker}) — Entrée : {price}{sym}  "
                    f"SL : X{sym} (-X%)  TP : X{sym} (+X%)")
         rules_head = f"{ANALYSIS_RULES}\n{_lessons_block()}{TICKER_RULES}"
@@ -765,7 +787,7 @@ def morning_briefing(send_fn) -> None:
             if funds.get("analyst_target"):
                 parts.append(f"objectif analyste {funds['analyst_target']}")
             if funds.get("next_earnings"):
-                parts.append(f"résultats le {funds['next_earnings']}")
+                parts.append(f"résultats le {_earnings_note(funds['next_earnings'])}")
             for n in pos_news:
                 parts.append(n["title"])
             if parts:
@@ -1286,7 +1308,7 @@ def research_ticker(send_fn, ticker: str, question: str = "",
                 f"{funds['analyst_hold']} Neutre / {funds['analyst_sell']} Vente"
             )
         if funds.get("next_earnings"):
-            funds_lines.append(f"- Prochains résultats : {funds['next_earnings']}")
+            funds_lines.append(f"- Prochains résultats : {_earnings_note(funds['next_earnings'])}")
         funds_block = ("\nFONDAMENTAUX\n" + "\n".join(funds_lines)) if funds_lines else ""
 
         news_block = ""

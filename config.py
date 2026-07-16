@@ -62,6 +62,15 @@ MIN_SL_PCT  = float(os.getenv("MIN_SL_PCT", "3"))
 MAX_SL_PCT  = float(os.getenv("MAX_SL_PCT", "10"))
 MIN_RR      = float(os.getenv("MIN_RR", "1.5"))
 
+# Veto « résultats imminents » : un SL ne protège PAS d'un gap de résultats
+# (le titre ouvre au-delà du stop, pas dessus). On exclut donc à l'achat UNIQUE-
+# MENT si les prochains résultats tombent dans moins de EARNINGS_VETO_DAYS jours.
+# Au-delà, ce n'est PAS un motif d'exclusion (un swing momentum tient des semaines
+# et croisera de toute façon des résultats — bloquer l'entrée à 3 semaines ampute
+# le vivier sans protéger la position). Cadre l'IA pour l'empêcher d'improviser
+# une fenêtre trop large.
+EARNINGS_VETO_DAYS = int(os.getenv("EARNINGS_VETO_DAYS", "6"))
+
 # Sizing par le RISQUE (fractional-Kelly conservateur) : la perte au SL vaut
 # RISK_PER_TRADE_PCT % du budget autonome — plus jamais tout le budget sur un
 # trade. Coût plafonné à MAX_POSITION_PCT % du budget. Réduction de moitié si

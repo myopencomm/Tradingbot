@@ -640,6 +640,12 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-16 — Veto « résultats » : seuil numérique configurable
+- **`EARNINGS_VETO_DAYS` (défaut 6)** : le veto résultats ne s'applique plus qu'aux résultats **imminents** (< N jours). Motif : un SL ne protège pas d'un **gap** de résultats (le titre ouvre au-delà du stop — modélisé dans `backtest.py`), mais bloquer une entrée à 3 semaines des résultats ampute le vivier **sans** protéger la position (un swing momentum croise de toute façon des résultats en cours de route)
+- **Fin de la dérive IA** : l'IA excluait des candidats à 19-20 jours des résultats en inventant une fenêtre « < 21 jours » absente du code (la règle écrite disait < 5 j). La règle est désormais **numérique et explicite** dans les prompts : au-delà de `EARNINGS_VETO_DAYS`, résultats = simple drapeau + risque MEDIUM, jamais une exclusion
+- **`_earnings_note()`** injecte le nombre exact de jours (« résultats 2026-08-04 (dans 19 j) ») pour que l'IA applique le seuil sans se tromper de calcul
+- Ce que le veto ne fait **pas** : il ne sort pas une position détenue avant ses résultats (choix « veto court + drapeau » — le momentum assume de tenir occasionnellement un gap, borné par la taille au risque)
+
 ### 2026-07-15 — Séance US prolongée
 - **Surveillance des positions US jusqu'à 21h40** : les 4 checks standards s'arrêtaient à 17h, mais Wall Street tourne jusqu'à 22h Paris. Nouveaux checks `US_CHECK_TIMES` (18h/20h/21h40) **limités aux tickers US**, alertes SL/TP seules — silencieux s'il n'y a aucune position US (pas de spam de status le soir)
 - **Scan d'opportunités US à 16h** (`US_SCAN_TIME`) : `scan_us_opportunities()` rejoue le moteur de `/scan` sur le sous-univers US → le bot cherche des entrées pendant la séance américaine, plus seulement au briefing de 9h05
@@ -772,6 +778,7 @@ ATR_SL_MULT=2.0           # distance SL = 2×ATR 14j
 MIN_SL_PCT=3              # SL jamais plus serré (bruit du titre)
 MAX_SL_PCT=10             # au-delà : titre trop volatil → exclu
 MIN_RR=1.5                # TP ≥ 1.5× la distance du SL
+EARNINGS_VETO_DAYS=6      # EXCLUS si résultats < N jours (gap non couvert par le SL) ; au-delà, non bloquant
 RISK_PER_TRADE_PCT=1.0    # perte au SL en % du budget autonome
 MAX_POSITION_PCT=30       # coût max d'une position en % du budget autonome
 VOL_SCALE_TRIGGER=1.5     # vol 20j > 1.5× vol 1 an → taille réduite de moitié
