@@ -525,10 +525,15 @@ Bot : "🤖 MODE AUTONOME — Entrée en cours
        SL : 664€ (-7.8%) | TP : 800€ (+11.1%)
        Coût : 720€ | Setup technique momentum"
 
-Bot : "✅ ACHAT AUTONOME CONFIRMÉ
+Bot : "✅ ORDRE AUTONOME PLACÉ SUR BD
        ASML.AS | 1 titre @ 720€
        SL : 664€ | TP : 800€
-       Coût : 720€ | Budget restant : 0€"
+       Coût : 720€ | Budget restant : 0€
+
+       💡 EN BREF
+       ASML fabrique les machines qui gravent les puces les plus avancées.
+       Quasi-monopole mondial : personne d'autre ne sait faire ces machines EUV.
+       Momentum 12 mois solide, au-dessus de sa MM200, demande IA en forte hausse."
 
 [Quelques jours plus tard, à +6%]
 Bot : "🤖 AUTO BREAKEVEN — ASML
@@ -639,6 +644,10 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-16 — Achat auto : résumé « EN BREF » en langage simple
+- À chaque **ordre autonome placé**, le message Telegram inclut désormais **3 lignes en langage simple** : ce que fait l'entreprise + pourquoi le deal peut être gagnant (au lieu du seul ticker, ex. `GLE.PA`). Généré par `_deal_summary()` à partir des fondamentaux (secteur, consensus analystes, objectif), des techniques (momentum 12-1, MM200, RSI) et de la thèse validée
+- Modèle **cheap** (Haiku côté Anthropic) via `complete_cheap`, généré **après** le placement de l'ordre → aucun délai sur le trade, best-effort (jamais bloquant si l'IA échoue)
 
 ### 2026-07-16 — Veto « résultats » : seuil numérique configurable
 - **`EARNINGS_VETO_DAYS` (défaut 6)** : le veto résultats ne s'applique plus qu'aux résultats **imminents** (< N jours). Motif : un SL ne protège pas d'un **gap** de résultats (le titre ouvre au-delà du stop — modélisé dans `backtest.py`), mais bloquer une entrée à 3 semaines des résultats ampute le vivier **sans** protéger la position (un swing momentum croise de toute façon des résultats en cours de route)

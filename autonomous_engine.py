@@ -201,6 +201,55 @@ def cancel_auto_order_if_rejected(ticker: str, reason: str, send_fn=None) -> Non
 
 # ─── Cycle d'entrée ─────────────────────────────────────────────────────────
 
+def _deal_summary(ticker: str, reason: str = "") -> str:
+    """3 lignes en langage SIMPLE pour un achat auto : ce que fait l'entreprise
+    + pourquoi le deal peut être gagnant. Sert quand on ne reçoit qu'un ticker
+    (ex: GLE.PA) sans savoir ce que c'est. Best-effort — jamais bloquant :
+    généré APRÈS le placement de l'ordre, chaîne vide si l'IA/les données échouent."""
+    try:
+        funds = prices.get_fundamentals(ticker) or {}
+        tech  = prices.get_technicals(ticker) or {}
+        name  = funds.get("name") or ticker
+        thesis = ""
+        try:
+            thesis = (portfolio.get_entry_context(ticker) or {}).get("thesis", "") or ""
+        except Exception:
+            pass
+        thesis = thesis or reason
+
+        facts = []
+        if funds.get("sector"):
+            facts.append(f"secteur {funds['sector']}")
+        if tech.get("mom_12_1") is not None:
+            facts.append(f"momentum 12 mois {tech['mom_12_1']:+.0f}%")
+        if tech.get("above_ma200"):
+            facts.append("au-dessus de sa moyenne 200 jours (tendance haussière)")
+        if tech.get("rsi") is not None:
+            facts.append(f"RSI {tech['rsi']:.0f}")
+        if funds.get("analyst_target"):
+            facts.append(f"objectif analystes {funds['analyst_target']}")
+        if any(k in funds for k in ("analyst_buy", "analyst_hold", "analyst_sell")):
+            facts.append(f"avis analystes {funds.get('analyst_buy',0)} achat / "
+                         f"{funds.get('analyst_hold',0)} neutre / {funds.get('analyst_sell',0)} vente")
+        facts_str = " ; ".join(facts) or "momentum haussier confirmé par le filtre quantitatif"
+
+        prompt = (
+            "Tu écris pour un investisseur particulier NON expert. "
+            "Exactement 3 lignes, sans jargon, sans markdown, sans préambule :\n"
+            f"Ligne 1 — ce que fait {name} ({ticker}) en une phrase simple et concrète.\n"
+            "Ligne 2 — pourquoi ce trade peut être gagnant, en langage simple.\n"
+            "Ligne 3 — la dynamique/le contexte qui soutient la hausse, en une phrase.\n\n"
+            f"Données validées : {facts_str}.\n"
+            f"Thèse du filtre : {thesis[:200]}\n"
+            "Chaque ligne fait moins de 120 caractères."
+        )
+        from ai_provider import get_provider
+        return get_provider().complete_cheap(prompt, max_tokens=200).strip()
+    except Exception as e:
+        print(f"[Auto] deal summary {ticker}: {e}")
+        return ""
+
+
 def _place_order(ticker: str, entry: float, sl: float, tp: float,
                  available: float, reason: str, send_fn) -> bool:
     """
@@ -375,6 +424,8 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
             expires_at=portfolio.market_close_expiry(ticker).isoformat(),
         )
 
+        blurb = _deal_summary(ticker, reason)
+        blurb_block = f"\n\n💡 EN BREF\n{blurb}" if blurb else ""
         send_fn(
             f"✅ ORDRE AUTONOME PLACÉ SUR BD\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -382,6 +433,7 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
             f"SL : {sl}{sym} | TP : {tp}{sym}\n"
             f"Coût : {cost:.0f}€ | Budget auto restant : {available - cost:.0f}€\n"
             f"Position créée automatiquement à l'exécution (sync)."
+            + blurb_block
         )
         # Sync silencieux différé : aligne portefeuille + cash si l'ordre
         # est exécuté immédiatement (limite au cours).
