@@ -645,6 +645,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-17 — Scan US auto : sauté quand aucun achat n'est possible
+- Le scan US planifié (16h) est **sauté silencieusement** quand le cash est sous le **plancher de viabilité** (`min_viable_cash()` ≈ 200€ avec les défauts BD : gain brut au TP ≥ 5× les frais A/R). En dessous, chaque candidat serait vetoé « cash insuffisant » — le scan brûlait ~8 validations IA pour un résultat garanti vide (observé le 17/07 : cash 154€, 8 validations, 0 opportunité)
+- Le `/scan` **manuel** n'est pas concerné (toujours complet, revue de positions incluse) ; le briefing de 9h05 avait déjà son propre seuil (1000€)
+- Pas de branchement scan→swap : la rotation reste l'affaire de l'analyse hebdo du lundi 9h10, volontairement stricte (thèse invalidée uniquement, friction > gain si position < ~600€) — un swap quotidien piloté par le scan serait une machine à overtrading
+
 ### 2026-07-16 — Achat auto : résumé « EN BREF » en langage simple
 - À chaque **ordre autonome placé**, le message Telegram inclut désormais **3 lignes en langage simple** : ce que fait l'entreprise + pourquoi le deal peut être gagnant (au lieu du seul ticker, ex. `GLE.PA`). Généré par `_deal_summary()` à partir des fondamentaux (secteur, consensus analystes, objectif), des techniques (momentum 12-1, MM200, RSI) et de la thèse validée
 - Modèle **cheap** (Haiku côté Anthropic) via `complete_cheap`, généré **après** le placement de l'ordre → aucun délai sur le trade, best-effort (jamais bloquant si l'IA échoue)
@@ -657,7 +662,7 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ### 2026-07-15 — Séance US prolongée
 - **Surveillance des positions US jusqu'à 21h40** : les 4 checks standards s'arrêtaient à 17h, mais Wall Street tourne jusqu'à 22h Paris. Nouveaux checks `US_CHECK_TIMES` (18h/20h/21h40) **limités aux tickers US**, alertes SL/TP seules — silencieux s'il n'y a aucune position US (pas de spam de status le soir)
-- **Scan d'opportunités US à 16h** (`US_SCAN_TIME`) : `scan_us_opportunities()` rejoue le moteur de `/scan` sur le sous-univers US → le bot cherche des entrées pendant la séance américaine, plus seulement au briefing de 9h05
+- **Scan d'opportunités US à 16h** (`US_SCAN_TIME`) : `scan_us_opportunities()` rejoue le moteur de `/scan` sur le sous-univers US → le bot cherche des entrées pendant la séance américaine, plus seulement au briefing de 9h05. **Sauté automatiquement si le cash est sous le plancher de viabilité** (~200€ : en dessous, le garde-fou frais vetoerait tout candidat — inutile de brûler des validations IA). Le `/scan` manuel reste toujours complet
 - Les entrées + trailing autonomes tournaient déjà chaque heure jusqu'à 22h (sync horaire) — seuls les **alertes de position** et le **scan** manquaient à l'appel après 17h
 - Nouveaux paramètres `.env` : `US_EXTENDED_HOURS` (on/off), `US_CHECK_TIMES`, `US_SCAN_TIME` · `monitor.check_positions`/`check_pending_orders` acceptent `us_only=True` ; `scan_opportunities` accepte un `universe` restreint
 

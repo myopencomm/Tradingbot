@@ -1831,12 +1831,30 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
 
 
+def min_viable_cash() -> float:
+    """Cash minimum pour qu'UN achat puisse passer le garde-fou frais : le gain
+    brut au TP (+DEFAULT_TP_PCT%) doit valoir ≥ MIN_NET_GAIN_FEE_RATIO × les
+    frais aller-retour. En dessous, tout candidat serait vetoé — un scan
+    automatique ne peut alors rien produire (~200€ avec les défauts BD)."""
+    return round(2 * BROKERAGE_FEE * MIN_NET_GAIN_FEE_RATIO / (DEFAULT_TP_PCT / 100), 0)
+
+
 def scan_us_opportunities(send_fn) -> None:
     """Scan d'opportunités limité aux valeurs US, lancé pendant la séance de
     Wall Street (planifié à US_SCAN_TIME). Même moteur que /scan mais univers
     restreint aux tickers US → le bot cherche des entrées l'après-midi/soir,
     plus seulement au briefing de 9h05. Les opportunités validées alimentent le
-    moteur autonome (entrées dès que la séance US est ouverte, 15:35-22:00)."""
+    moteur autonome (entrées dès que la séance US est ouverte, 15:35-22:00).
+
+    Sauté si le cash ne permet AUCUN achat (garde-fou frais) : inutile de brûler
+    8 validations IA pour des vetos « cash insuffisant » garantis. Le /scan
+    MANUEL n'est pas concerné (toujours complet, positions incluses)."""
+    floor = min_viable_cash()
+    cash = portfolio.get_cash()
+    if cash < floor:
+        print(f"[scan US] sauté — cash {cash:.0f}€ < plancher {floor:.0f}€ "
+              f"(aucun achat ne passerait le garde-fou frais)")
+        return
     scan_opportunities(send_fn, universe=US_UNIVERSE, scan_label="🇺🇸 ")
 
 
