@@ -43,4 +43,6 @@ PLAYWRIGHT_STRATEGY.md
 
 # Cache sentiment social (données dérivées, régénéré à chaque run)
 sentiment_cache.json
+# Cache du résumé macro (dérivé de macro_analysis.md, données perso)
+macro_summary_cache.json
 dashboard-link.local.txt

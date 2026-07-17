@@ -287,19 +287,66 @@ def _analyze_chart(ticker: str, ai) -> str:
             "- Niveaux clés visibles : support principal et résistance principale en prix\n"
             "- Signal technique global : POSITIF / NEUTRE / NÉGATIF — justification en 5 mots"
         )
-        result = ai.complete_with_image(prompt, image_bytes)
+        result = ai.complete_cheap_with_image(prompt, image_bytes)
         return result.strip()
     except Exception as e:
         print(f"[chart vision] {ticker}: {e}")
         return ""
 
 
+# Au-delà de ce seuil, macro_analysis.md est résumé par le modèle cheap avant
+# injection : un document de 47 Ko (~12k tokens) envoyé entier dans chaque
+# revue de positions représentait ~60-70% de la facture API, et un dump aussi
+# long DILUE l'attention du modèle — le condensé sert mieux la décision.
+# Résumé regénéré uniquement quand le fichier change (cache sur mtime).
+_MACRO_SUMMARY_THRESHOLD = 6000   # chars ; en dessous : texte intégral
+_MACRO_CACHE_PATH = MACRO_ANALYSIS_PATH.parent / "macro_summary_cache.json"
+
+
+def _macro_summary(content: str, mtime: float) -> str:
+    """Résumé (~2500 chars) de l'analyse macro, mis en cache par mtime.
+    En cas d'échec IA : texte intégral (comportement d'avant, jamais dégradé)."""
+    import json as _json
+    try:
+        cached = _json.loads(_MACRO_CACHE_PATH.read_text(encoding="utf-8"))
+        if cached.get("mtime") == mtime and cached.get("summary"):
+            return cached["summary"]
+    except Exception:
+        pass
+    try:
+        summary = get_provider().complete_cheap(
+            "Condense cette analyse macro sectorielle en 2500 caractères MAXIMUM, "
+            "texte brut sans markdown. GARDE impérativement : les convictions "
+            "sectorielles avec leur direction (surpondérer/éviter), les niveaux et "
+            "dates clés, les risques majeurs datés, les recommandations concrètes. "
+            "SUPPRIME : narratif, répétitions, contexte historique générique.\n\n"
+            + content,
+            max_tokens=1200,
+        ).strip()
+        if len(summary) < 200:   # réponse anormalement courte → ne pas dégrader
+            return content
+        _MACRO_CACHE_PATH.write_text(
+            _json.dumps({"mtime": mtime, "summary": summary}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"[macro] résumé regénéré ({len(content)} → {len(summary)} chars)")
+        return summary
+    except Exception as e:
+        print(f"[macro] résumé impossible ({e}) — texte intégral utilisé")
+        return content
+
+
 def _macro_context() -> str:
-    """Charge l'analyse macro sectorielle si macro_analysis.md existe (document daté, mis à jour par l'utilisateur)."""
+    """Charge l'analyse macro sectorielle si macro_analysis.md existe (document
+    daté, mis à jour par l'utilisateur). Les documents longs sont condensés par
+    le modèle cheap (cache sur mtime) avant injection dans les prompts."""
     try:
         if MACRO_ANALYSIS_PATH.exists():
             content = MACRO_ANALYSIS_PATH.read_text(encoding="utf-8")
-            mtime = datetime.fromtimestamp(MACRO_ANALYSIS_PATH.stat().st_mtime).strftime("%d/%m/%Y")
+            mtime_ts = MACRO_ANALYSIS_PATH.stat().st_mtime
+            mtime = datetime.fromtimestamp(mtime_ts).strftime("%d/%m/%Y")
+            if len(content) > _MACRO_SUMMARY_THRESHOLD:
+                content = _macro_summary(content, mtime_ts)
             return (
                 f"\n--- ANALYSE MACRO SECTORIELLE (rédigée/mise à jour le {mtime}) ---\n"
                 f"{content}\n"

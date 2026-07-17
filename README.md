@@ -645,6 +645,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-17 — Coûts API réduits (~60-70%) sans toucher à la décision
+- **Résumé macro automatique** : `macro_analysis.md` (47 Ko ≈ 12k tokens) était injecté ENTIER dans chaque revue de positions (scan + briefing) — 60-70% de la facture API. Au-delà de 6 000 caractères, il est désormais **condensé (~2 500 chars) par le modèle cheap**, avec cache sur date de modification (regénéré uniquement quand le fichier change). Un dump de 47 Ko dilue l'attention du modèle : le condensé sert *mieux* la décision. En cas d'échec IA → texte intégral (jamais dégradé)
+- **Lecture de graphique sur le modèle cheap** (`complete_cheap_with_image`, Haiku côté Anthropic) : décrire chandeliers/supports/résistances est une tâche descriptive, pas un jugement — le verdict ACHAT/EXCLUS reste intégralement sur le modèle principal (Sonnet)
+- Combiné au plancher cash du scan US (ci-dessous), la facture attendue passe de ~10$/mois à ~3-4$/mois
+
 ### 2026-07-17 — Scan US auto : sauté quand aucun achat n'est possible
 - Le scan US planifié (16h) est **sauté silencieusement** quand le cash est sous le **plancher de viabilité** (`min_viable_cash()` ≈ 200€ avec les défauts BD : gain brut au TP ≥ 5× les frais A/R). En dessous, chaque candidat serait vetoé « cash insuffisant » — le scan brûlait ~8 validations IA pour un résultat garanti vide (observé le 17/07 : cash 154€, 8 validations, 0 opportunité)
 - Le `/scan` **manuel** n'est pas concerné (toujours complet, revue de positions incluse) ; le briefing de 9h05 avait déjà son propre seuil (1000€)

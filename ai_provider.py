@@ -32,6 +32,11 @@ class AIProvider(ABC):
             "Utilisez anthropic, openai, groq ou gemini."
         )
 
+    def complete_cheap_with_image(self, prompt: str, image_bytes: bytes) -> str:
+        """Vision sur le modèle le moins cher (micro-tâches descriptives :
+        lecture de graphique). Par défaut : même modèle que complete_with_image()."""
+        return self.complete_with_image(prompt, image_bytes)
+
 
 class AnthropicProvider(AIProvider):
     DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -59,9 +64,18 @@ class AnthropicProvider(AIProvider):
         return msg.content[0].text
 
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
+        return self._vision(self.model, prompt, image_bytes)
+
+    def complete_cheap_with_image(self, prompt: str, image_bytes: bytes) -> str:
+        # Lecture de graphique = tâche descriptive structurée → Haiku suffit
+        # (~12× moins cher que Sonnet en input). Le verdict ACHAT/EXCLUS reste
+        # sur le modèle principal.
+        return self._vision(self.CHEAP_MODEL, prompt, image_bytes)
+
+    def _vision(self, model: str, prompt: str, image_bytes: bytes) -> str:
         b64 = base64.standard_b64encode(image_bytes).decode()
         msg = self.client.messages.create(
-            model=self.model,
+            model=model,
             max_tokens=1000,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
