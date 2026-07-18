@@ -184,6 +184,8 @@ button.on { border-color: #3fd583; color: #3fd583; }
   <div class="card"><div class="v @PNL_CLS@">@REALIZED@€</div><div class="l">P&L réalisé (@NB@ trades)</div></div>
   <div class="card"><div class="v @UPNL_CLS@">@UNREALIZED@€</div><div class="l">P&L latent (positions)</div></div>
   <div class="card"><div class="v @TPNL_CLS@">@TOTAL@€</div><div class="l">P&L total</div></div>
+  <div class="card"><div class="v red">-@API_COST@€</div><div class="l">Coûts API IA (@API_MONTH@€ ce mois)</div></div>
+  <div class="card"><div class="v @NET_CLS@">@NET@€</div><div class="l">P&L net après coûts IA</div></div>
   <div class="card"><div class="v">@WIN_RATE@%</div><div class="l">Win rate (@WINS@W / @LOSSES@L)</div></div>
   <div class="card"><div class="v">@PF@</div><div class="l">Profit factor</div></div>
   <div class="card"><div class="v">@CASH@€</div><div class="l">Cash disponible</div></div>
@@ -335,6 +337,10 @@ def render_html() -> str:
         "@UPNL_CLS@":   cls(s["unrealized_pnl"]),
         "@TOTAL@":      signed(s["total_pnl"]),
         "@TPNL_CLS@":   cls(s["total_pnl"]),
+        "@API_COST@":   f"{s.get('api_cost_eur', 0):.2f}",
+        "@API_MONTH@":  f"{s.get('api_month_eur', 0):.2f}",
+        "@NET@":        signed(s.get("net_pnl", s["total_pnl"])),
+        "@NET_CLS@":    cls(s.get("net_pnl", s["total_pnl"])),
         "@NB@":         str(s["nb_closed"]),
         "@WIN_RATE@":   str(s["win_rate"]),
         "@WINS@":       str(s["nb_wins"]),
@@ -464,6 +470,7 @@ def summary_text() -> str:
         f"P&L réalisé : {s['realized_pnl']:+.2f}€ ({s['nb_closed']} trades "
         f"en {d['span_days']}j ≈ {d['per_day']:+.2f}€/j)\n"
         f"P&L latent : {s['unrealized_pnl']:+.2f}€ | Total : {s['total_pnl']:+.2f}€\n"
+        f"Coûts API IA : -{s.get('api_cost_eur', 0):.2f}€ → Net : {s.get('net_pnl', s['total_pnl']):+.2f}€\n"
         f"Win rate : {s['win_rate']}% ({s['nb_wins']}W/{s['nb_losses']}L) | "
         f"Profit factor : {pf}\n"
         f"Cash : {cash:.2f}€\n\n"

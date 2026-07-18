@@ -45,4 +45,6 @@ PLAYWRIGHT_STRATEGY.md
 sentiment_cache.json
 # Cache du résumé macro (dérivé de macro_analysis.md, données perso)
 macro_summary_cache.json
+# Suivi des coûts API (conso perso)
+api_costs.json
 dashboard-link.local.txt

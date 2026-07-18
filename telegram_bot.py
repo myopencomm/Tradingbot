@@ -673,6 +673,10 @@ def cmd_stats(args, cid):
     lines.append(f"\nPOSITIONS OUVERTES")
     lines.append(f"P&L latent    : {s['unrealized_pnl']:+.0f}€")
     lines.append(f"\nTOTAL P&L     : {s['total_pnl']:+.0f}€")
+    if s.get("api_cost_eur"):
+        lines.append(f"Couts API IA  : -{s['api_cost_eur']:.2f}€ "
+                     f"(dont {s['api_month_eur']:.2f}€ ce mois)")
+        lines.append(f"NET apres IA  : {s['net_pnl']:+.0f}€")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     send("\n".join(lines), cid)
 

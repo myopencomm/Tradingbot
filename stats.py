@@ -89,6 +89,17 @@ def get_stats() -> dict:
         if price:
             unrealized_pnl += (price - cfg["entry_price"]) * cfg["qty"]
 
+    # Coûts API IA — 2e charge réelle après les frais de courtage (déjà déduits
+    # par trade). Sans eux, le bilan surestime l'efficacité du bot.
+    try:
+        import api_costs
+        costs = api_costs.get_costs()
+        api_cost_eur = costs["total_eur"]
+        api_month_eur = costs["month_eur"]
+    except Exception:
+        api_cost_eur, api_month_eur = 0.0, 0.0
+
+    total_pnl = round(realized_pnl + unrealized_pnl, 2)
     return {
         "nb_closed":      len(closed),
         "nb_wins":        len(wins),
@@ -96,7 +107,10 @@ def get_stats() -> dict:
         "win_rate":       round(win_rate, 1),
         "realized_pnl":   round(realized_pnl, 2),
         "unrealized_pnl": round(unrealized_pnl, 2),
-        "total_pnl":      round(realized_pnl + unrealized_pnl, 2),
+        "total_pnl":      total_pnl,
+        "api_cost_eur":   api_cost_eur,
+        "api_month_eur":  api_month_eur,
+        "net_pnl":        round(total_pnl - api_cost_eur, 2),
         "avg_win":        round(avg_win, 2),
         "avg_loss":       round(avg_loss, 2),
         "profit_factor":  profit_factor,

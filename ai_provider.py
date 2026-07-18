@@ -47,12 +47,23 @@ class AnthropicProvider(AIProvider):
         self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         self.model = AI_MODEL or self.DEFAULT_MODEL
 
+    @staticmethod
+    def _track(model: str, msg):
+        """Enregistre les tokens réels de l'appel (bilan honnête — /stats,
+        dashboard). Best-effort : jamais bloquant."""
+        try:
+            import api_costs
+            api_costs.record(model, msg.usage.input_tokens, msg.usage.output_tokens)
+        except Exception:
+            pass
+
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
         msg = self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
+        self._track(self.model, msg)
         return msg.content[0].text
 
     def complete_cheap(self, prompt: str, max_tokens: int = 100) -> str:
@@ -61,6 +72,7 @@ class AnthropicProvider(AIProvider):
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
+        self._track(self.CHEAP_MODEL, msg)
         return msg.content[0].text
 
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
@@ -82,6 +94,7 @@ class AnthropicProvider(AIProvider):
                 {"type": "text", "text": prompt},
             ]}],
         )
+        self._track(model, msg)
         return msg.content[0].text
 
 

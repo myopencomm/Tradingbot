@@ -231,6 +231,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Sizing par le risque** | Perte au SL = 1% du budget autonome, SL ≈ 2×ATR, taille réduite si volatilité élevée ou série de pertes |
 | **Mode gain réduit** (opt-in) | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) — désactivé par défaut (`SMALL_GAIN_MODE=on` pour l'activer) |
 | **Dashboard visuel** | http://localhost:8642 (accès Tailscale possible) + `/dashboard` Telegram : P&L cumulé, cash engagé, ROI, trades filtrables |
+| **Coûts API dans le bilan** | Chaque appel IA enregistre ses tokens réels (`api_costs.json`) ; `/stats` et le dashboard affichent le coût cumulé et le **P&L net après coûts IA** — bilan honnête de l'efficacité du bot |
 | **Instructions d'ordres** | Format Bourse Direct step-by-step, prêt à saisir sur mobile ou web |
 | **Import screenshot** | Envoyez vos captures d'écran — le bot lit et importe automatiquement |
 | **Import CSV** | Envoyez l'export Bourse Direct — importe avec SL/TP par défaut |
@@ -302,7 +303,7 @@ TradingBot/
 |---|---|
 | `/status` | Portefeuille complet avec P&L temps réel, alertes SL/TP |
 | `/cash [montant]` | Voir ou mettre à jour le cash disponible |
-| `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor |
+| `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor, **coûts API IA et P&L net** |
 | `/dashboard` | Graphique P&L cumulé + résumé visuel (image) — voir section [Dashboard](#dashboard-visuel) |
 | `/lessons` | Ce que le bot a appris de ses trades passés + garde-fous actifs — voir section [Apprentissage](#boucle-dapprentissage) |
 
@@ -644,6 +645,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-18 — Coûts API intégrés au bilan (P&L net honnête)
+- **`api_costs.py`** : chaque appel Anthropic enregistre ses tokens réels (renvoyés par l'API) dans `api_costs.json` (gitignoré), valorisés au tarif du modèle (Haiku/Sonnet/Opus). Amorce : 5,66$ constatés sur la console Anthropic du 01-17/07 (CSV) ; l'usage mai-juin, inconnu, n'est **pas estimé** — on ne comptabilise que le mesuré
+- **`/stats`** : lignes « Coûts API IA » (total + mois en cours) et « NET après IA » ; **dashboard** : cartes « Coûts API IA » et « P&L net après coûts IA » + résumé Telegram
+- Motif : les frais de courtage sont déduits par trade, mais les coûts IA (2e charge réelle) étaient invisibles → le bilan surestimait l'efficacité du bot. Conversion USD→EUR au fx live
 
 ### 2026-07-17 — Coûts API réduits (~60-70%) sans toucher à la décision
 - **Résumé macro automatique** : `macro_analysis.md` (47 Ko ≈ 12k tokens) était injecté ENTIER dans chaque revue de positions (scan + briefing) — 60-70% de la facture API. Au-delà de 6 000 caractères, il est désormais **condensé (~2 500 chars) par le modèle cheap**, avec cache sur date de modification (regénéré uniquement quand le fichier change). Un dump de 47 Ko dilue l'attention du modèle : le condensé sert *mieux* la décision. En cas d'échec IA → texte intégral (jamais dégradé)
