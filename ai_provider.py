@@ -203,7 +203,7 @@ class GroqProvider(AIProvider):
 
 
 class GeminiProvider(AIProvider):
-    DEFAULT_MODEL = "gemini-2.0-flash"
+    DEFAULT_MODEL = "gemini-2.5-flash"
 
     def __init__(self):
         import google.generativeai as genai
@@ -252,7 +252,7 @@ PROVIDER_INFO = {
     "openai":    {"free": False, "vision": True,  "default_model": "gpt-4o-mini"},
     "mistral":   {"free": False, "vision": True,  "default_model": "mistral-small-latest"},
     "groq":      {"free": True,  "vision": True,  "default_model": "llama-3.3-70b-versatile"},
-    "gemini":    {"free": True,  "vision": True,  "default_model": "gemini-2.0-flash"},
+    "gemini":    {"free": True,  "vision": True,  "default_model": "gemini-2.5-flash"},
 }
 
 
