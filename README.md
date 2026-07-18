@@ -304,6 +304,7 @@ TradingBot/
 | `/status` | Portefeuille complet avec P&L temps réel, alertes SL/TP |
 | `/cash [montant]` | Voir ou mettre à jour le cash disponible |
 | `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor, **coûts API IA et P&L net** |
+| `/fallback [provider] [clé]` | IA de secours : `/fallback gemini CLE_API` teste la clé, l'enregistre dans `.env`, **supprime le message du chat** et active la bascule auto si le provider principal échoue. `/fallback` = état, `/fallback off` = désactiver |
 | `/dashboard` | Graphique P&L cumulé + résumé visuel (image) — voir section [Dashboard](#dashboard-visuel) |
 | `/lessons` | Ce que le bot a appris de ses trades passés + garde-fous actifs — voir section [Apprentissage](#boucle-dapprentissage) |
 
@@ -645,6 +646,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-18 — IA de secours (fallback multi-providers)
+- **`FallbackProvider`** : si le provider IA principal échoue (crédits épuisés — incident du 17/07, panne, rate limit), le bot bascule automatiquement sur le(s) provider(s) de secours listés dans `AI_FALLBACK_PROVIDERS` (ex: `gemini,groq`), essayés dans l'ordre. Le bot reste opérationnel au lieu de devenir aveugle. Notification Telegram à la première bascule (throttlée 1×/6h)
+- **`/fallback gemini CLE_API`** : configuration **depuis Telegram** pensée pour les non-techniciens — la clé est **testée en réel** avant activation, écrite uniquement dans `.env` local (gitignoré), et **le message contenant la clé est supprimé du chat** immédiatement (elle ne reste pas dans l'historique Telegram). `/fallback` = état de la chaîne (clés masquées), `/fallback off` = désactivation
+- Clés lues à chaud (`os.environ` d'abord) : la bascule fonctionne **sans redémarrage**. Les appels Gemini sont désormais comptés dans les coûts API (tarifs flash/pro) — le bilan reste honnête quel que soit le provider
 
 ### 2026-07-18 — Coûts API intégrés au bilan (P&L net honnête)
 - **`api_costs.py`** : chaque appel Anthropic enregistre ses tokens réels (renvoyés par l'API) dans `api_costs.json` (gitignoré), valorisés au tarif du modèle (Haiku/Sonnet/Opus). Amorce : 5,66$ constatés sur la console Anthropic du 01-17/07 (CSV) ; l'usage mai-juin, inconnu, n'est **pas estimé** — on ne comptabilise que le mesuré

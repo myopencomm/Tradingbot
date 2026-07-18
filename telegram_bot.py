@@ -172,6 +172,7 @@ BOT_COMMANDS = [
     ("disconnect", "Repasser en mode Classic"),
     ("syncmail",   "Detecter les ventes via emails BD"),
     ("import",     "Guide import CSV"),
+    ("fallback",   "IA de secours — /fallback gemini CLE_API"),
     ("tuto",       "Guide pas a pas"),
     ("update",     "Version du bot"),
     ("help",       "Liste complete des commandes"),
@@ -679,6 +680,123 @@ def cmd_stats(args, cid):
         lines.append(f"NET apres IA  : {s['net_pnl']:+.0f}€")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     send("\n".join(lines), cid)
+
+
+_incoming_msg_id = None
+
+_PROVIDER_ENV_KEYS = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai":    "OPENAI_API_KEY",
+    "mistral":   "MISTRAL_API_KEY",
+    "groq":      "GROQ_API_KEY",
+    "gemini":    "GEMINI_API_KEY",
+}
+
+
+def _set_env_var(key: str, value: str):
+    """Écrit/remplace KEY=value dans .env (préserve le reste) + os.environ.
+    Le .env est gitignoré : la clé ne quitte jamais la machine."""
+    import os
+    from pathlib import Path
+    env_path = Path(__file__).parent / ".env"
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    prefix = f"{key}="
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith(prefix):
+            lines[i] = f"{key}={value}"
+            replaced = True
+            break
+    if not replaced:
+        lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[key] = value
+
+
+def cmd_fallback(args, cid):
+    """
+    /fallback                     → état de la chaîne IA
+    /fallback gemini CLE_API      → enregistre + teste + active le fallback
+    /fallback gemini              → (ré)active un fallback dont la clé est déjà connue
+    /fallback off                 → désactive tous les fallbacks
+    Le message contenant la clé est SUPPRIMÉ du chat après traitement.
+    """
+    import os
+    import ai_provider
+    from config import AI_PROVIDER
+
+    if not args:
+        chain = ai_provider.get_fallback_chain()
+        lines = [f"CHAÎNE IA\nPrincipal : {AI_PROVIDER}"]
+        if chain:
+            for name in chain:
+                key = os.environ.get(_PROVIDER_ENV_KEYS[name], "")
+                masked = f"…{key[-4:]}" if key else "⚠️ clé absente"
+                lines.append(f"Fallback  : {name} (clé {masked})")
+        else:
+            lines.append("Fallback  : aucun")
+        lines.append("\n/fallback gemini CLE_API pour en ajouter un\n"
+                     "/fallback off pour tout désactiver")
+        send("\n".join(lines), cid)
+        return
+
+    if args[0].lower() == "off":
+        _set_env_var("AI_FALLBACK_PROVIDERS", "")
+        send("Fallbacks IA désactivés.", cid)
+        return
+
+    name = args[0].lower()
+    if name not in _PROVIDER_ENV_KEYS:
+        send(f"Provider inconnu : {name}\nValides : {', '.join(_PROVIDER_ENV_KEYS)}", cid)
+        return
+    if name == AI_PROVIDER:
+        send(f"{name} est déjà le provider PRINCIPAL — choisis-en un autre en fallback.", cid)
+        return
+
+    env_key = _PROVIDER_ENV_KEYS[name]
+
+    # Clé fournie → confidentialité d'abord : suppression du message du chat
+    # (la clé ne doit pas rester lisible dans l'historique Telegram).
+    if len(args) >= 2:
+        new_key = args[1].strip()
+        if _incoming_msg_id:
+            deleted = delete_message(_incoming_msg_id, cid)
+            note = ("🗑️ Ton message avec la clé a été supprimé du chat."
+                    if deleted else
+                    "⚠️ Impossible de supprimer ton message — efface-le manuellement.")
+        else:
+            note = "⚠️ Efface manuellement ton message contenant la clé."
+        os.environ[env_key] = new_key   # provisoire, le temps du test
+    elif not os.environ.get(env_key):
+        send(f"Aucune clé connue pour {name}.\nUsage : /fallback {name} CLE_API", cid)
+        return
+    else:
+        note = ""
+
+    # Test réel de la clé AVANT de persister
+    send(f"Test de la clé {name}…", cid)
+    try:
+        resp = ai_provider._PROVIDERS[name]().complete_cheap("Réponds uniquement : OK", max_tokens=10)
+        if not resp:
+            raise RuntimeError("réponse vide")
+    except Exception as e:
+        send(f"❌ Clé {name} invalide ou service indisponible : {str(e)[:200]}\n"
+             f"Rien n'a été enregistré.", cid)
+        os.environ.pop(env_key, None)
+        return
+
+    # Persistance : clé (si fournie) + ajout à la chaîne de fallback
+    if len(args) >= 2:
+        _set_env_var(env_key, args[1].strip())
+    current = [p for p in os.environ.get("AI_FALLBACK_PROVIDERS", "").split(",") if p.strip()]
+    if name not in current:
+        current.append(name)
+    _set_env_var("AI_FALLBACK_PROVIDERS", ",".join(current))
+
+    key_now = os.environ.get(env_key, "")
+    send(f"✅ Fallback {name} ACTIF (clé …{key_now[-4:]}, testée).\n"
+         f"Chaîne IA : {AI_PROVIDER} → {' → '.join(current)}\n"
+         f"Clé stockée uniquement dans .env local (gitignoré). {note}", cid)
 
 
 def cmd_close(args, cid):
@@ -1286,6 +1404,25 @@ def _tuto_avance(cid):
         "→ /scan reevalue la viabilite a chaque analyse\n"
         "\n"
         "  /annuler NOM → annule et libere le cash",
+        cid,
+    )
+    time.sleep(0.4)
+    send(
+        "Fonctions avancees — IA de secours\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Si ton IA principale tombe en panne\n"
+        "(credits epuises...), le bot peut basculer\n"
+        "automatiquement sur une IA de secours :\n"
+        "\n"
+        "  /fallback gemini TA_CLE_API\n"
+        "\n"
+        "→ La cle est testee avant activation\n"
+        "→ Ton message est supprime du chat\n"
+        "  (la cle ne reste pas dans l'historique)\n"
+        "→ Stockee uniquement dans .env local\n"
+        "→ /fallback = etat | /fallback off = stop\n"
+        "\n"
+        "Cle Gemini gratuite : aistudio.google.com",
         cid,
     )
     time.sleep(0.4)
@@ -2165,6 +2302,7 @@ COMMANDS = {
     "/order": cmd_order,
     "/setup": cmd_setup,
     "/stats": cmd_stats,
+    "/fallback": cmd_fallback,
     "/close": cmd_close,
     "/attente": cmd_attente,
     "/annuler": cmd_annuler,
@@ -2214,6 +2352,11 @@ def _handle_message(message: dict):
     parts = text.split()
     cmd = parts[0].split("@")[0].lower()
     args = parts[1:]
+
+    # message_id du message entrant — permet aux commandes sensibles (/fallback
+    # avec une clé API) de SUPPRIMER le message du chat après traitement.
+    global _incoming_msg_id
+    _incoming_msg_id = message.get("message_id")
 
     handler = COMMANDS.get(cmd)
     if handler:

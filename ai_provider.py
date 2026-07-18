@@ -1,6 +1,13 @@
 import base64
+import os
 from abc import ABC, abstractmethod
 from config import AI_PROVIDER, AI_MODEL, ANTHROPIC_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, GROQ_API_KEY, GEMINI_API_KEY
+
+
+def _env_key(name: str):
+    """Clé API lue en priorité dans os.environ : permet la configuration À CHAUD
+    (/fallback sur Telegram écrit os.environ + .env) sans redémarrage."""
+    return os.environ.get(name) or globals().get(name)
 
 VISION_PROMPT = """Tu analyses une capture d'écran du portefeuille Bourse Direct.
 Extrait chaque ligne de titre visible. Format strict, une ligne par titre :
@@ -44,7 +51,7 @@ class AnthropicProvider(AIProvider):
 
     def __init__(self):
         import anthropic
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        self.client = anthropic.Anthropic(api_key=_env_key("ANTHROPIC_API_KEY"))
         self.model = AI_MODEL or self.DEFAULT_MODEL
 
     @staticmethod
@@ -103,7 +110,7 @@ class OpenAIProvider(AIProvider):
 
     def __init__(self):
         from openai import OpenAI
-        self.client = OpenAI(api_key=OPENAI_API_KEY)
+        self.client = OpenAI(api_key=_env_key("OPENAI_API_KEY"))
         self.model = AI_MODEL or self.DEFAULT_MODEL
 
     def _chat(self, model: str, messages: list, max_tokens: int) -> str:
@@ -141,7 +148,7 @@ class MistralProvider(AIProvider):
 
     def __init__(self):
         from mistralai import Mistral
-        self.client = Mistral(api_key=MISTRAL_API_KEY)
+        self.client = Mistral(api_key=_env_key("MISTRAL_API_KEY"))
         self.model = AI_MODEL or self.DEFAULT_MODEL
 
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
@@ -171,7 +178,7 @@ class GroqProvider(AIProvider):
 
     def __init__(self):
         from groq import Groq
-        self.client = Groq(api_key=GROQ_API_KEY)
+        self.client = Groq(api_key=_env_key("GROQ_API_KEY"))
         self.model = AI_MODEL or self.DEFAULT_MODEL
 
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
@@ -200,16 +207,27 @@ class GeminiProvider(AIProvider):
 
     def __init__(self):
         import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
+        genai.configure(api_key=_env_key("GEMINI_API_KEY"))
         self._genai = genai
         model_name = AI_MODEL or self.DEFAULT_MODEL
         self.model = genai.GenerativeModel(model_name)
+
+    @staticmethod
+    def _track(model_name: str, r):
+        """Coûts API (bilan honnête) — usage_metadata Gemini, best-effort."""
+        try:
+            import api_costs
+            u = r.usage_metadata
+            api_costs.record(model_name, u.prompt_token_count, u.candidates_token_count)
+        except Exception:
+            pass
 
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
         r = self.model.generate_content(
             prompt,
             generation_config={"max_output_tokens": max_tokens},
         )
+        self._track(self.model.model_name, r)
         return r.text
 
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
@@ -217,6 +235,7 @@ class GeminiProvider(AIProvider):
         from PIL import Image
         img = Image.open(io.BytesIO(image_bytes))
         r = self.model.generate_content([prompt, img])
+        self._track(self.model.model_name, r)
         return r.text
 
 
@@ -237,10 +256,90 @@ PROVIDER_INFO = {
 }
 
 
+class FallbackProvider(AIProvider):
+    """Chaîne de providers : le principal d'abord, puis chaque fallback dans
+    l'ordre si l'appel échoue (crédits épuisés, panne, rate limit). Le bot
+    reste opérationnel au lieu de devenir aveugle (incident du 17/07/2026 :
+    clé Anthropic à sec → tous les scans/validations en échec).
+
+    Les fallbacks sont instanciés PARESSEUSEMENT (au premier échec du
+    principal) : une clé configurée à chaud via /fallback est prise en compte
+    sans redémarrage. Notification Telegram throttlée (1×/6h max)."""
+
+    _last_notify = 0.0
+
+    def __init__(self, chain: list[str]):
+        self.chain = chain            # noms, ex ["anthropic", "gemini"]
+        self._instances: dict = {}
+
+    def _get(self, name: str) -> AIProvider:
+        if name not in self._instances:
+            self._instances[name] = _PROVIDERS[name]()
+        return self._instances[name]
+
+    def _notify_switch(self, failed: str, used: str, err: Exception):
+        import time as _time
+        now = _time.time()
+        if now - FallbackProvider._last_notify < 6 * 3600:
+            return
+        FallbackProvider._last_notify = now
+        try:
+            import telegram_bot
+            telegram_bot.send(
+                f"🔀 FALLBACK IA ACTIF\n"
+                f"{failed} en échec ({str(err)[:120]})\n"
+                f"→ bascule sur {used}. Vérifie tes crédits {failed}."
+            )
+        except Exception:
+            pass
+
+    def _run(self, method: str, *args, **kwargs):
+        last_err = None
+        for i, name in enumerate(self.chain):
+            try:
+                result = getattr(self._get(name), method)(*args, **kwargs)
+                if i > 0:
+                    print(f"[AI fallback] {method} servi par {name} "
+                          f"(échec de {self.chain[0]})")
+                    self._notify_switch(self.chain[0], name, last_err or Exception("?"))
+                return result
+            except NotImplementedError as e:
+                last_err = e            # provider sans vision → suivant
+            except Exception as e:
+                last_err = e
+                print(f"[AI fallback] {name}.{method} : {e}")
+        raise last_err if last_err else RuntimeError("aucun provider disponible")
+
+    def complete(self, prompt: str, max_tokens: int = 800) -> str:
+        return self._run("complete", prompt, max_tokens=max_tokens)
+
+    def complete_cheap(self, prompt: str, max_tokens: int = 100) -> str:
+        return self._run("complete_cheap", prompt, max_tokens=max_tokens)
+
+    def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
+        return self._run("complete_with_image", prompt, image_bytes)
+
+    def complete_cheap_with_image(self, prompt: str, image_bytes: bytes) -> str:
+        return self._run("complete_cheap_with_image", prompt, image_bytes)
+
+
+def get_fallback_chain() -> list[str]:
+    """Fallbacks configurés (AI_FALLBACK_PROVIDERS, ex "gemini,groq"),
+    lus À CHAQUE appel (configurables à chaud via /fallback), filtrés sur les
+    providers connus et différents du principal."""
+    raw = os.environ.get("AI_FALLBACK_PROVIDERS", "")
+    return [p.strip().lower() for p in raw.split(",")
+            if p.strip() and p.strip().lower() in _PROVIDERS
+            and p.strip().lower() != AI_PROVIDER]
+
+
 def get_provider() -> AIProvider:
     cls = _PROVIDERS.get(AI_PROVIDER)
     if not cls:
         raise ValueError(
             f"AI_PROVIDER='{AI_PROVIDER}' inconnu. Valeurs valides: {list(_PROVIDERS)}"
         )
+    fallbacks = get_fallback_chain()
+    if fallbacks:
+        return FallbackProvider([AI_PROVIDER] + fallbacks)
     return cls()

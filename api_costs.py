@@ -27,6 +27,8 @@ PRICING = {
     "haiku":  (1.0, 5.0),
     "sonnet": (3.0, 15.0),
     "opus":   (15.0, 75.0),
+    "flash":  (0.3, 2.5),    # gemini-*-flash (avant "gemini" : priorité sous-chaîne)
+    "gemini": (1.25, 10.0),  # gemini pro
 }
 _DEFAULT_PRICING = (3.0, 15.0)  # inconnu → tarif Sonnet (prudent)
 

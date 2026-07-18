@@ -114,8 +114,19 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
 
 ### Données & journaux
 - Fichiers créés en local : `positions.json`, `trades_history.json`,
-  `bot_state.json`, `sentiment_cache.json`, `tradingbot.log` — tous locaux,
+  `bot_state.json`, `sentiment_cache.json`, `api_costs.json`,
+  `macro_summary_cache.json`, `tradingbot.log` — tous locaux,
   aucun envoi vers un tiers hormis les API nécessaires.
+
+### Clés API via Telegram (`/fallback`)
+- `/fallback PROVIDER CLE` fait transiter la clé par les serveurs Telegram
+  (chiffrement client-serveur, pas E2E). Compromis assumé pour la simplicité ;
+  atténuations : le **message est supprimé du chat** immédiatement après
+  traitement (il ne reste pas dans l'historique), la clé est **testée puis
+  stockée uniquement dans `.env` local** (gitignoré, permissions 600), jamais
+  ré-affichée en clair (masquée `…xxxx`), et la commande n'est acceptée que
+  depuis les `AUTHORIZED_CHAT_IDS`. Pour une confidentialité maximale,
+  éditez `.env` à la main à la place.
 - Permissions `600` sur les fichiers sensibles (forcées au démarrage).
 - Aucun secret ni PII n'est écrit dans `tradingbot.log`.
 
