@@ -236,6 +236,12 @@ class GeminiProvider(AIProvider):
         print(f"[gemini] modèle auto-sélectionné : {chosen}")
         return chosen
 
+    # Les modèles Gemini 3 « pensent » (thinking) : la réflexion consomme des
+    # tokens de sortie AVANT le texte. Un budget trop court → tout part en
+    # réflexion, zéro texte, et r.text lève (cause de l'échec du 19/07 avec le
+    # test à 10 tokens). On garantit une marge minimale au-dessus du besoin réel.
+    _MIN_OUTPUT = 4096
+
     @staticmethod
     def _track(model_name: str, r):
         """Coûts API (bilan honnête) — usage_metadata Gemini, best-effort."""
@@ -246,21 +252,39 @@ class GeminiProvider(AIProvider):
         except Exception:
             pass
 
+    @staticmethod
+    def _extract(r) -> str:
+        """Lit le texte SANS l'accesseur rapide r.text (qui lève si aucune Part).
+        Message clair avec finish_reason si la réponse est vide (thinking a tout
+        consommé, SAFETY, RECITATION…)."""
+        cands = getattr(r, "candidates", None) or []
+        if cands:
+            parts = getattr(getattr(cands[0], "content", None), "parts", None) or []
+            txt = "".join(getattr(p, "text", "") or "" for p in parts).strip()
+            if txt:
+                return txt
+        fr = getattr(cands[0], "finish_reason", "?") if cands else "aucun candidat"
+        raise RuntimeError(f"réponse Gemini vide (finish_reason={fr}) — "
+                           f"réflexion trop longue ou contenu filtré")
+
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
         r = self.model.generate_content(
             prompt,
-            generation_config={"max_output_tokens": max_tokens},
+            generation_config={"max_output_tokens": max(max_tokens, self._MIN_OUTPUT)},
         )
         self._track(self.model.model_name, r)
-        return r.text
+        return self._extract(r)
 
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
         import io
         from PIL import Image
         img = Image.open(io.BytesIO(image_bytes))
-        r = self.model.generate_content([prompt, img])
+        r = self.model.generate_content(
+            [prompt, img],
+            generation_config={"max_output_tokens": max(1000, self._MIN_OUTPUT)},
+        )
         self._track(self.model.model_name, r)
-        return r.text
+        return self._extract(r)
 
 
 _PROVIDERS = {
