@@ -203,14 +203,38 @@ class GroqProvider(AIProvider):
 
 
 class GeminiProvider(AIProvider):
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-flash-latest"   # alias evergreen (fallback si découverte KO)
+    # Ordre de préférence — un flash récent, stable de préférence.
+    _PREF = ["gemini-flash-latest", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
 
     def __init__(self):
         import google.generativeai as genai
         genai.configure(api_key=_env_key("GEMINI_API_KEY"))
         self._genai = genai
-        model_name = AI_MODEL or self.DEFAULT_MODEL
-        self.model = genai.GenerativeModel(model_name)
+        # AI_MODEL ne s'applique QUE si Gemini est le provider principal ; en
+        # fallback, il hériterait d'un nom Claude/GPT → 404. Sinon on découvre
+        # dynamiquement le meilleur flash accessible à CETTE clé (les modèles
+        # bloqués pour le compte ne sont pas renvoyés — plus de "no longer
+        # available", cause de l'échec gemini-2.5-flash du 19/07).
+        forced = AI_MODEL if AI_PROVIDER == "gemini" else ""
+        self.model = genai.GenerativeModel(forced or self._discover(genai))
+
+    def _discover(self, genai) -> str:
+        try:
+            avail = [m.name.replace("models/", "") for m in genai.list_models()
+                     if "generateContent" in getattr(m, "supported_generation_methods", [])]
+        except Exception as e:
+            print(f"[gemini] list_models KO ({e}) — défaut {self.DEFAULT_MODEL}")
+            return self.DEFAULT_MODEL
+        for pref in self._PREF:
+            if pref in avail:
+                return pref
+        # sinon : un modèle 'flash' quelconque, en évitant preview/exp/thinking
+        flash = sorted((n for n in avail if "flash" in n),
+                       key=lambda n: ("preview" in n, "exp" in n, "thinking" in n, len(n)))
+        chosen = flash[0] if flash else (avail[0] if avail else self.DEFAULT_MODEL)
+        print(f"[gemini] modèle auto-sélectionné : {chosen}")
+        return chosen
 
     @staticmethod
     def _track(model_name: str, r):
@@ -252,7 +276,7 @@ PROVIDER_INFO = {
     "openai":    {"free": False, "vision": True,  "default_model": "gpt-4o-mini"},
     "mistral":   {"free": False, "vision": True,  "default_model": "mistral-small-latest"},
     "groq":      {"free": True,  "vision": True,  "default_model": "llama-3.3-70b-versatile"},
-    "gemini":    {"free": True,  "vision": True,  "default_model": "gemini-2.5-flash"},
+    "gemini":    {"free": True,  "vision": True,  "default_model": "auto (flash récent)"},
 }
 
 
