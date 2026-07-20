@@ -1579,7 +1579,15 @@ def cmd_connect(args, cid):
         ok = playwright_session.start()
         print(f"[connect] playwright_session.start() -> {ok}")
         if not ok:
-            send("Impossible de lancer Playwright. Verifie l'installation (pip install playwright && playwright install chromium).", cid)
+            send(
+                "Impossible de lancer Playwright (navigateur Chromium manquant ou corrompu).\n\n"
+                "Depuis le dossier du bot, lance :\n"
+                "  venv/bin/python3 -m playwright install chromium\n\n"
+                "Puis relance /connect.\n\n"
+                "Astuce : ne pas utiliser 'pip install' seul — le bot utilise son propre venv, "
+                "pas le Python systeme (sur macOS 'pip' n'existe souvent pas, seulement 'pip3').",
+                cid,
+            )
             return
 
         try:

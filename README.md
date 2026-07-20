@@ -431,6 +431,13 @@ venv/bin/pip install playwright
 venv/bin/playwright install chromium
 ```
 
+> **Dépannage — `/connect` répond « Impossible de lancer Playwright »**
+> Le navigateur Chromium est manquant ou corrompu (ça arrive si un téléchargement précédent a été interrompu). Réinstallez-le depuis le dossier du bot :
+> ```bash
+> venv/bin/python3 -m playwright install chromium
+> ```
+> puis relancez `/connect`. N'utilisez jamais `pip install ...` seul : le bot tourne dans son propre `venv/`, pas dans le Python du système (et sur macOS la commande s'appelle `pip3`, pas `pip`).
+
 ### Configuration
 
 Ajoutez dans votre `.env` :
