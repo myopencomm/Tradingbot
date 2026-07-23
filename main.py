@@ -1,4 +1,5 @@
 import schedule
+import threading
 import time
 from datetime import datetime
 from config import (CHECK_TIMES, ANALYSIS_TIME, TELEGRAM_TOKEN, AI_PROVIDER,
@@ -13,6 +14,36 @@ import gmail_sync
 def _market_day() -> bool:
     """Vrai si aujourd'hui est un jour de semaine (lundi–vendredi)."""
     return datetime.now().weekday() < 5  # 0=lundi … 4=vendredi
+
+
+def _bounded(fn, name, timeout=240):
+    """
+    Enrobe fn pour l'exécuter dans un thread dédié avec délai maximum : un job
+    planifié qui bloque (ex: appel réseau sans timeout côté yfinance/Gmail) ne
+    doit jamais geler le thread scheduler, sous peine d'arrêter TOUTE la
+    surveillance (positions, ordres, briefing) sans aucun crash ni redémarrage
+    visible. Incident du 21-23/07/2026 : un scan bloqué à 21h40 a arrêté tout
+    le scheduler pendant ~36h, sans aucun message d'erreur (keepalive et
+    polling Telegram, sur d'autres threads, ont continué à tourner
+    normalement — rien ne laissait deviner que le bot était figé).
+    """
+    def wrapped(*args, **kwargs):
+        def worker():
+            try:
+                fn(*args, **kwargs)
+            except Exception as e:
+                print(f"[job:{name}] erreur : {e}")
+        t = threading.Thread(target=worker, daemon=True, name=f"job-{name}")
+        t.start()
+        t.join(timeout=timeout)
+        if t.is_alive():
+            print(f"[job:{name}] ⚠️ bloqué au-delà de {timeout}s — scheduler libéré, thread abandonné")
+            telegram_bot.send(
+                f"⚠️ Job planifié « {name} » bloqué depuis plus de {timeout}s "
+                f"(probable appel réseau sans réponse). Le scheduler continue "
+                f"normalement pour les prochains jobs, mais celui-ci n'a pas terminé."
+            )
+    return wrapped
 
 
 def _weekly_version_check():
@@ -127,24 +158,25 @@ def _auto_gmail_check():
 def run_scheduler():
     for t in CHECK_TIMES:
         schedule.every().day.at(t).do(
-            lambda: (
+            _bounded(lambda: (
                 _auto_gmail_check(),
                 monitor.check_pending_orders(telegram_bot.send),
                 monitor.check_positions(telegram_bot.send),
-            ) if _market_day() else None
+            ) if _market_day() else None, f"check_{t}")
         )
     schedule.every().day.at(ANALYSIS_TIME).do(
-        lambda: analysis.morning_briefing(telegram_bot.send) if _market_day() else None
+        _bounded(lambda: analysis.morning_briefing(telegram_bot.send) if _market_day() else None,
+                 "briefing")
     )
     schedule.every().monday.at("09:10").do(
-        lambda: analysis.weekly_swap_analysis(telegram_bot.send)
+        _bounded(lambda: analysis.weekly_swap_analysis(telegram_bot.send), "weekly_swap")
     )
     schedule.every().day.at("09:15").do(
-        lambda: analysis.monthly_breach_review(telegram_bot.send)
-        if _market_day() and datetime.now().day == 1 else None
+        _bounded(lambda: analysis.monthly_breach_review(telegram_bot.send)
+                 if _market_day() and datetime.now().day == 1 else None, "monthly_breach")
     )
-    schedule.every().monday.at("09:20").do(_weekly_version_check)
-    schedule.every().hour.at(":35").do(_hourly_bd_sync)
+    schedule.every().monday.at("09:20").do(_bounded(_weekly_version_check, "version_check"))
+    schedule.every().hour.at(":35").do(_bounded(_hourly_bd_sync, "hourly_bd_sync"))
 
     # Séance US : les 4 CHECK_TIMES s'arrêtent à 17:00, mais Wall Street tourne
     # jusqu'à 22:00 Paris. On prolonge la surveillance (positions/ordres US
@@ -152,15 +184,15 @@ def run_scheduler():
     if US_EXTENDED_HOURS:
         for t in US_CHECK_TIMES:
             schedule.every().day.at(t).do(
-                lambda: (
+                _bounded(lambda: (
                     monitor.check_pending_orders(telegram_bot.send, us_only=True),
                     monitor.check_positions(telegram_bot.send, us_only=True),
-                ) if _market_day() else None
+                ) if _market_day() else None, f"us_check_{t}")
             )
         if US_SCAN_TIME:
             schedule.every().day.at(US_SCAN_TIME).do(
-                lambda: analysis.scan_us_opportunities(telegram_bot.send)
-                if _market_day() else None
+                _bounded(lambda: analysis.scan_us_opportunities(telegram_bot.send)
+                         if _market_day() else None, "us_scan")
             )
 
     us_sched = (f" | US checks: {', '.join(US_CHECK_TIMES)}"
