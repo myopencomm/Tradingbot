@@ -80,6 +80,17 @@ RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "1.0"))
 MAX_POSITION_PCT   = float(os.getenv("MAX_POSITION_PCT", "30"))
 VOL_SCALE_TRIGGER  = float(os.getenv("VOL_SCALE_TRIGGER", "1.5"))
 
+# Corrélation avec les positions déjà détenues (07/2026) : un score quant élevé
+# sur deux titres du même pari (ex: AIR + SAF, aéro) ne diversifie rien — ça
+# double la même exposition. Corrélation de Pearson sur les rendements
+# quotidiens des CORR_LOOKBACK_DAYS derniers jours face à chaque position
+# gérée par le bot (hors HOLD long terme). Au-delà de CORR_VETO_THRESHOLD,
+# entrée bloquée (même pari) ; entre CORR_DAMPEN_THRESHOLD et le seuil de veto,
+# risque réduit de moitié.
+CORR_LOOKBACK_DAYS    = int(os.getenv("CORR_LOOKBACK_DAYS", "90"))
+CORR_DAMPEN_THRESHOLD = float(os.getenv("CORR_DAMPEN_THRESHOLD", "0.6"))
+CORR_VETO_THRESHOLD   = float(os.getenv("CORR_VETO_THRESHOLD", "0.85"))
+
 # Mode GAIN RÉDUIT (trades courts forcés quand rien ne passe) : DÉSACTIVÉ par
 # défaut — c'est le schéma « overtrading » documenté (Barber & Odean 2000) et
 # il a produit les entrées en surchauffe de 07/2026. SMALL_GAIN_MODE=on pour

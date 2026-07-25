@@ -648,6 +648,8 @@ Si ACHAT : format exact (symbole {sym}, le titre cote en {cur}) :
 - Société : [1 phrase]
 - Secteur maintenant : [1 phrase — pourquoi porteur EN CE MOMENT]
 - Thèse : [CATALYSEUR daté] OU [FORCE RELATIVE] OU [MOMENTUM + niveau invalidation]
+- Risque principal : [1 phrase CONCRÈTE et falsifiable — le scénario précis qui
+  invaliderait cette thèse ; PAS une généralité type "le marché peut baisser"]
 - Raison : 1 phrase
 - Risque : LOW / MEDIUM / HIGH"""
 

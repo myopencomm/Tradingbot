@@ -228,7 +228,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +6% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
 | **Positions HOLD long terme** | `/hold TICKER` : sortie du périmètre bot (pas d'alertes, hors P&L trading, jamais proposée à la vente) |
 | **Sélection momentum validée** | Momentum 12 mois (hors dernier mois) + cours > MM200 + entrée sur repli sain (RSI 35-65) — voir [Stratégie](#stratégie-de-sélection--validée-par-la-recherche-académique) |
-| **Sizing par le risque** | Perte au SL = 1% du budget autonome, SL ≈ 2×ATR, taille réduite si volatilité élevée ou série de pertes |
+| **Sizing par le risque** | Perte au SL = 1% du budget autonome, SL ≈ 2×ATR, taille réduite si volatilité élevée, série de pertes, ou corrélation forte avec une position déjà détenue (entrée bloquée au-delà de 0.85) |
 | **Mode gain réduit** (opt-in) | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) — désactivé par défaut (`SMALL_GAIN_MODE=on` pour l'activer) |
 | **Dashboard visuel** | http://localhost:8642 (accès Tailscale possible) + `/dashboard` Telegram : P&L cumulé, cash engagé, ROI, trades filtrables |
 | **Coûts API dans le bilan** | Chaque appel IA enregistre ses tokens réels (`api_costs.json`) ; `/stats` et le dashboard affichent le coût cumulé et le **P&L net après coûts IA** — bilan honnête de l'efficacité du bot |
@@ -594,6 +594,7 @@ Un LLM n'apprend pas par entraînement ici, mais le bot **accumule et réutilise
 **Garde-fous pilotés par les données** (indépendants de l'IA) :
 - **Cooldown 10 jours** : pas de re-entrée sur un titre qui vient de perdre.
 - **Réduction de taille en série de pertes** : 2 pertes → 75 %, 3 → 50 %, 4+ → 35 % du budget.
+- **Corrélation avec le portefeuille détenu** : corrélation des rendements quotidiens (90j) contre chaque position déjà gérée par le bot — au-delà de 0.85, entrée bloquée (même pari, aucune diversification) ; entre 0.6 et 0.85, taille réduite de moitié. Un score quant indépendant sur deux titres du même thème (ex. AIR + SAF, aéro) ne protège pas de la corrélation réelle des cours.
 
 `/lessons` affiche à tout moment ce que le bot a retenu et les garde-fous actifs.
 
@@ -653,6 +654,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-25 — Corrélation au portefeuille + garde-fou « thèse falsifiable »
+- **`correlation_risk.py`** : avant une entrée autonome, corrélation des rendements quotidiens (90j, `CORR_LOOKBACK_DAYS`) contre chaque position déjà gérée par le bot (`portfolio.get_managed_positions()`, HOLD long terme exclues). Au-delà de `CORR_VETO_THRESHOLD` (défaut 0.85) : **entrée bloquée** — même pari qu'une position détenue, aucune diversification réelle même si les scores quant sont indépendants (ex. AIR + SAF, même thème aéro). Entre `CORR_DAMPEN_THRESHOLD` (0.6) et le seuil de veto : taille réduite de moitié, comme les autres réducteurs (série de pertes, volatilité)
+- **`validate_candidate`** : le format de sortie exige désormais un champ **« Risque principal »** — un scénario concret et falsifiable qui invaliderait la thèse, pas une généralité. Objectif : forcer un raisonnement à double sens (thèse haussière + risque concret) avant le verdict ACHAT, plutôt qu'une étiquette LOW/MEDIUM/HIGH sans substance. Inspiré du mécanisme de débat haussier/baissier du framework open-source TradingAgents (TauricResearch) — le reste de son architecture multi-agents n'a pas été repris (déjà couvert ici par les garde-fous quantitatifs durs de `validate_candidate` : RSI, MM200, ATR, ratio R/R)
+- Nouveaux paramètres `.env` : `CORR_LOOKBACK_DAYS`, `CORR_DAMPEN_THRESHOLD`, `CORR_VETO_THRESHOLD`
 
 ### 2026-07-18 — IA de secours (fallback multi-providers)
 - **`FallbackProvider`** : si le provider IA principal échoue (crédits épuisés — incident du 17/07, panne, rate limit), le bot bascule automatiquement sur le(s) provider(s) de secours listés dans `AI_FALLBACK_PROVIDERS` (ex: `gemini,groq`), essayés dans l'ordre. Le bot reste opérationnel au lieu de devenir aveugle. Notification Telegram à la première bascule (throttlée 1×/6h)
@@ -769,6 +775,7 @@ Depuis 07/2026, la sélection suit les résultats **répliqués** de la littéra
 | Les stops aident les stratégies momentum s'ils sont hors du bruit | SL ≈ **2×ATR** sous l'entrée, borné 3-10% ; TP ≥ **1.5×** la distance du SL | Kaminski & Lo 2014 (*J. Financial Markets*) |
 | Dimensionner par le **risque**, pas par le budget | Perte au SL = **1% du budget autonome** ; coût ≤ 30% du budget | fractional Kelly (MacLean, Thorp & Ziemba 2011) |
 | Réduire la voilure quand la volatilité monte | Taille **÷2** si vol 20j > 1.5× la vol 1 an du titre + réduction en série de pertes | Barroso & Santa-Clara 2015 (*JFE*) ; Moreira & Muir 2017 |
+| La diversification ne vaut que si les paris sont réellement décorrélés | Corrélation des rendements quotidiens (90j) vs positions détenues : **entrée bloquée** au-delà de 0.85, taille **÷2** entre 0.6 et 0.85 | Markowitz 1952 (*JF*) — un score quant indépendant ne suffit pas si les cours bougent ensemble |
 | L'overtrading détruit la performance retail | Mode « gain réduit » (trades courts forcés) **désactivé par défaut** — zéro trade est un résultat acceptable | Barber & Odean 2000 (*JF*) ; Novy-Marx & Velikov 2016 |
 
 L'IA reste dans la boucle comme **contrôle qualitatif symétrique** (news invalidante, OPA plafonnée, événement binaire imminent, illiquidité) — elle ne peut plus contourner les garde-fous quantitatifs, et aucune directive ne la pousse vers l'achat.

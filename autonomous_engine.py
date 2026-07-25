@@ -289,6 +289,20 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         send_fn(f"🌊 {ticker} : volatilité 20j à {vol_r:.1f}× sa normale annuelle "
                 f"→ risque réduit de moitié ({risk_eur:.0f}€ max au SL).")
 
+    # Corrélation avec les positions déjà gérées par le bot (07/2026) : un
+    # deuxième pari sur le même thème (ex: AIR + SAF) n'apporte aucune
+    # diversification, même si les deux scores quant sont indépendants.
+    import correlation_risk
+    held_tickers = [v.get("ticker", "") for v in portfolio.get_managed_positions().values()
+                    if v.get("ticker")]
+    corr_factor, corr_note, corr_veto = correlation_risk.size_factor(ticker, held_tickers)
+    if corr_veto:
+        send_fn(f"🚫 {ticker} : entrée bloquée — {corr_veto}.")
+        return False
+    if corr_factor < 1.0:
+        risk_eur *= corr_factor
+        send_fn(f"🔗 {ticker} : {corr_note} ({risk_eur:.0f}€ max au SL).")
+
     entry_eur = entry * fx
     sl_dist_eur = max((entry - sl) * fx, entry_eur * 0.005)  # garde division
     qty = int(risk_eur / sl_dist_eur)
