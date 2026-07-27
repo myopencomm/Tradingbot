@@ -353,7 +353,7 @@ TradingBot/
 | `/disconnect` | Fermer la session Playwright et revenir en mode Classic |
 | `/sync` | Synchroniser le portefeuille depuis Bourse Direct — détecte et clôture automatiquement les ventes exécutées (TP/SL touchés), ajoute les positions issues d'achats exécutés |
 | `/testordre TICKER` | Diagnostic : teste 5 variantes de payload d'ordre contre l'API BD (validation seule, rien n'est envoyé au marché) |
-| `/capture` | Diagnostic : trace dans le log toutes les requêtes API que le site BD envoie (à utiliser en passant un ordre à la main dans la fenêtre Chromium du bot) |
+| `/capture` | Diagnostic générique : trace dans le log toutes les requêtes API que le site BD envoie. Lancer `/capture`, **puis refaire à la main l'action que le bot rate** (passer un ordre, annuler, modifier un SL/TP…) **dans la fenêtre Chromium du bot**. Une action faite sur téléphone ou dans un autre navigateur n'est pas capturée |
 
 > **Sync automatique** : en plus du `/sync` manuel, un sync silencieux tourne **toutes les heures** (à :35, 9h-22h les jours de marché) — il ne vous notifie que si une exécution (achat ou vente) est détectée. Un sync est aussi déclenché 8 s après chaque passage d'ordre pour capter les exécutions immédiates.
 

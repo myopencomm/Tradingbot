@@ -807,23 +807,26 @@ def trailing_stop_cycle(send_fn) -> None:
                 timeout=30,
             )
             if not ok_cancel:
-                # Cause identifiée (AIR 27/07/2026) : dans un bloc consolidé,
-                # order_id peut désigner l'achat parent EXÉCUTÉ (non annulable
-                # → 403 opaque), pas les enfants TP/SL "En cours". Notifie UNE
-                # fois (avec la procédure /capture pour obtenir le payload réel
-                # du site), puis réessaie en silence à chaque cycle horaire.
+                # AIR 27/07/2026 : /order/cancel répond 403 « une erreur est
+                # intervenue » sur l'unique id exposé par le bloc consolidé
+                # (l'hypothèse « plusieurs ids, on vise le mauvais » a été
+                # infirmée : le DOM n'en expose qu'un). L'id des enfants TP/SL
+                # « En cours » n'est donc pas lisible dans la page ; il faut le
+                # payload réel du site (/capture) pour savoir quoi annuler.
+                # Notifie UNE fois, puis réessaie en silence chaque cycle.
                 print(f"[Trailing] {name} : cancel échoué (order_id {target['order_id']}, "
                       f"ids du bloc : {target.get('order_ids')})")
                 if name not in _trailing_cancel_failed:
                     _trailing_cancel_failed.add(name)
                     send_fn(
-                        f"⚠️ Trailing {name} : annulation de l'ancien Expert impossible — SL inchangé sur BD.\n\n"
-                        f"Cause probable : l'id visé est l'ordre d'ACHAT déjà exécuté, pas la "
-                        f"protection TP/SL active. Pour capturer le vrai payload d'annulation :\n"
+                        f"⚠️ Trailing {name} : annulation de l'ancien Expert impossible — SL inchangé sur BD.\n"
+                        f"⚠️ La position reste protégée par son SL D'ORIGINE (pas encore remonté au PRU).\n\n"
+                        f"Pour capturer le vrai payload d'annulation :\n"
                         f"1. /capture\n"
-                        f"2. Dans le Chromium du bot : annuler à la main le Take Profit {name} "
-                        f"(puis le reposer avec le SL au PRU)\n"
-                        f"3. Le payload exact apparaîtra dans tradingbot.log ([CAPTURE])\n\n"
+                        f"2. DANS LA FENÊTRE CHROMIUM DU BOT (pas le téléphone) : "
+                        f"annule à la main la protection {name} depuis « Mes ordres », "
+                        f"puis repose-la aussitôt avec le SL au PRU\n"
+                        f"3. Préviens-moi : le payload sera dans tradingbot.log ([CAPTURE])\n\n"
                         f"Le bot réessaiera à chaque cycle sans re-notifier."
                     )
                 continue

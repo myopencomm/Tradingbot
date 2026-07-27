@@ -1745,9 +1745,12 @@ def cmd_dashboard(args, cid):
 
 def cmd_capture(args, cid):
     """/capture — trace toutes les requêtes POST vers l'API trading BD dans le log.
-    Utilisation : /capture, puis passer un ordre MANUELLEMENT dans la fenêtre
-    Chromium du bot jusqu'à l'écran de vérification — le payload exact du site
-    apparaît dans tradingbot.log ([CAPTURE]). Actif jusqu'au redémarrage."""
+    Utilisation : /capture, PUIS refaire À LA MAIN, dans la fenêtre Chromium du
+    bot, l'action que le bot rate (passer un ordre, annuler, modifier un SL/TP…)
+    — le payload exact du site apparaît dans tradingbot.log ([CAPTURE]).
+    Deux pièges : l'action doit avoir lieu dans le Chromium DU BOT (une action
+    faite sur téléphone ou dans un autre navigateur n'est pas vue), et /capture
+    doit précéder l'action. Actif jusqu'au redémarrage."""
     if not _check_playwright_ready(cid):
         return
 
@@ -1787,12 +1790,28 @@ def cmd_capture(args, cid):
         try:
             playwright_session.run(_arm, timeout=15)
             send(
-                "🎥 Capture réseau ACTIVE sur la session BD.\n"
-                "Dans la fenêtre Chromium du bot (sur le Mac) :\n"
-                "1. Va sur la fiche du titre (ex: AMGN)\n"
-                "2. Ouvre le formulaire d'ordre, remplis-le (qty 1)\n"
-                "3. Clique Vérifier/Valider — SANS confirmer l'envoi final\n"
-                "Le payload exact sera dans tradingbot.log ([CAPTURE]).",
+                "🎥 CAPTURE RÉSEAU ACTIVE\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Toutes les requêtes que le site BD envoie sont maintenant "
+                "tracées dans tradingbot.log ([CAPTURE PAYLOAD]).\n\n"
+                "⚠️ 2 CONDITIONS, sinon rien n'est enregistré :\n"
+                "• L'action doit se faire DANS LA FENÊTRE CHROMIUM DU BOT "
+                "(sur le Mac) — pas sur ton téléphone, pas dans ton propre "
+                "navigateur : le bot ne voit que sa propre fenêtre.\n"
+                "• /capture AVANT l'action, jamais après.\n\n"
+                "MODE D'EMPLOI (n'importe quelle action)\n"
+                "Fais simplement à la main, dans le Chromium du bot, l'action "
+                "que le bot n'arrive pas à faire. Va jusqu'au bout — y compris "
+                "la confirmation finale si c'est nécessaire pour que le site "
+                "envoie la requête.\n\n"
+                "Exemples :\n"
+                "• Ordre refusé → remplis le formulaire jusqu'à Vérifier/Valider\n"
+                "• Annulation impossible → annule l'ordre à la main depuis "
+                "« Mes ordres » (et repose la protection derrière si tu viens "
+                "de supprimer un SL/TP !)\n"
+                "• Modification de SL/TP → fais la modif à la main\n\n"
+                "Reste actif jusqu'au prochain redémarrage du bot.\n"
+                "Préviens-moi quand c'est fait : je lirai le payload exact.",
                 cid,
             )
         except Exception as e:
