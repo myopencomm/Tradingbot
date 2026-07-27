@@ -17,6 +17,12 @@ import time
 import re
 
 BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/mon-compte/portefeuilles"
+# Carnet d'ordres : chaque protection (Stop Loss / Take Profit) y est une LIGNE
+# SÉPARÉE avec son propre order_id — alors que la page portefeuille les fusionne
+# dans un bloc unique qui ne porte que l'id de l'ordre d'achat parent (exécuté,
+# donc non annulable). C'est depuis cette page que l'annulation manuelle du
+# 27/07/2026 a réussi (HTTP 200).
+BD_ORDER_BOOK_URL = "https://www.boursedirect.fr/fr/page/ordres-en-carnet"
 
 
 def _dismiss_popups(page):
@@ -74,6 +80,47 @@ def _click_tab(page, label: str):
         return True
     except Exception:
         return False
+
+
+def read_order_book(page, send_fn=None) -> list[dict]:
+    """
+    Lit le CARNET D'ORDRES (page dédiée) : chaque Stop Loss / Take Profit y est
+    une ligne autonome avec son propre order_id, contrairement à la page
+    portefeuille qui les fusionne sous l'id du parent exécuté.
+
+    DIAGNOSTIC POUR L'INSTANT : la structure DOM de cette page n'a pas encore
+    été validée sur données réelles, donc on se contente de journaliser tout ce
+    qui ressemble à un ordre ([BD Carnet]). Aucune annulation automatique n'est
+    branchée dessus tant que le format n'est pas confirmé — sur un compte réel,
+    annuler le mauvais id laisserait une position à nu.
+
+    `get_portfolio` renavigue vers la page portefeuille à chaque appel : visiter
+    cette page ne perturbe donc pas les lectures suivantes.
+    """
+    def log(msg):
+        print(f"[BD Carnet] {msg}")
+        if send_fn:
+            send_fn(msg)
+
+    found = []
+    try:
+        page.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=20000)
+        time.sleep(2)
+        _dismiss_popups(page)
+        for el in page.locator('[id^="order-"]').all():
+            try:
+                oid = (el.get_attribute("id", timeout=1500) or "").replace("order-", "")
+                txt = " ".join(el.inner_text(timeout=2000).split())[:220]
+                if oid:
+                    print(f"[BD Carnet] {oid} | {txt}")
+                    found.append({"order_id": oid, "raw": txt})
+            except Exception:
+                continue
+        if not found:
+            log("aucun élément id=order-* sur la page carnet — sélecteur à revoir")
+    except Exception as e:
+        log(f"lecture carnet échouée : {e}")
+    return found
 
 
 def get_portfolio(page, send_fn=None) -> dict | None:

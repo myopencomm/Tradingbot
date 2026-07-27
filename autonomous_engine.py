@@ -818,6 +818,15 @@ def trailing_stop_cycle(send_fn) -> None:
                       f"ids du bloc : {target.get('order_ids')})")
                 if name not in _trailing_cancel_failed:
                     _trailing_cancel_failed.add(name)
+                    # Journalise le carnet d'ordres (ids réels des enfants
+                    # SL/TP) pour pouvoir cibler le bon ordre au prochain fix.
+                    # Lecture seule — rien n'est annulé automatiquement.
+                    try:
+                        playwright_session.run(
+                            lambda page: reader.read_order_book(page), timeout=45
+                        )
+                    except Exception as _rb:
+                        print(f"[Trailing] lecture carnet : {_rb}")
                     send_fn(
                         f"⚠️ Trailing {name} : annulation de l'ancien Expert impossible — SL inchangé sur BD.\n"
                         f"⚠️ La position reste protégée par son SL D'ORIGINE (pas encore remonté au PRU).\n\n"

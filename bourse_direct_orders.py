@@ -404,13 +404,18 @@ def send_order(page, order_id: str) -> dict | None:
 def cancel_order(page, order_id: str) -> dict | None:
     """
     Annule un ordre en cours sur BD (Take Profit, Stop Loss, ordre limite...).
-    Endpoint /order/cancel confirmé dans portfolio.js.
+
+    PAYLOAD CONFIRMÉ PAR CAPTURE RÉSEAU (27/07/2026, annulation manuelle sur
+    /fr/page/ordres-en-carnet → HTTP 200) : le site envoie UNIQUEMENT
+    {"order_id": "..."} — ni `login`, ni `csrf`. Les envoyer quand même
+    faisait partie du 403 « une erreur est intervenue » côté bot.
+
+    ⚠️ L'`order_id` doit être celui de l'ordre ENFANT (le Stop Loss ou le Take
+    Profit pris séparément, lisibles sur la page carnet d'ordres), PAS celui du
+    bloc consolidé de la page portefeuille — ce dernier porte l'id de l'ordre
+    d'ACHAT parent déjà exécuté, qui n'est pas annulable (403 légitime).
     """
-    payload = {
-        "order_id": order_id,
-        "login":    BD_LOGIN.upper(),
-        "csrf":     _get_csrf(page),
-    }
+    payload = {"order_id": order_id}
     result = _api_post(page, "/order/cancel", payload)
     if not result:
         return None
