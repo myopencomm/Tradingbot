@@ -88,9 +88,13 @@ def read_order_book(page, send_fn=None) -> list[dict]:
     une ligne autonome avec son propre order_id, contrairement à la page
     portefeuille qui les fusionne sous l'id du parent exécuté.
 
-    DIAGNOSTIC POUR L'INSTANT : la structure DOM de cette page n'a pas encore
-    été validée sur données réelles, donc on se contente de journaliser tout ce
-    qui ressemble à un ordre ([BD Carnet]). Aucune annulation automatique n'est
+    DIAGNOSTIC : plutôt que de deviner la structure DOM (le sélecteur
+    [id^="order-"] ne renvoie RIEN sur cette page — constaté le 27/07/2026), on
+    écoute les appels API que la page émet en se chargeant. La liste des ordres
+    arrive forcément en JSON : c'est la source fiable des order_id enfants,
+    sans scraping. Même méthode que pour les ordres US ([CAPTURE]).
+
+    Journalise sous [BD Carnet API]. Aucune annulation automatique n'est
     branchée dessus tant que le format n'est pas confirmé — sur un compte réel,
     annuler le mauvais id laisserait une position à nu.
 
@@ -102,25 +106,41 @@ def read_order_book(page, send_fn=None) -> list[dict]:
         if send_fn:
             send_fn(msg)
 
-    found = []
+    seen: list[dict] = []
+
+    def _on_response(resp):
+        try:
+            if "/hub/" not in resp.url:
+                return
+            body = resp.text()
+            # On ne garde que ce qui ressemble à une liste d'ordres
+            if not body or len(body) < 20:
+                return
+            if not any(k in body for k in ('"order', '"status"', '"stop', '"limit')):
+                return
+            print(f"[BD Carnet API] {resp.status} {resp.url}")
+            print(f"[BD Carnet BODY] {body[:2000]}")
+            seen.append({"url": resp.url, "body": body[:2000]})
+        except Exception:
+            pass
+
     try:
-        page.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=20000)
-        time.sleep(2)
-        _dismiss_popups(page)
-        for el in page.locator('[id^="order-"]').all():
+        page.on("response", _on_response)
+        try:
+            page.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=20000)
+            time.sleep(4)  # laisse les appels XHR de la page se terminer
+            _dismiss_popups(page)
+            time.sleep(1)
+        finally:
             try:
-                oid = (el.get_attribute("id", timeout=1500) or "").replace("order-", "")
-                txt = " ".join(el.inner_text(timeout=2000).split())[:220]
-                if oid:
-                    print(f"[BD Carnet] {oid} | {txt}")
-                    found.append({"order_id": oid, "raw": txt})
+                page.remove_listener("response", _on_response)
             except Exception:
-                continue
-        if not found:
-            log("aucun élément id=order-* sur la page carnet — sélecteur à revoir")
+                pass
+        if not seen:
+            log("aucune réponse API exploitable captée sur la page carnet")
     except Exception as e:
         log(f"lecture carnet échouée : {e}")
-    return found
+    return seen
 
 
 def get_portfolio(page, send_fn=None) -> dict | None:
@@ -200,17 +220,28 @@ def get_portfolio(page, send_fn=None) -> dict | None:
                             # EXÉCUTÉ — inutilisable pour /order/cancel (403).
                             # On garde TOUS les ids (order_ids) pour cibler le
                             # bon sous-ordre (cas trailing AIR 27/07/2026).
-                            ids = []
+                            # On garde l'id ET le texte propre à chaque
+                            # sous-ordre : c'est ce texte ("Ordre exécuté" vs
+                            # "En cours") qui permettra de distinguer l'achat
+                            # parent non annulable de la protection active.
+                            entries = []
                             for oid_el in block.locator('[id^="order-"]').all():
                                 oid = oid_el.get_attribute("id", timeout=1500)
-                                if oid:
-                                    ids.append(oid.replace("order-", ""))
-                            if ids:
-                                parsed["order_id"] = ids[0]
-                                parsed["order_ids"] = ids
-                                if len(ids) > 1:
-                                    print(f"[BD Reader] bloc {parsed.get('bd_ticker', '?')} : "
-                                          f"{len(ids)} order-ids {ids}")
+                                if not oid:
+                                    continue
+                                try:
+                                    otxt = " ".join(oid_el.inner_text(timeout=2000).split())
+                                except Exception:
+                                    otxt = ""
+                                entries.append({"id": oid.replace("order-", ""), "text": otxt})
+                            if entries:
+                                parsed["order_id"] = entries[0]["id"]  # rétrocompat
+                                parsed["order_ids"] = [e["id"] for e in entries]
+                                parsed["order_entries"] = entries
+                                if len(entries) > 1:
+                                    tick = parsed.get("bd_ticker", "?")
+                                    for e in entries:
+                                        print(f"[BD Reader id] {tick} {e['id']} | {e['text'][:160]}")
                         except Exception:
                             pass
                         orders.append(parsed)
