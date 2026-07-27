@@ -147,11 +147,23 @@ def get_portfolio(page, send_fn=None) -> dict | None:
                     parsed = _parse_order(raw_text)
                     if parsed:
                         try:
-                            oid_el = block.locator('[id^="order-"]').first
-                            if oid_el.count() > 0:
+                            # Un bloc consolidé peut contenir PLUSIEURS ordres
+                            # (achat parent exécuté + enfants TP/SL "En cours").
+                            # order_id (1er id) peut donc désigner le parent
+                            # EXÉCUTÉ — inutilisable pour /order/cancel (403).
+                            # On garde TOUS les ids (order_ids) pour cibler le
+                            # bon sous-ordre (cas trailing AIR 27/07/2026).
+                            ids = []
+                            for oid_el in block.locator('[id^="order-"]').all():
                                 oid = oid_el.get_attribute("id", timeout=1500)
                                 if oid:
-                                    parsed["order_id"] = oid.replace("order-", "")
+                                    ids.append(oid.replace("order-", ""))
+                            if ids:
+                                parsed["order_id"] = ids[0]
+                                parsed["order_ids"] = ids
+                                if len(ids) > 1:
+                                    print(f"[BD Reader] bloc {parsed.get('bd_ticker', '?')} : "
+                                          f"{len(ids)} order-ids {ids}")
                         except Exception:
                             pass
                         orders.append(parsed)

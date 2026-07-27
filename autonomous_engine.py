@@ -23,6 +23,10 @@ BREAKEVEN_PCT = AUTO_BREAKEVEN_PCT  # trailing stop au PRU (défaut +6% — back
 MAX_POSITIONS = 2     # Positions autonomes simultanées max
 
 _entry_lock = threading.Lock()
+
+# Tickers dont l'annulation trailing a déjà échoué + été notifiée (reset au
+# redémarrage) : le cycle horaire réessaie silencieusement, sans re-spammer.
+_trailing_cancel_failed: set[str] = set()
 # Anti-spam fallback gain réduit : max 1 recherche toutes les 2h
 _last_smallgain_ts = 0.0
 SMALLGAIN_COOLDOWN = 2 * 3600
@@ -803,7 +807,25 @@ def trailing_stop_cycle(send_fn) -> None:
                 timeout=30,
             )
             if not ok_cancel:
-                send_fn(f"⚠️ Trailing {name} : annulation de l'ancien Expert impossible — SL inchangé sur BD.")
+                # Cause identifiée (AIR 27/07/2026) : dans un bloc consolidé,
+                # order_id peut désigner l'achat parent EXÉCUTÉ (non annulable
+                # → 403 opaque), pas les enfants TP/SL "En cours". Notifie UNE
+                # fois (avec la procédure /capture pour obtenir le payload réel
+                # du site), puis réessaie en silence à chaque cycle horaire.
+                print(f"[Trailing] {name} : cancel échoué (order_id {target['order_id']}, "
+                      f"ids du bloc : {target.get('order_ids')})")
+                if name not in _trailing_cancel_failed:
+                    _trailing_cancel_failed.add(name)
+                    send_fn(
+                        f"⚠️ Trailing {name} : annulation de l'ancien Expert impossible — SL inchangé sur BD.\n\n"
+                        f"Cause probable : l'id visé est l'ordre d'ACHAT déjà exécuté, pas la "
+                        f"protection TP/SL active. Pour capturer le vrai payload d'annulation :\n"
+                        f"1. /capture\n"
+                        f"2. Dans le Chromium du bot : annuler à la main le Take Profit {name} "
+                        f"(puis le reposer avec le SL au PRU)\n"
+                        f"3. Le payload exact apparaîtra dans tradingbot.log ([CAPTURE])\n\n"
+                        f"Le bot réessaiera à chaque cycle sans re-notifier."
+                    )
                 continue
 
             od = playwright_session.run(
