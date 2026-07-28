@@ -817,17 +817,29 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         sl_ord = reader.find_stop_loss_order(rows, pos["ticker"], entry)
         tp_ord = reader.find_take_profit_order(rows, pos["ticker"], entry)
 
+        # ── Cas RÉCUPÉRATION : plus de SL mais un TP encore actif ────────────
+        # Position SANS PROTECTION (peut résulter d'une annulation partielle :
+        # SL annulé, TP survivant — incident UNA 28/07/2026). Le trailing doit
+        # rétablir un stop, pas s'abstenir.
         if not sl_ord:
-            if verbose:
-                send_fn(f"  ↳ {name} : aucun Stop Loss identifiable dans le carnet — non touché")
-            continue
+            if tp_ord:
+                print(f"[Trailing] {name} : SL absent, TP actif → RÉCUPÉRATION")
+                send_fn(
+                    f"🚨 {name} : POSITION SANS STOP LOSS sur BD "
+                    f"(un Take Profit à {tp_ord['limit']} est encore actif).\n"
+                    f"Tentative de rétablissement automatique du stop au PRU…"
+                )
+            else:
+                if verbose:
+                    send_fn(f"  ↳ {name} : aucun ordre de protection au carnet — non touché")
+                continue
 
-        cur_sl = sl_ord["limit"]
+        cur_sl = sl_ord["limit"] if sl_ord else None
         # Le SL ne peut que MONTER, avec une TOLÉRANCE : BD arrondit au pas de
         # cotation, donc un SL à 196.84 pour un PRU de 196.90 est déjà au
         # breakeven à 0.03% près. Annuler/reposer pour ces centimes exposerait
         # la position à une fenêtre SANS protection pour un gain nul.
-        if cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100):
+        if cur_sl is not None and cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100):
             if verbose:
                 send_fn(f"  ↳ {name} : SL déjà au PRU ({cur_sl} vs PRU {entry}, "
                         f"tolérance {BREAKEVEN_TOLERANCE_PCT}%) — rien à faire ✅")
@@ -840,38 +852,67 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                         f"(reposer un Expert sans lui créerait un doublon)")
             continue
         new_sl = round(entry, 4)
-        qty    = abs(sl_ord.get("qty") or pos.get("qty") or 0)
+        qty    = abs((sl_ord or tp_ord or {}).get("qty") or pos.get("qty") or 0)
         if qty < 1:
             continue
 
         try:
-            # ── Annulation : SL ET TP ────────────────────────────────────────
-            # Les deux sont des ordres distincts. Reposer un Expert (SL+TP)
-            # sans annuler l'ancien TP créerait une VENTE EN DOUBLE.
-            to_cancel = [sl_ord] + ([tp_ord] if tp_ord else [])
-            for o in to_cancel:
-                playwright_session.run(
-                    lambda page, r=o["ref"], rb=o["refbo"]:
-                        bd_orders.cancel_legacy_order(page, r, rb),
-                    timeout=30,
-                )
+            # ── Annulation UN PAR UN, chacune vérifiée ───────────────────────
+            # La page legacy répond 200 même quand rien n'est annulé, et une
+            # annulation peut n'aboutir que partiellement (incident UNA
+            # 28/07 : SL annulé, TP non → position à nu alors que le bot
+            # annonçait « position protégée »). On vérifie donc APRÈS CHAQUE
+            # annulation, avec un délai (BD ne répercute pas instantanément).
+            def _cancel_verified(o, tries: int = 3):
+                last = rows
+                for i in range(tries):
+                    playwright_session.run(
+                        lambda page, r=o["ref"], rb=o["refbo"]:
+                            bd_orders.cancel_legacy_order(page, r, rb),
+                        timeout=30,
+                    )
+                    time.sleep(3)
+                    last = playwright_session.run(
+                        lambda page: reader.read_order_book(page), timeout=90
+                    ) or []
+                    if not any(a.get("ref") == o["ref"] for a in last):
+                        return True, last
+                    print(f"[Trailing] {name} : ref {o['ref']} encore présente "
+                          f"(tentative {i + 1}/{tries})")
+                return False, last
 
-            # ── VÉRIFICATION : la page legacy répond 200 même en échec ───────
-            after = playwright_session.run(
-                lambda page: reader.read_order_book(page), timeout=90
-            ) or []
-            still = [o["ref"] for o in to_cancel
-                     if any(a.get("ref") == o["ref"] for a in after)]
-            if still:
-                # Rien (ou partiellement) annulé : on NE crée PAS de nouvel
-                # ordre, sinon doublon de vente. La protection reste en place.
-                print(f"[Trailing] {name} : annulation non confirmée, refs restantes {still}")
-                if name not in _trailing_cancel_failed:
-                    _trailing_cancel_failed.add(name)
+            to_cancel = ([sl_ord] if sl_ord else []) + ([tp_ord] if tp_ord else [])
+            failed, after = [], rows
+            for o in to_cancel:
+                ok, after = _cancel_verified(o)
+                if not ok:
+                    failed.append(o["ref"])
+
+            if failed:
+                sl_gone = (sl_ord is None) or not any(
+                    a.get("ref") == sl_ord["ref"] for a in after)
+                _trailing_cancel_failed.add(name)
+                if sl_gone:
+                    # Le stop n'existe plus mais le TP a survécu : on ne peut
+                    # pas reposer un Expert (doublon de vente) et la position
+                    # est RÉELLEMENT à nu. Alerte maximale, pas de faux calme.
+                    print(f"[Trailing] {name} : SL annulé, TP restant {failed} — POSITION À NU")
+                    send_fn(
+                        f"🚨🚨 {name} : POSITION SANS STOP LOSS SUR BD.\n"
+                        f"Le stop a été annulé mais le Take Profit n'a PAS pu l'être "
+                        f"({', '.join(failed)}), donc aucun nouvel ordre n'a pu être posé.\n\n"
+                        f"À FAIRE MAINTENANT :\n"
+                        f"1. Annule à la main l'ordre {', '.join(failed)} "
+                        f"(Bourse Direct › Ordres en carnet)\n"
+                        f"2. Puis colle : /ordre vendre {pos['ticker']} {qty} expert {new_sl} {tp}"
+                    )
+                else:
+                    # Le SL est toujours là : rien n'a bougé, position protégée.
+                    print(f"[Trailing] {name} : annulation non confirmée {failed} — SL intact")
                     send_fn(
                         f"⚠️ Trailing {name} : annulation non confirmée — SL inchangé.\n"
-                        f"⚠️ La position reste protégée (aucun nouvel ordre créé).\n\n"
-                        f"Ordres encore présents au carnet : {', '.join(still)}"
+                        f"✅ La position reste protégée par son stop actuel ({cur_sl}).\n\n"
+                        f"Ordres encore présents : {', '.join(failed)}"
                     )
                 continue
 
