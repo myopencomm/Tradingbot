@@ -88,15 +88,22 @@ def read_order_book(page, send_fn=None) -> list[dict]:
     une ligne autonome avec son propre order_id, contrairement à la page
     portefeuille qui les fusionne sous l'id du parent exécuté.
 
-    DIAGNOSTIC : plutôt que de deviner la structure DOM (le sélecteur
-    [id^="order-"] ne renvoie RIEN sur cette page — constaté le 27/07/2026), on
-    écoute les appels API que la page émet en se chargeant. La liste des ordres
-    arrive forcément en JSON : c'est la source fiable des order_id enfants,
-    sans scraping. Même méthode que pour les ordres US ([CAPTURE]).
+    DIAGNOSTIC. Deux tentatives ont déjà échoué et sont documentées ici pour ne
+    pas être refaites :
+      1. sélecteur DOM [id^="order-"] → 0 élément sur cette page ;
+      2. écoute des réponses /hub/ pendant la navigation → 0 réponse, même
+         sans filtre (la page ne rejoue pas ses XHR, ou pas sur ce contexte).
 
-    Journalise sous [BD Carnet API]. Aucune annulation automatique n'est
-    branchée dessus tant que le format n'est pas confirmé — sur un compte réel,
-    annuler le mauvais id laisserait une position à nu.
+    Cette version attaque le problème par le HTML brut : les order_id sont des
+    UUID, on les cherche donc directement dans le contenu de la page avec leur
+    contexte textuel. C'est la source la plus robuste — un UUID présent dans la
+    page est forcément un identifiant que le JS du site sait utiliser. L'écoute
+    réseau est conservée mais au niveau du CONTEXTE (comme /capture, qui lui
+    fonctionne) plutôt que de la page.
+
+    Aucune annulation automatique n'est branchée dessus tant que le format
+    n'est pas confirmé — sur un compte réel, annuler le mauvais id laisserait
+    une position à nu.
 
     `get_portfolio` renavigue vers la page portefeuille à chaque appel : visiter
     cette page ne perturbe donc pas les lectures suivantes.
@@ -109,9 +116,6 @@ def read_order_book(page, send_fn=None) -> list[dict]:
     seen: list[dict] = []
 
     def _on_response(resp):
-        # Filtre volontairement LARGE : la première tentative (filtrée sur des
-        # mots-clés) n'a rien capté du tout. On journalise toute réponse /hub/
-        # non triviale et on trie à la lecture.
         try:
             if "/hub/" not in resp.url:
                 return
@@ -127,20 +131,64 @@ def read_order_book(page, send_fn=None) -> list[dict]:
         except Exception:
             pass
 
+    ctx = None
     try:
-        page.on("response", _on_response)
+        # Contexte, pas page : le listener de page ne voit pas tout (constaté).
         try:
-            page.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=20000)
-            time.sleep(4)  # laisse les appels XHR de la page se terminer
+            ctx = page.context
+            ctx.on("response", _on_response)
+        except Exception:
+            ctx = None
+        try:
+            page.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=25000)
+            time.sleep(5)
             _dismiss_popups(page)
-            time.sleep(1)
-        finally:
+            time.sleep(2)
+
+            # Où a-t-on réellement atterri ? (une redirection expliquerait tout)
             try:
-                page.remove_listener("response", _on_response)
+                print(f"[BD Carnet] URL finale : {page.url}")
             except Exception:
                 pass
-        if not seen:
-            log("aucune réponse API exploitable captée sur la page carnet")
+
+            # ── UUID dans le HTML brut + contexte autour ────────────────────
+            try:
+                html = page.content()
+                print(f"[BD Carnet] taille HTML : {len(html)}")
+                uuid_re = re.compile(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    re.I,
+                )
+                vus = []
+                for m in uuid_re.finditer(html):
+                    u = m.group(0)
+                    if u in vus:
+                        continue
+                    vus.append(u)
+                    a, b = max(0, m.start() - 250), min(len(html), m.end() + 250)
+                    ctx_txt = re.sub(r"\s+", " ", html[a:b])
+                    print(f"[BD Carnet UUID] {u} … {ctx_txt}")
+                    if len(vus) >= 25:
+                        break
+                if not vus:
+                    log("aucun UUID dans le HTML de la page carnet")
+                else:
+                    seen.extend({"order_id": u} for u in vus)
+            except Exception as he:
+                log(f"lecture HTML échouée : {he}")
+
+            # ── Texte visible : permet d'associer un UUID à un titre/statut ──
+            try:
+                body_txt = re.sub(r"\s+", " ", page.locator("body").inner_text(timeout=5000))
+                print(f"[BD Carnet TEXTE] {body_txt[:1500]}")
+            except Exception:
+                pass
+        finally:
+            if ctx is not None:
+                try:
+                    ctx.remove_listener("response", _on_response)
+                except Exception:
+                    pass
     except Exception as e:
         log(f"lecture carnet échouée : {e}")
     return seen
