@@ -201,12 +201,25 @@ def read_order_book(page, send_fn=None) -> list[dict]:
         if send_fn:
             send_fn(msg)
 
+    def _html(resp) -> str:
+        """
+        Décode la réponse. La page legacy est servie en LATIN-1 (« marché » =
+        octet 0xe9) alors que resp.text() suppose de l'UTF-8 → UnicodeDecodeError
+        et carnet illisible (28/07/2026). On tente l'UTF-8 puis on retombe sur
+        cp1252 (surensemble de latin-1).
+        """
+        raw = resp.body()
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("cp1252", errors="replace")
+
     try:
         r = page.request.get(BD_ORDER_BOOK_LEGACY_URL, timeout=25000)
         if not r.ok:
             log(f"page carnet inaccessible (HTTP {r.status})")
             return []
-        html = r.text()
+        html = _html(r)
 
         nc = find_account_nc(html)
         if not nc:
@@ -219,7 +232,7 @@ def read_order_book(page, send_fn=None) -> list[dict]:
         if not r2.ok:
             log(f"carnet du compte {nc} inaccessible (HTTP {r2.status})")
             return []
-        html = r2.text()
+        html = _html(r2)
 
         # Garde-fou : le HTML renvoyé doit bien être celui du compte visé.
         acct = _bd_account()
