@@ -280,6 +280,7 @@ def cmd_help(args, cid):
         "\n"
         "MODE AUTONOME (Playwright requis)\n"
         "/auto on 500   — active avec 500€ de budget\n"
+        "/auto positions 3 — nb max de positions simultanees\n"
         "/auto on 20%   — active avec 20% du cash\n"
         "/auto off      — desactive\n"
         "/auto status   — etat + positions autonomes\n"
@@ -1632,6 +1633,7 @@ def cmd_connect(args, cid):
                 "/annuler_bd TICKER — annuler un ordre en cours sur BD\n\n"
                 "MODE AUTONOME\n"
                 "/auto on 500    — activer avec 500€ de budget\n"
+                "/auto positions 3 — nb max de positions simultanees\n"
                 "/auto on 20%    — activer avec 20% du cash\n"
                 "/auto off       — désactiver\n"
                 "/auto status    — état + positions autonomes\n\n"
@@ -2228,6 +2230,7 @@ def cmd_auto(args, cid):
     /auto off           → désactive (positions existantes toujours surveillées)
     /auto status        → état + positions autonomes
     /auto pause         → suspend les nouvelles entrées sans changer le budget
+    /auto positions 3   → nombre max de positions autonomes simultanées
     """
     import autonomous_engine
 
@@ -2264,7 +2267,7 @@ def cmd_auto(args, cid):
                 lines.append("Aucune position autonome active.")
 
         if not cfg.get("enabled"):
-            lines.append("\nUsage :\n/auto on 500      (budget fixe)\n/auto on 20%      (% du cash)")
+            lines.append("\nUsage :\n/auto on 500      (budget fixe)\n/auto on 20%      (% du cash)\n/auto positions 3 (places simultanees)")
 
         send("\n".join(lines), cid)
         return
@@ -2279,6 +2282,36 @@ def cmd_auto(args, cid):
             f"🤖 Mode autonome désactivé.\n"
             f"{'Aucune' if nb == 0 else str(nb)} position{'s' if nb > 1 else ''} autonome{'s' if nb > 1 else ''} "
             f"{'active — toujours surveillée.' if nb == 1 else ('actives — toujours surveillées.' if nb > 1 else '.')}",
+            cid,
+        )
+        return
+
+    if sub in ("positions", "position", "places"):
+        cfg = portfolio.get_autonomous_config()
+        cur = cfg.get("max_positions", 2)
+        if len(args) < 2:
+            send(f"Nombre max de positions autonomes : {cur}\n"
+                 f"Usage : /auto positions 3", cid)
+            return
+        try:
+            n = int(args[1])
+        except ValueError:
+            send("Nombre invalide. Ex : /auto positions 3", cid)
+            return
+        if n < 1 or n > 10:
+            send("Hors limites (1-10).", cid)
+            return
+        used = len(portfolio.get_autonomous_positions()) + len(portfolio.get_auto_pending_orders())
+        cfg["max_positions"] = n
+        portfolio.set_autonomous_config(cfg)
+        from config import RISK_PER_TRADE_PCT
+        send(
+            f"🤖 Max positions autonomes : {cur} → {n}\n"
+            f"Occupées actuellement : {used}/{n}\n\n"
+            f"⚠️ Plus de positions = plus de risque cumulé : chaque ligne peut "
+            f"perdre {RISK_PER_TRADE_PCT:.1f}% du budget au SL, donc {n} lignes "
+            f"exposent jusqu'à {n * RISK_PER_TRADE_PCT:.1f}% simultanément.\n"
+            f"Le budget total ne change pas — les positions seront plus petites.",
             cid,
         )
         return
@@ -2340,7 +2373,8 @@ def cmd_auto(args, cid):
             )
         return
 
-    send("Commande non reconnue. Usage : /auto on 500 | /auto off | /auto status", cid)
+    send("Commande non reconnue. Usage : /auto on 500 | /auto off | /auto status | "
+         "/auto positions 3 | /auto pause", cid)
 
 
 # ─── Routeur ────────────────────────────────────────────────────────────────

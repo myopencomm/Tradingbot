@@ -388,6 +388,7 @@ TradingBot/
 | `/auto on 20%` | Activer avec 20% du cash disponible |
 | `/auto off` | Désactiver (les positions autonomes existantes restent surveillées) |
 | `/auto pause` | Suspendre les nouvelles entrées sans changer le budget |
+| `/auto positions 3` | Nombre max de positions autonomes **simultanées** (défaut 2). Le budget total ne change pas : plus de places = positions plus petites, mais risque cumulé plus élevé (chaque ligne peut perdre `RISK_PER_TRADE_PCT` % au SL) |
 | `/auto status` | État complet + P&L en temps réel des positions autonomes |
 
 > Le bot opère entièrement seul sur ce budget : il exploite les opportunités validées par le briefing/`/scan` (cycle d'entrée **toutes les heures** + à chaque check), entre en position via un ordre Expert (SL+TP garantis sur BD), et vous notifie pour chaque action. Maximum 2 positions simultanées ; les **ordres en attente comptent dans le budget** (fonds réservés). La position n'est créée qu'à l'**exécution réelle** de l'ordre, détectée par le sync.
@@ -655,6 +656,13 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-28 — Scan : taille réelle du moteur + explication de l'inaction
+- **Fin de l'écart entre le scan et le moteur** : le scan dimensionnait avec `POSITION_BUDGET_PCT` (budget manuel) alors que le moteur autonome dimensionne **par le risque**. Le 28/07 il proposait LLY à **89% du cash** — une taille que le moteur refusait. Suivre l'affichage à la main revenait à contourner ses propres garde-fous. `compute_position_size()` est désormais la **source unique** utilisée par le passage d'ordre réel ET par l'affichage
+- Si le moteur refuserait l'entrée (titre trop cher pour le budget de risque, veto de corrélation), le scan l'écrit et **n'affiche plus de commande manuelle**
+- **Le scan explique pourquoi il n'entre pas** : `entry_blocked_reason()` (places occupées, mode désactivé, session BD non connectée, budget insuffisant). Avant, il affichait « Passer l'ordre (mode Playwright) » sans contexte, ce qui laissait croire que le mode autonome était inopérant alors qu'il était simplement à sa limite de positions
+- **`/auto positions N`** : nombre max de positions autonomes simultanées (1-10). L'avertissement rappelle que N lignes exposent jusqu'à N × `RISK_PER_TRADE_PCT` % du budget
+- **Bug corrigé** : `set_config()` remettait `max_positions` à sa valeur par défaut à **chaque** `/auto on` — un réglage manuel était silencieusement perdu au premier changement de budget
 
 ### 2026-07-28 — Commande `/trailing`
 - **`/trailing`** : force une vérification du trailing stop à la demande, avec le détail de **chaque** position évaluée (écart au seuil, SL actuel, raison du non-déclenchement). Le cycle automatique reste volontairement silencieux quand il n'a rien à faire — utile en fonctionnement normal, frustrant quand on veut juste savoir où on en est

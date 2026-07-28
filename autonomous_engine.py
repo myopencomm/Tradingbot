@@ -62,11 +62,17 @@ def get_budget_info() -> dict:
 
 def set_config(enabled: bool, budget_total: float | None = None,
                budget_pct: float | None = None,
-               max_positions: int = MAX_POSITIONS) -> dict:
+               max_positions: int | None = None) -> dict:
     data = portfolio.load()
     cfg  = data.get("autonomous_config", {})
     cfg["enabled"]      = enabled
-    cfg["max_positions"] = max_positions
+    # None = on CONSERVE la valeur existante. Avant, le défaut MAX_POSITIONS
+    # écrasait le réglage à chaque `/auto on` : un nombre de places choisi à
+    # la main était silencieusement perdu au prochain changement de budget.
+    if max_positions is not None:
+        cfg["max_positions"] = int(max_positions)
+    else:
+        cfg.setdefault("max_positions", MAX_POSITIONS)
     cfg["breakeven_pct"] = BREAKEVEN_PCT
     if budget_total is not None:
         cfg["budget_total"] = round(budget_total, 2)
@@ -254,6 +260,111 @@ def _deal_summary(ticker: str, reason: str = "") -> str:
         return ""
 
 
+def compute_position_size(ticker: str, entry: float, sl: float,
+                          available: float, send_fn=None) -> dict:
+    """
+    SIZING PAR LE RISQUE — source UNIQUE, partagée par le passage d'ordre réel
+    et par l'affichage du scan. Les deux DOIVENT donner le même nombre : un
+    scan qui suggère une taille que le moteur refuserait pousse l'utilisateur
+    à contourner ses propres garde-fous à la main (constaté le 28/07/2026 :
+    LLY affiché à 89% du cash, refusé par le moteur).
+
+    La perte au SL vaut RISK_PER_TRADE_PCT % du budget autonome (fractional
+    Kelly conservateur), le coût est plafonné à MAX_POSITION_PCT % du budget
+    et au cash disponible. Trois réducteurs se cumulent :
+      - série de pertes : 2 → 75%, 3 → 50%, 4+ → 35%
+      - volatilité 20j > VOL_SCALE_TRIGGER × la normale annuelle → moitié
+      - corrélation forte avec une position détenue → moitié, ou veto
+
+    `send_fn` (passage d'ordre réel) : notifie chaque réduction appliquée.
+    Sans lui (affichage), le calcul est silencieux et sans effet de bord.
+
+    Retourne : qty, entry_eur, risk_eur, cost_cap, notes[], veto (str|None),
+    reason (str : pourquoi qty vaut 0).
+    """
+    from config import RISK_PER_TRADE_PCT, MAX_POSITION_PCT, VOL_SCALE_TRIGGER
+    import lessons
+    import correlation_risk
+
+    def _say(msg):
+        if send_fn:
+            send_fn(msg)
+
+    notes: list[str] = []
+    fx = prices.fx_to_eur(prices._ticker_currency(ticker))
+    budget_total = portfolio.get_autonomous_config().get("budget_total", 0.0) or available
+    risk_eur = budget_total * RISK_PER_TRADE_PCT / 100
+
+    factor = lessons.size_factor()
+    if factor < 1.0:
+        risk_eur *= factor
+        n = (f"série de {lessons.loss_streak()} perte(s) → risque réduit à "
+             f"{int(factor * 100)}%")
+        notes.append(n)
+        _say(f"🛡️ {n} ({risk_eur:.0f}€ max au SL) sur {ticker}.")
+
+    vol_r = (prices.get_technicals(ticker) or {}).get("vol_ratio_20_250")
+    if vol_r and vol_r > VOL_SCALE_TRIGGER:
+        risk_eur *= 0.5
+        n = f"volatilité 20j à {vol_r:.1f}× la normale → risque ÷2"
+        notes.append(n)
+        _say(f"🌊 {ticker} : {n} ({risk_eur:.0f}€ max au SL).")
+
+    held = [v.get("ticker", "") for v in portfolio.get_managed_positions().values()
+            if v.get("ticker")]
+    corr_factor, corr_note, corr_veto = correlation_risk.size_factor(ticker, held)
+    if corr_veto:
+        return {"qty": 0, "entry_eur": entry * fx, "risk_eur": risk_eur,
+                "cost_cap": 0.0, "notes": notes, "veto": corr_veto,
+                "reason": corr_veto}
+    if corr_factor < 1.0:
+        risk_eur *= corr_factor
+        notes.append(corr_note)
+        _say(f"🔗 {ticker} : {corr_note} ({risk_eur:.0f}€ max au SL).")
+
+    entry_eur   = entry * fx
+    sl_dist_eur = max((entry - sl) * fx, entry_eur * 0.005)  # garde division
+    qty = int(risk_eur / sl_dist_eur)
+
+    cost_cap = min(available, budget_total * MAX_POSITION_PCT / 100)
+    if qty * entry_eur > cost_cap:
+        qty = int(cost_cap / entry_eur)
+
+    reason = ""
+    if qty < 1:
+        reason = (f"titre trop cher pour le budget de risque — 1 titre à "
+                  f"{entry_eur:.0f}€ dépasse le plafond ({cost_cap:.0f}€) ou "
+                  f"le risque au SL ({risk_eur:.0f}€)")
+    return {"qty": qty, "entry_eur": entry_eur, "risk_eur": risk_eur,
+            "cost_cap": cost_cap, "notes": notes, "veto": None, "reason": reason}
+
+
+def entry_blocked_reason() -> str | None:
+    """
+    Pourquoi le moteur autonome n'entrera PAS en position en ce moment.
+    None = rien ne bloque. Sert au scan pour expliquer son inaction au lieu
+    d'afficher un mode d'emploi manuel sans contexte (28/07/2026).
+    """
+    cfg = portfolio.get_autonomous_config()
+    if not cfg.get("enabled"):
+        return "mode autonome désactivé (/auto on BUDGET)"
+    max_pos  = cfg.get("max_positions", MAX_POSITIONS)
+    auto_pos = portfolio.get_autonomous_positions()
+    pending  = portfolio.get_auto_pending_orders()
+    used     = len(auto_pos) + len(pending)
+    if used >= max_pos:
+        held = ", ".join(list(auto_pos.keys()) + list(pending.keys()))
+        return (f"{used}/{max_pos} places occupées ({held}) — "
+                f"/auto positions N pour en ouvrir plus")
+    if not (bot_mode.is_playwright() and playwright_session.is_connected()):
+        return "session Bourse Direct non connectée (/connect)"
+    info = get_budget_info()
+    available = min(info["available"], portfolio.get_cash())
+    if available < 50:
+        return f"budget autonome insuffisant ({available:.0f}€ libre)"
+    return None
+
+
 def _place_order(ticker: str, entry: float, sl: float, tp: float,
                  available: float, reason: str, send_fn) -> bool:
     """
@@ -266,62 +377,15 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     fx  = prices.fx_to_eur(quote_cur)      # 1 unité devise → EUR
     sym = prices.currency_symbol(quote_cur)
 
-    # ── SIZING PAR LE RISQUE (Phase 1, 07/2026) ──────────────────────────────
-    # Fini le all-in (AF.PA : 992€ sur 1000€ de budget). La perte au SL vaut
-    # RISK_PER_TRADE_PCT % du budget autonome total (fractional-Kelly
-    # conservateur), coût plafonné à MAX_POSITION_PCT % du budget et au cash
-    # disponible. Deux réducteurs de risque se cumulent :
-    #  - série de pertes : 2 → 75%, 3 → 50%, 4+ → 35% (garde-fou données)
-    #  - volatilité du titre élevée (20j > VOL_SCALE_TRIGGER × 1 an) → moitié
-    #    (volatility scaling, Barroso & Santa-Clara 2015)
-    from config import RISK_PER_TRADE_PCT, MAX_POSITION_PCT, VOL_SCALE_TRIGGER
-    import lessons
-
-    budget_total = portfolio.get_autonomous_config().get("budget_total", 0.0) or available
-    risk_eur = budget_total * RISK_PER_TRADE_PCT / 100
-
-    factor = lessons.size_factor()
-    if factor < 1.0:
-        risk_eur *= factor
-        send_fn(f"🛡️ Série de {lessons.loss_streak()} perte(s) → risque réduit à "
-                f"{int(factor*100)}% ({risk_eur:.0f}€ max au SL) sur {ticker}.")
-
-    tech_sizing = prices.get_technicals(ticker) or {}
-    vol_r = tech_sizing.get("vol_ratio_20_250")
-    if vol_r and vol_r > VOL_SCALE_TRIGGER:
-        risk_eur *= 0.5
-        send_fn(f"🌊 {ticker} : volatilité 20j à {vol_r:.1f}× sa normale annuelle "
-                f"→ risque réduit de moitié ({risk_eur:.0f}€ max au SL).")
-
-    # Corrélation avec les positions déjà gérées par le bot (07/2026) : un
-    # deuxième pari sur le même thème (ex: AIR + SAF) n'apporte aucune
-    # diversification, même si les deux scores quant sont indépendants.
-    import correlation_risk
-    held_tickers = [v.get("ticker", "") for v in portfolio.get_managed_positions().values()
-                    if v.get("ticker")]
-    corr_factor, corr_note, corr_veto = correlation_risk.size_factor(ticker, held_tickers)
-    if corr_veto:
-        send_fn(f"🚫 {ticker} : entrée bloquée — {corr_veto}.")
+    plan = compute_position_size(ticker, entry, sl, available, send_fn=send_fn)
+    if plan["veto"]:
+        send_fn(f"🚫 {ticker} : {plan['veto']}")
         return False
-    if corr_factor < 1.0:
-        risk_eur *= corr_factor
-        send_fn(f"🔗 {ticker} : {corr_note} ({risk_eur:.0f}€ max au SL).")
-
-    entry_eur = entry * fx
-    sl_dist_eur = max((entry - sl) * fx, entry_eur * 0.005)  # garde division
-    qty = int(risk_eur / sl_dist_eur)
-
-    # Plafonds : % du budget et cash réellement disponible
-    cost_cap = min(available, budget_total * MAX_POSITION_PCT / 100)
-    if qty * entry_eur > cost_cap:
-        qty = int(cost_cap / entry_eur)
+    qty = plan["qty"]
     if qty < 1:
-        send_fn(
-            f"🚫 {ticker} : titre trop cher pour le budget de risque — "
-            f"1 titre à {entry_eur:.0f}€ dépasse le plafond ({cost_cap:.0f}€) ou "
-            f"le risque au SL ({risk_eur:.0f}€). Aucune entrée."
-        )
+        send_fn(f"🚫 {ticker} : {plan['reason']}")
         return False
+    entry_eur = plan["entry_eur"]
     cost_eur = round(qty * entry_eur, 2)
 
     # ── Garde rentabilité : les frais A/R ne doivent pas manger le gain visé ──

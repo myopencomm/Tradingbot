@@ -1743,19 +1743,64 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             # Feature scan→ordre : sizing affiché + commande prête à l'emploi.
             # Budget configurable via .env : POSITION_BUDGET_PCT / POSITION_BUDGET_MAX
             try:
-                budget = min(cash * POSITION_BUDGET_PCT / 100, POSITION_BUDGET_MAX)
-                # Budget en EUR, cours dans la devise du titre → conversion FX
                 price_eur = current_price * q_fx
-                qty_sugg = max(1, int(budget / price_eur)) if price_eur else 1
+                # Sizing : si le mode autonome est actif, on affiche EXACTEMENT
+                # ce que le moteur ferait (compute_position_size, source unique).
+                # Sinon seulement, on retombe sur le budget manuel .env.
+                # Motif : le 28/07/2026 le scan proposait LLY à 89% du cash — une
+                # taille que le moteur refusait. Suivre l'affichage à la main
+                # revenait à contourner ses propres garde-fous.
+                auto_qty = None
+                auto_reason = ""
+                try:
+                    import autonomous_engine as _ae
+                    if portfolio.get_autonomous_config().get("enabled"):
+                        _sl_pre = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
+                        if _sl_pre:
+                            _plan = _ae.compute_position_size(
+                                t, current_price,
+                                float(_sl_pre.group(1).replace(",", ".")),
+                                cash,
+                            )
+                            auto_qty = _plan["qty"]
+                            auto_reason = _plan["veto"] or _plan["reason"]
+                except Exception as _se:
+                    print(f"[scan] sizing autonome {t}: {_se}")
+
+                if auto_qty is not None and auto_qty < 1:
+                    # Le moteur refuserait la position : ne PAS afficher de
+                    # commande manuelle, ce serait inviter à passer outre.
+                    val += f"\n🚫 Le moteur autonome refuserait cette entrée : {auto_reason}"
+                    opportunities.append(val)
+                    continue
+
+                qty_sugg = auto_qty if auto_qty else (
+                    max(1, int(min(cash * POSITION_BUDGET_PCT / 100,
+                                   POSITION_BUDGET_MAX) / price_eur)) if price_eur else 1
+                )
                 cost_eur = qty_sugg * price_eur
                 fx_note = (f" ({qty_sugg * current_price:.0f}{q_sym}, taux {q_fx:.3f})"
                            if q_cur != "EUR" else "")
+                origin = "taille moteur autonome" if auto_qty else "budget manuel"
                 val += (
-                    f"\n→ Taille suggérée : {qty_sugg} titres ≈ {cost_eur:.0f}€{fx_note} "
-                    f"({cost_eur / cash * 100:.0f}% du cash)\n"
-                    f"→ Passer l'ordre (mode Playwright) :\n"
-                    f"   /ordre acheter {t} {qty_sugg} limite {current_price}"
+                    f"\n→ Taille : {qty_sugg} titres ≈ {cost_eur:.0f}€{fx_note} "
+                    f"({cost_eur / cash * 100:.0f}% du cash — {origin})"
                 )
+                blocked = None
+                try:
+                    import autonomous_engine as _ae2
+                    blocked = _ae2.entry_blocked_reason()
+                except Exception:
+                    pass
+                if auto_qty and not blocked:
+                    val += "\n🤖 Le bot passera cet ordre automatiquement au prochain cycle."
+                elif auto_qty and blocked:
+                    val += (f"\n⏸️ Pas d'entrée auto : {blocked}\n"
+                            f"→ Pour le faire à la main (mode Playwright) :\n"
+                            f"   /ordre acheter {t} {qty_sugg} limite {current_price}")
+                else:
+                    val += (f"\n→ Passer l'ordre (mode Playwright) :\n"
+                            f"   /ordre acheter {t} {qty_sugg} limite {current_price}")
                 # Reprend le SL/TP conseillés par l'IA (TP stretch inclus) pour
                 # que l'ordre de protection reflète exactement le conseil donné.
                 sl_m = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
