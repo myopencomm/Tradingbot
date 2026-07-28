@@ -25,6 +25,62 @@ BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/mon-compte/portefeuilles"
 BD_ORDER_BOOK_URL = "https://www.boursedirect.fr/fr/page/ordres-en-carnet"
 
 
+def parse_order_book_html(html: str) -> list[dict]:
+    """
+    Parse le tableau du carnet d'ordres LEGACY (ordres-en-carnet.php).
+
+    Structure réelle (relevée le 28/07/2026) — rien à voir avec l'app moderne :
+    page PHP server-rendered, jQuery 1.9, servie DANS UNE IFRAME. Aucun UUID,
+    aucun id="order-*" : chaque ordre est une ligne <tr class="row1|row2"> et
+    son identité tient dans le lien « Annuler » :
+        detailOrdre.php?cn=<compte>&ref=<ref>&refbo=<refbo>&num=1
+    (num=1 = annuler, num=0 = détail).
+
+    CHAQUE protection est une ligne SÉPARÉE : un Expert SL+TP produit deux
+    lignes (ex. UNA : 49,35 puis 58,40). C'est ici — et nulle part ailleurs —
+    qu'on peut cibler le Stop Loss seul.
+
+    Fonction pure (testable sans navigateur).
+    """
+    rows = []
+    for chunk in re.split(r'<tr\s+class="row\d"', html)[1:]:
+        tds = re.findall(r"<td[^>]*>(.*?)</td>", chunk, re.DOTALL)
+        if len(tds) < 8:
+            continue
+
+        def _txt(s):
+            return " ".join(re.sub(r"<[^>]+>", " ", s).split())
+
+        cancel_m = re.search(
+            r"detailOrdre\.php\?cn=([^&'\"]+)&(?:amp;)?ref=([^&'\"]+)&(?:amp;)?refbo=([^&'\"]+)&(?:amp;)?num=1",
+            chunk,
+        )
+        tick_m = re.search(r"val=E:([A-Z0-9]+)", chunk)
+        if not cancel_m or not tick_m:
+            continue
+        try:
+            limit = float(_txt(tds[3]).replace(",", ".").replace(" ", ""))
+        except ValueError:
+            limit = None
+        try:
+            qty = int(_txt(tds[2]))
+        except ValueError:
+            qty = None
+        rows.append({
+            "sens":     _txt(tds[0]),
+            "name":     _txt(tds[1]),
+            "ticker":   tick_m.group(1),
+            "qty":      qty,
+            "limit":    limit,
+            "etat":     _txt(tds[4]),
+            "validite": _txt(tds[6]),
+            "cn":       cancel_m.group(1),
+            "ref":      cancel_m.group(2),
+            "refbo":    cancel_m.group(3),
+        })
+    return rows
+
+
 def _dismiss_popups(page):
     """Ferme les popups éventuelles (WelcomeModal, modals). Ignore si absentes."""
     selectors = [
@@ -84,114 +140,77 @@ def _click_tab(page, label: str):
 
 def read_order_book(page, send_fn=None) -> list[dict]:
     """
-    Lit le CARNET D'ORDRES (page dédiée) : chaque Stop Loss / Take Profit y est
-    une ligne autonome avec son propre order_id, contrairement à la page
-    portefeuille qui les fusionne sous l'id du parent exécuté.
+    Lit le CARNET D'ORDRES et retourne une ligne par ordre actif.
 
-    DIAGNOSTIC. Deux tentatives ont déjà échoué et sont documentées ici pour ne
-    pas être refaites :
-      1. sélecteur DOM [id^="order-"] → 0 élément sur cette page ;
-      2. écoute des réponses /hub/ pendant la navigation → 0 réponse, même
-         sans filtre (la page ne rejoue pas ses XHR, ou pas sur ce contexte).
+    STRUCTURE RÉELLE (relevée le 28/07/2026, inspection manuelle) : cette page
+    n'appartient PAS à l'app moderne. C'est du legacy PHP server-rendered
+    (ordres-en-carnet.php, jQuery 1.9), servi DANS UNE IFRAME. D'où l'échec des
+    trois approches précédentes, conservées ici pour ne pas les refaire :
+      1. sélecteur [id^="order-"]  → 0 élément : il n'y a pas d'id sur les lignes ;
+      2. écoute des réponses /hub/ → 0 réponse : la page ne fait aucun XHR ;
+      3. scan d'UUID dans le HTML  → 0 UUID  : les ids sont ref/refbo, pas des UUID.
+    Et page.content() ne renvoyait que le wrapper, pas l'iframe.
 
-    Cette version attaque le problème par le HTML brut : les order_id sont des
-    UUID, on les cherche donc directement dans le contenu de la page avec leur
-    contexte textuel. C'est la source la plus robuste — un UUID présent dans la
-    page est forcément un identifiant que le JS du site sait utiliser. L'écoute
-    réseau est conservée mais au niveau du CONTEXTE (comme /capture, qui lui
-    fonctionne) plutôt que de la page.
-
-    Aucune annulation automatique n'est branchée dessus tant que le format
-    n'est pas confirmé — sur un compte réel, annuler le mauvais id laisserait
-    une position à nu.
-
-    `get_portfolio` renavigue vers la page portefeuille à chaque appel : visiter
-    cette page ne perturbe donc pas les lectures suivantes.
+    Chaque protection est une ligne SÉPARÉE (un Expert SL+TP = deux lignes) :
+    c'est la seule source permettant de cibler le Stop Loss seul.
     """
     def log(msg):
         print(f"[BD Carnet] {msg}")
         if send_fn:
             send_fn(msg)
 
-    seen: list[dict] = []
-
-    def _on_response(resp):
+    try:
+        page.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=25000)
+        time.sleep(4)
+        _dismiss_popups(page)
+        time.sleep(1)
         try:
-            if "/hub/" not in resp.url:
-                return
-            print(f"[BD Carnet API] {resp.status} {resp.request.method} {resp.url}")
-            try:
-                body = resp.text()
-            except Exception as be:
-                print(f"[BD Carnet BODY] <illisible: {be}>")
-                return
-            if body and len(body) > 10:
-                print(f"[BD Carnet BODY] {body[:2000]}")
-                seen.append({"url": resp.url, "body": body[:2000]})
+            print(f"[BD Carnet] URL finale : {page.url}")
         except Exception:
             pass
 
-    ctx = None
-    try:
-        # Contexte, pas page : le listener de page ne voit pas tout (constaté).
+        # Le tableau vit dans une iframe : on tente la page principale PUIS
+        # toutes les frames, et on garde le premier HTML qui parse.
+        sources = []
         try:
-            ctx = page.context
-            ctx.on("response", _on_response)
+            sources.append(("page", page.content()))
         except Exception:
-            ctx = None
-        try:
-            page.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=25000)
-            time.sleep(5)
-            _dismiss_popups(page)
-            time.sleep(2)
-
-            # Où a-t-on réellement atterri ? (une redirection expliquerait tout)
+            pass
+        for i, fr in enumerate(page.frames):
             try:
-                print(f"[BD Carnet] URL finale : {page.url}")
+                sources.append((f"frame{i}:{fr.url[:60]}", fr.content()))
             except Exception:
-                pass
+                continue
 
-            # ── UUID dans le HTML brut + contexte autour ────────────────────
-            try:
-                html = page.content()
-                print(f"[BD Carnet] taille HTML : {len(html)}")
-                uuid_re = re.compile(
-                    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-                    re.I,
-                )
-                vus = []
-                for m in uuid_re.finditer(html):
-                    u = m.group(0)
-                    if u in vus:
-                        continue
-                    vus.append(u)
-                    a, b = max(0, m.start() - 250), min(len(html), m.end() + 250)
-                    ctx_txt = re.sub(r"\s+", " ", html[a:b])
-                    print(f"[BD Carnet UUID] {u} … {ctx_txt}")
-                    if len(vus) >= 25:
-                        break
-                if not vus:
-                    log("aucun UUID dans le HTML de la page carnet")
-                else:
-                    seen.extend({"order_id": u} for u in vus)
-            except Exception as he:
-                log(f"lecture HTML échouée : {he}")
-
-            # ── Texte visible : permet d'associer un UUID à un titre/statut ──
-            try:
-                body_txt = re.sub(r"\s+", " ", page.locator("body").inner_text(timeout=5000))
-                print(f"[BD Carnet TEXTE] {body_txt[:1500]}")
-            except Exception:
-                pass
-        finally:
-            if ctx is not None:
-                try:
-                    ctx.remove_listener("response", _on_response)
-                except Exception:
-                    pass
+        for label, html in sources:
+            rows = parse_order_book_html(html)
+            if rows:
+                print(f"[BD Carnet] {len(rows)} ordre(s) depuis {label}")
+                for o in rows:
+                    print(f"[BD Carnet] {o['ticker']:6} {o['sens']:6} qty={o['qty']} "
+                          f"limit={o['limit']} etat={o['etat']!r} "
+                          f"ref={o['ref']} refbo={o['refbo']}")
+                return rows
+        log(f"aucune ligne d'ordre trouvée ({len(sources)} source(s) HTML inspectée(s))")
     except Exception as e:
         log(f"lecture carnet échouée : {e}")
-    return seen
+    return []
+
+
+def find_stop_loss_order(rows: list[dict], ticker: str, entry: float) -> dict | None:
+    """
+    Isole le Stop Loss d'une position parmi les lignes du carnet : c'est la
+    vente dont la limite est SOUS le PRU (le Take Profit est au-dessus).
+    Retourne None si ce n'est pas STRICTEMENT univoque — sur compte réel,
+    annuler la mauvaise ligne laisserait la position sans protection.
+    """
+    base = (ticker or "").upper().split(".")[0]
+    mine = [o for o in rows
+            if (o.get("ticker") or "").upper() == base
+            and o.get("limit") is not None
+            and (o.get("sens") or "").lower().startswith("vente")]
+    below = [o for o in mine if o["limit"] < entry]
+    return below[0] if len(below) == 1 else None
 
 
 def get_portfolio(page, send_fn=None) -> dict | None:
