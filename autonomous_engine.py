@@ -726,7 +726,7 @@ def run_entry_cycle(send_fn) -> None:
 
 # ─── Trailing stop réel sur BD (positions auto ET manuelles) ────────────────
 
-def trailing_stop_cycle(send_fn) -> None:
+def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     """
     Remonte le SL au PRU (breakeven) DIRECTEMENT SUR BD pour toute position —
     autonome (+BREAKEVEN_PCT%) ou manuelle (+BREAKEVEN_THRESHOLD%) — protégée
@@ -735,30 +735,61 @@ def trailing_stop_cycle(send_fn) -> None:
 
     Les positions historiques SANS ordre Expert sur BD (ILMN, GVN, MCPHY…)
     ne sont jamais touchées : pas d'ordre à modifier = pas d'action.
+
+    `verbose` (commande /trailing) : rend compte de CHAQUE position évaluée et
+    de la raison d'un non-déclenchement. En cycle automatique le silence est
+    voulu — ici l'utilisateur a demandé, il doit obtenir une réponse.
     """
     from config import BREAKEVEN_THRESHOLD, BREAKEVEN_TOLERANCE_PCT
 
     if not (bot_mode.is_playwright() and playwright_session.is_connected()):
+        if verbose:
+            send_fn("🔒 Trailing impossible : session Bourse Direct non connectée.\n"
+                    "/connect pour l'activer.")
         return
     positions = portfolio.load().get("positions", {})
     if not positions:
+        if verbose:
+            send_fn("🔒 Trailing : aucune position en portefeuille.")
         return
 
     # 1. Positions au-dessus de leur seuil de breakeven
     candidates = []
+    skipped = []
     for name, pos in positions.items():
         if pos.get("hold"):
-            continue  # HOLD long terme — hors gestion bot
+            skipped.append(f"  🔒 {name} : HOLD long terme — hors gestion bot")
+            continue
         entry = pos.get("entry_price")
         if not entry or not pos.get("qty"):
+            skipped.append(f"  ⚠️ {name} : PRU ou quantité manquant")
             continue
         price = prices.get_quote(pos["ticker"]).get("price")
         if not price:
+            skipped.append(f"  ⚠️ {name} : cours indisponible")
             continue
         change_pct = (price - entry) / entry * 100
         threshold = BREAKEVEN_PCT if pos.get("autonomous") else BREAKEVEN_THRESHOLD
         if change_pct >= threshold:
             candidates.append((name, pos, change_pct))
+        else:
+            need = entry * (1 + threshold / 100)
+            skipped.append(
+                f"  ⏳ {name} : {change_pct:+.2f}% — seuil +{threshold:.0f}% "
+                f"non atteint (il faut {need:.2f})"
+            )
+    if verbose:
+        head = [f"🔒 TRAILING — vérification à la demande",
+                f"Seuils : +{BREAKEVEN_THRESHOLD:.0f}% (manuel) / +{BREAKEVEN_PCT:.0f}% (autonome)"]
+        if candidates:
+            head.append(f"\n{len(candidates)} position(s) au-dessus du seuil : "
+                        + ", ".join(n for n, _, _ in candidates))
+        if skipped:
+            head.append("\nNon concernées :")
+            head.extend(skipped)
+        if not candidates:
+            head.append("\n✅ Rien à remonter — aucune action.")
+        send_fn("\n".join(head))
     if not candidates:
         return
 
@@ -789,7 +820,10 @@ def trailing_stop_cycle(send_fn) -> None:
             None,
         )
         if not target:
-            continue  # pas d'ordre Expert actif → position historique, on ne touche pas
+            # pas d'ordre Expert actif → position historique, on ne touche pas
+            if verbose:
+                send_fn(f"  ↳ {name} : aucun ordre de protection actif sur BD — non touché")
+            continue
 
         entry  = pos["entry_price"]
         cur_sl = target.get("seuil")
@@ -799,6 +833,9 @@ def trailing_stop_cycle(send_fn) -> None:
         # quelques centimes exposerait la position à une fenêtre SANS
         # protection — risque réel pour un gain nul (cas AIR 28/07/2026).
         if cur_sl is not None and cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100):
+            if verbose:
+                send_fn(f"  ↳ {name} : SL déjà au PRU ({cur_sl} vs PRU {entry}, "
+                        f"tolérance {BREAKEVEN_TOLERANCE_PCT}%) — rien à faire ✅")
             continue
         tp     = target.get("profit") or pos.get("target_high")
         new_sl = round(entry, 4)

@@ -352,6 +352,7 @@ TradingBot/
 | `/connect` | Activer le mode Playwright — connexion à Bourse Direct avec relay TOTP |
 | `/disconnect` | Fermer la session Playwright et revenir en mode Classic |
 | `/sync` | Synchroniser le portefeuille depuis Bourse Direct — détecte et clôture automatiquement les ventes exécutées (TP/SL touchés), ajoute les positions issues d'achats exécutés |
+| `/trailing` | Forcer une vérification du trailing stop (SL au PRU) **maintenant**, avec le détail de chaque position et la raison d'un non-déclenchement. Le cycle automatique tourne chaque heure à **:35** (jours de marché, 9h-22h, session BD connectée) et dès qu'une position franchit son seuil aux checks 9h/12h/15h/17h — mais il reste silencieux s'il n'a rien à faire, contrairement à `/trailing` qui répond toujours |
 | `/testordre TICKER` | Diagnostic : teste 5 variantes de payload d'ordre contre l'API BD (validation seule, rien n'est envoyé au marché) |
 | `/capture` | Diagnostic générique : trace dans le log toutes les requêtes API que le site BD envoie. Lancer `/capture`, **puis refaire à la main l'action que le bot rate** (passer un ordre, annuler, modifier un SL/TP…) **dans la fenêtre Chromium du bot**. Une action faite sur téléphone ou dans un autre navigateur n'est pas capturée |
 
@@ -654,6 +655,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-28 — Commande `/trailing`
+- **`/trailing`** : force une vérification du trailing stop à la demande, avec le détail de **chaque** position évaluée (écart au seuil, SL actuel, raison du non-déclenchement). Le cycle automatique reste volontairement silencieux quand il n'a rien à faire — utile en fonctionnement normal, frustrant quand on veut juste savoir où on en est
+- Rappel du rythme automatique, désormais documenté dans `/tuto` et le README : **chaque heure à :35** (jours de marché, 9h-22h, session BD connectée) + déclenchement immédiat dès qu'une position franchit son seuil lors des checks 9h/12h/15h/17h
+- La commande réarme les notifications d'échec : une demande explicite obtient toujours une réponse, même si le même échec a déjà été signalé par un cycle automatique
 
 ### 2026-07-28 — Trailing : bon ordre ciblé, plus de churn inutile
 - **Cause du 403 « une erreur est intervenue »** (trailing AIR bloqué depuis le 27/07) : un bloc consolidé BD mélange l'ordre d'**achat parent exécuté** et la **protection active**. Le bot annulait toujours le premier id du bloc — celui du parent, non annulable. Textes réels relevés : `Achat(CPT) Ordre exécuté … Annulé` vs `Vente(CPT) … En cours`

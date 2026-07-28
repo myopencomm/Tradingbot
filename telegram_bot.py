@@ -166,6 +166,7 @@ BOT_COMMANDS = [
     ("connect",    "Se connecter a Bourse Direct (code TOTP)"),
     ("auto",       "Mode autonome — /auto on 500 | off | status"),
     ("sync",       "Lire portefeuille + ordres reels depuis BD"),
+    ("trailing",   "Verifier le trailing stop (SL au PRU) maintenant"),
     ("ordre",      "Passer un ordre reel sur BD — acheter|vendre TICKER QTE ..."),
     ("annuler_bd", "Annuler un ordre en cours sur BD — /annuler_bd TICKER"),
     ("mode",       "Etat connexion BD"),
@@ -265,6 +266,7 @@ def cmd_help(args, cid):
         "   REELLEMENT sur Bourse Direct pour toi :\n"
         "/connect — se connecter a BD (code TOTP)\n"
         "/sync — lire portefeuille + ordres reels depuis BD\n"
+        "/trailing — verifier le trailing stop (SL au PRU) maintenant\n"
         "/ordre acheter TICKER QTE marche [validite]\n"
         "/ordre acheter TICKER QTE limite PRIX [validite]\n"
         "/ordre acheter TICKER QTE expert ENTREE SL TP [validite]\n"
@@ -1442,7 +1444,18 @@ def _tuto_avance(cid):
         "P&L garanti >= 0 une fois le SL au PRU.\n"
         "Seules les positions protegees par un\n"
         "Expert actif sont gerees (les positions\n"
-        "historiques sans ordre ne sont pas touchees).",
+        "historiques sans ordre ne sont pas touchees).\n"
+        "\n"
+        "QUAND le bot verifie :\n"
+        "→ chaque heure a :35 (9h-22h, jours\n"
+        "  de marche, session BD connectee)\n"
+        "→ et des qu'une position franchit son\n"
+        "  seuil aux checks 9h/12h/15h/17h.\n"
+        "\n"
+        "/trailing → verification IMMEDIATE, avec\n"
+        "le detail de chaque position (le cycle\n"
+        "auto reste silencieux s'il n'a rien a\n"
+        "faire ; /trailing repond toujours).",
         cid,
     )
     time.sleep(0.4)
@@ -1667,6 +1680,35 @@ def cmd_sync(args, cid):
             send(f"Erreur sync : {e}", cid)
 
     _run_long(cid, _do_sync)
+
+
+def cmd_trailing(args, cid):
+    """/trailing — force une vérification du trailing stop (SL au PRU) maintenant.
+
+    Le cycle automatique tourne chaque heure à :35 (jours de marché, 9h-22h) et
+    dès qu'une position franchit son seuil lors des checks de 9h/12h/15h/17h.
+    Cette commande fait la même chose à la demande, en rendant compte de CHAQUE
+    position évaluée (le cycle auto, lui, reste silencieux s'il n'a rien à faire).
+    """
+    if not bot_mode.is_playwright():
+        send("Le mode Playwright n'est pas actif. /connect pour l'activer.", cid)
+        return
+    if not playwright_session.is_connected():
+        send("Session Playwright non connectee. /connect pour relancer.", cid)
+        return
+    import autonomous_engine
+
+    def _do_trailing():
+        try:
+            # Réarme les notifications d'échec : l'utilisateur demande
+            # explicitement un état, il doit le recevoir même si le même
+            # échec a déjà été signalé lors d'un cycle automatique.
+            autonomous_engine._trailing_cancel_failed.clear()
+            autonomous_engine.trailing_stop_cycle(lambda m: send(m, cid), verbose=True)
+        except Exception as e:
+            send(f"Erreur trailing : {e}", cid)
+
+    _run_long(cid, _do_trailing)
 
 
 # ─── Ordres Playwright ──────────────────────────────────────────────────────
@@ -2311,6 +2353,7 @@ COMMANDS = {
     "/connect": cmd_connect,
     "/disconnect": cmd_disconnect,
     "/sync": cmd_sync,
+    "/trailing": cmd_trailing,
     "/testordre": cmd_testordre,
     "/capture": cmd_capture,
     "/dashboard": cmd_dashboard,
