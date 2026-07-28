@@ -150,6 +150,7 @@ BOT_COMMANDS = [
     ("lessons",    "Ce que le bot a appris de ses trades"),
     ("morning",    "Briefing du jour (macro + positions + opps)"),
     ("scan",       "Meilleures opportunites avec mon cash"),
+    ("scan_us",    "Scan des valeurs US uniquement (/scan us)"),
     ("research",   "Analyser une action — /research TICKER"),
     ("add",        "Acheter (deduit le cash) — TICKER QTE PRU SL TP"),
     ("remove",     "Retirer une position — /remove TICKER"),
@@ -241,6 +242,7 @@ def cmd_help(args, cid):
         "ANALYSE IA\n"
         "/morning — briefing du jour (macro + positions + opps)\n"
         "/scan — meilleures opportunites avec ton cash\n"
+        "/scan us — valeurs US uniquement (seance 15h35-22h)\n"
         "/research TICKER [question] — analyse d'une action\n"
         "  ex: /research EXENS.PA dois-je vendre ?\n"
         "\n"
@@ -1074,11 +1076,21 @@ _scan_lock = threading.Lock()
 
 
 def cmd_scan(args, cid):
+    """/scan — univers complet. /scan us — valeurs US uniquement.
+
+    Le scan US automatique ne tourne qu'à US_SCAN_TIME (16h). Cette variante
+    permet de le relancer à la demande pendant la séance de Wall Street
+    (15h35-22h) : 36 tickers au lieu de ~100, donc plus rapide et bien moins
+    coûteux en appels IA que le scan complet.
+    """
+    us_only = bool(args) and args[0].lower() in ("us", "usa", "🇺🇸")
+
     if not _scan_lock.acquire(blocking=False):
         send("Scan déjà en cours, patiente...", cid)
         return
 
-    prog_id = send_editable("🔍 Scan en cours...", cid)
+    label = "🇺🇸 Scan US en cours..." if us_only else "🔍 Scan en cours..."
+    prog_id = send_editable(label, cid)
 
     def update_fn(text: str):
         # Édite le message de progression en place
@@ -1091,7 +1103,22 @@ def cmd_scan(args, cid):
 
     def _run():
         try:
-            analysis.scan_opportunities(send_final, update_fn=update_fn)
+            if us_only:
+                # Marché fermé : les opportunités validées resteront en file
+                # jusqu'à l'ouverture — on le dit plutôt que de laisser croire
+                # à une entrée imminente.
+                import autonomous_engine
+                if not autonomous_engine.market_open_for("NVDA"):
+                    send("ℹ️ Séance US fermée (ouverture 15h35 Paris) — les "
+                         "opportunités validées attendront l'ouverture.", cid)
+                # Pas de plancher de cash ici : contrairement au scan US
+                # PLANIFIÉ, une demande explicite doit toujours répondre.
+                analysis.scan_opportunities(
+                    send_final, universe=analysis.US_UNIVERSE,
+                    scan_label="🇺🇸 ", update_fn=update_fn,
+                )
+            else:
+                analysis.scan_opportunities(send_final, update_fn=update_fn)
         finally:
             _scan_lock.release()
 
@@ -1278,6 +1305,7 @@ def _tuto_classic(cid):
         "  /status   → portefeuille + P&L live\n"
         "  /morning  → briefing maintenant\n"
         "  /scan     → 3 opportunites avec ton cash\n"
+        "  /scan us  → valeurs US uniquement\n"
         "  /research TICKER → analyse approfondie\n"
         "\n"
         "ORDRES (instructions a saisir sur BD)\n"
@@ -2415,6 +2443,9 @@ COMMANDS = {
     "/update": cmd_update,
     "/morning": cmd_morning,
     "/scan": cmd_scan,
+    # Alias : le menu Telegram n'accepte pas d'argument, /scan_us y donne
+    # accès au scan US en un tap (équivaut à « /scan us »).
+    "/scan_us": lambda args, cid: cmd_scan(["us"], cid),
     "/research": cmd_research,
     "/import": cmd_import,
     "/tuto": cmd_tuto,

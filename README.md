@@ -334,6 +334,7 @@ TradingBot/
 |---|---|
 | `/morning` | Déclencher manuellement le briefing matinal |
 | `/scan` | Scanner des opportunités — catalyseurs + indicateurs techniques |
+| `/scan us` | Scan limité aux **36 valeurs US** — plus rapide et bien moins coûteux en appels IA que le scan complet (~100 tickers). Utile pendant la séance de Wall Street (15h35-22h), le scan US automatique ne tournant qu'à `US_SCAN_TIME` (16h). Contrairement au scan planifié, il n'applique **pas** le plancher de cash : une demande explicite répond toujours |
 | `/research TICKER` | Analyse approfondie : RSI, momentum, catalyseurs imminents |
 
 ### Clôture de trades
@@ -656,6 +657,12 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-28 — `/scan us` : scan US à la demande
+- **`/scan us`** (ou `/scan_us` en un tap depuis le menu) : relance le scan sur les **36 valeurs US** seulement. Jusqu'ici le scan US n'existait qu'en automatique à `US_SCAN_TIME` (16h) — impossible de le relancer pendant la séance de Wall Street sans lancer le scan complet (~100 tickers), bien plus lent et coûteux en appels IA
+- **Pas de plancher de cash** contrairement au scan planifié : une demande explicite doit toujours répondre, même si aucun achat ne passerait le garde-fou frais
+- Prévient si la séance US est fermée (ouverture 15h35 Paris) : les opportunités validées attendront l'ouverture au lieu de laisser croire à une entrée imminente
+- `/scan` sans argument reste l'univers complet, inchangé
 
 ### 2026-07-28 — Scan : taille réelle du moteur + explication de l'inaction
 - **Fin de l'écart entre le scan et le moteur** : le scan dimensionnait avec `POSITION_BUDGET_PCT` (budget manuel) alors que le moteur autonome dimensionne **par le risque**. Le 28/07 il proposait LLY à **89% du cash** — une taille que le moteur refusait. Suivre l'affichage à la main revenait à contourner ses propres garde-fous. `compute_position_size()` est désormais la **source unique** utilisée par le passage d'ordre réel ET par l'affichage
