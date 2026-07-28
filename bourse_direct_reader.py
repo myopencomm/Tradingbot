@@ -13,16 +13,59 @@ Sélecteurs (explorés en live) :
 - Ordre          : .order-line (Order-module_orderContainer)
     NOM | PLACE › TICKER | ... | Sens(CPT) | exec/qty | validité | Type | Seuil X | Profit X | statut
 """
+import os
 import time
 import re
 
+def _bd_account() -> str:
+    """
+    Numéro de compte CTO (.env) — sert à sélectionner le BON compte dans le
+    carnet legacy : la page s'ouvre par défaut sur le PEA. Annuler un ordre du
+    mauvais compte serait une faute grave, donc sans correspondance certaine
+    on s'abstient.
+
+    Lu à l'APPEL et non à l'import : seul config.py charge dotenv, un import
+    de ce module avant config donnerait une valeur vide (et donc une
+    abstention silencieuse du trailing).
+    """
+    return os.getenv("BD_ACCOUNT", "").strip()
+
 BD_PORTFOLIO_URL = "https://www.boursedirect.fr/fr/mon-compte/portefeuilles"
+# Page legacy servie dans l'iframe du wrapper : on l'attaque DIRECTEMENT
+# (page.request), ce qui évite l'iframe et permet de passer ?nc=<compte>.
+BD_ORDER_BOOK_LEGACY_URL = "https://www.boursedirect.fr/priv/new/ordres-en-carnet.php"
 # Carnet d'ordres : chaque protection (Stop Loss / Take Profit) y est une LIGNE
 # SÉPARÉE avec son propre order_id — alors que la page portefeuille les fusionne
 # dans un bloc unique qui ne porte que l'id de l'ordre d'achat parent (exécuté,
 # donc non annulable). C'est depuis cette page que l'annulation manuelle du
 # 27/07/2026 a réussi (HTTP 200).
 BD_ORDER_BOOK_URL = "https://www.boursedirect.fr/fr/page/ordres-en-carnet"
+
+
+def find_account_nc(html: str, account: str = "") -> str | None:
+    """
+    Valeur `nc` du compte CTO dans le sélecteur du carnet legacy.
+
+    La page s'ouvre sur le PEA par défaut (`<option value="1" selected>`), donc
+    sans ce paramètre on lit le carnet du MAUVAIS compte — c'est la cause du
+    « carnet vide » du 28/07/2026.
+
+    On exige une correspondance avec le numéro de compte (.env BD_ACCOUNT) :
+    se fier au libellé « Compte Titre » serait plus fragile, et annuler un
+    ordre sur le mauvais compte est une faute irrattrapable. Sans
+    correspondance certaine → None → l'appelant s'abstient.
+    """
+    account = (account or _bd_account()).strip()
+    if not account:
+        return None
+    m = re.search(r'<select[^>]*name="nc".*?</select>', html, re.S | re.I)
+    if not m:
+        return None
+    for val, label in re.findall(r'<option\s+value="([^"]+)"[^>]*>(.*?)</option>',
+                                 m.group(0), re.S | re.I):
+        if account in re.sub(r"<[^>]+>", "", label):
+            return val
+    return None
 
 
 def parse_order_book_html(html: str) -> list[dict]:
@@ -140,19 +183,18 @@ def _click_tab(page, label: str):
 
 def read_order_book(page, send_fn=None) -> list[dict]:
     """
-    Lit le CARNET D'ORDRES et retourne une ligne par ordre actif.
+    Lit le CARNET D'ORDRES du compte CTO — une ligne par ordre actif.
 
-    STRUCTURE RÉELLE (relevée le 28/07/2026, inspection manuelle) : cette page
-    n'appartient PAS à l'app moderne. C'est du legacy PHP server-rendered
-    (ordres-en-carnet.php, jQuery 1.9), servi DANS UNE IFRAME. D'où l'échec des
-    trois approches précédentes, conservées ici pour ne pas les refaire :
-      1. sélecteur [id^="order-"]  → 0 élément : il n'y a pas d'id sur les lignes ;
-      2. écoute des réponses /hub/ → 0 réponse : la page ne fait aucun XHR ;
-      3. scan d'UUID dans le HTML  → 0 UUID  : les ids sont ref/refbo, pas des UUID.
-    Et page.content() ne renvoyait que le wrapper, pas l'iframe.
+    STRUCTURE (inspection manuelle 28/07/2026) : page legacy PHP
+    server-rendered (ordres-en-carnet.php, jQuery 1.9) servie dans une IFRAME.
+    On l'attaque donc DIRECTEMENT via page.request (mêmes cookies de session,
+    sans toucher à la page courante) : pas d'iframe à traverser, et surtout on
+    peut passer ?nc=<compte>.
 
-    Chaque protection est une ligne SÉPARÉE (un Expert SL+TP = deux lignes) :
-    c'est la seule source permettant de cibler le Stop Loss seul.
+    ⚠️ La page s'ouvre par défaut sur le PEA. Sans le bon `nc`, on lit le
+    carnet du MAUVAIS compte (« carnet vide » du 28/07). Sans correspondance
+    certaine avec BD_ACCOUNT on s'abstient : annuler un ordre sur le mauvais
+    compte serait irrattrapable.
     """
     def log(msg):
         print(f"[BD Carnet] {msg}")
@@ -160,38 +202,41 @@ def read_order_book(page, send_fn=None) -> list[dict]:
             send_fn(msg)
 
     try:
-        page.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=25000)
-        time.sleep(4)
-        _dismiss_popups(page)
-        time.sleep(1)
-        try:
-            print(f"[BD Carnet] URL finale : {page.url}")
-        except Exception:
-            pass
+        r = page.request.get(BD_ORDER_BOOK_LEGACY_URL, timeout=25000)
+        if not r.ok:
+            log(f"page carnet inaccessible (HTTP {r.status})")
+            return []
+        html = r.text()
 
-        # Le tableau vit dans une iframe : on tente la page principale PUIS
-        # toutes les frames, et on garde le premier HTML qui parse.
-        sources = []
-        try:
-            sources.append(("page", page.content()))
-        except Exception:
-            pass
-        for i, fr in enumerate(page.frames):
-            try:
-                sources.append((f"frame{i}:{fr.url[:60]}", fr.content()))
-            except Exception:
-                continue
+        nc = find_account_nc(html)
+        if not nc:
+            log("compte CTO introuvable dans le sélecteur du carnet "
+                "(BD_ACCOUNT absent du .env ou libellé changé) — abstention")
+            return []
+        print(f"[BD Carnet] compte CTO = nc={nc}")
 
-        for label, html in sources:
-            rows = parse_order_book_html(html)
-            if rows:
-                print(f"[BD Carnet] {len(rows)} ordre(s) depuis {label}")
-                for o in rows:
-                    print(f"[BD Carnet] {o['ticker']:6} {o['sens']:6} qty={o['qty']} "
-                          f"limit={o['limit']} etat={o['etat']!r} "
-                          f"ref={o['ref']} refbo={o['refbo']}")
-                return rows
-        log(f"aucune ligne d'ordre trouvée ({len(sources)} source(s) HTML inspectée(s))")
+        r2 = page.request.get(f"{BD_ORDER_BOOK_LEGACY_URL}?nc={nc}", timeout=25000)
+        if not r2.ok:
+            log(f"carnet du compte {nc} inaccessible (HTTP {r2.status})")
+            return []
+        html = r2.text()
+
+        # Garde-fou : le HTML renvoyé doit bien être celui du compte visé.
+        acct = _bd_account()
+        if acct and acct not in html:
+            log("le carnet renvoyé ne mentionne pas le compte attendu — abstention")
+            return []
+
+        rows = parse_order_book_html(html)
+        if not rows:
+            log("aucun ordre actif au carnet du CTO")
+            return []
+        print(f"[BD Carnet] {len(rows)} ordre(s)")
+        for o in rows:
+            print(f"[BD Carnet] {o['ticker']:6} {o['sens']:6} qty={o['qty']} "
+                  f"limit={o['limit']} etat={o['etat']!r} "
+                  f"ref={o['ref']} refbo={o['refbo']}")
+        return rows
     except Exception as e:
         log(f"lecture carnet échouée : {e}")
     return []
