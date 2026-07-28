@@ -793,122 +793,85 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     if not candidates:
         return
 
-    # 2. Ordres Expert vente actifs sur BD (une seule lecture)
+    # 2. Carnet d'ordres LEGACY — SEULE source listant chaque protection
+    #    séparément avec un identifiant annulable (ref/refbo). La page
+    #    portefeuille moderne ne montre que l'ordre d'achat parent pour les
+    #    protections issues d'un Expert d'achat (cas UNA/GLE) : son id n'est
+    #    pas annulable (403). Voir bourse_direct_reader.parse_order_book_html.
     import bourse_direct_reader as reader
     import bourse_direct_orders as bd_orders
     try:
-        bd = playwright_session.run(lambda page: reader.get_portfolio(page), timeout=60)
+        rows = playwright_session.run(lambda page: reader.read_order_book(page), timeout=90)
     except Exception as e:
-        print(f"[Trailing] lecture BD : {e}")
+        print(f"[Trailing] lecture carnet : {e}")
+        if verbose:
+            send_fn("⚠️ Lecture du carnet d'ordres impossible — aucune action.")
         return
-    if not bd:
+    if not rows:
+        if verbose:
+            send_fn("⚠️ Carnet d'ordres vide ou illisible — aucune action.")
         return
-    # Ordres de PROTECTION actifs = tout ordre En cours portant un seuil SL
-    # ou un profit TP, avec un order_id. On ne filtre PAS sur sens=="Vente" :
-    # BD attache souvent le bracket TP/SL à l'ordre d'ACHAT exécuté (sens lu
-    # "Achat"), ce qui excluait à tort ces protections du trailing (cas UNA).
-    sell_orders = [o for o in bd.get("orders", [])
-                   if o.get("statut") == "En cours" and o.get("order_id")
-                   and (o.get("seuil") or o.get("profit"))]
 
     for name, pos, change_pct in candidates:
-        base = pos["ticker"].upper().split(".")[0]
-        target = next(
-            (o for o in sell_orders
-             if (o.get("bd_ticker") or "").upper() == base
-             or base in (o.get("name") or "").upper()),
-            None,
-        )
-        if not target:
-            # pas d'ordre Expert actif → position historique, on ne touche pas
+        entry  = pos["entry_price"]
+        sl_ord = reader.find_stop_loss_order(rows, pos["ticker"], entry)
+        tp_ord = reader.find_take_profit_order(rows, pos["ticker"], entry)
+
+        if not sl_ord:
             if verbose:
-                send_fn(f"  ↳ {name} : aucun ordre de protection actif sur BD — non touché")
+                send_fn(f"  ↳ {name} : aucun Stop Loss identifiable dans le carnet — non touché")
             continue
 
-        entry  = pos["entry_price"]
-        cur_sl = target.get("seuil")
+        cur_sl = sl_ord["limit"]
         # Le SL ne peut que MONTER, avec une TOLÉRANCE : BD arrondit au pas de
         # cotation, donc un SL à 196.84 pour un PRU de 196.90 est déjà au
-        # breakeven à 0.03% près. Annuler puis reposer la protection pour ces
-        # quelques centimes exposerait la position à une fenêtre SANS
-        # protection — risque réel pour un gain nul (cas AIR 28/07/2026).
-        if cur_sl is not None and cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100):
+        # breakeven à 0.03% près. Annuler/reposer pour ces centimes exposerait
+        # la position à une fenêtre SANS protection pour un gain nul.
+        if cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100):
             if verbose:
                 send_fn(f"  ↳ {name} : SL déjà au PRU ({cur_sl} vs PRU {entry}, "
                         f"tolérance {BREAKEVEN_TOLERANCE_PCT}%) — rien à faire ✅")
             continue
-        tp     = target.get("profit") or pos.get("target_high")
-        new_sl = round(entry, 4)
-        if not tp:
-            continue
 
-        # ── Choix de l'id à annuler ──────────────────────────────────────────
-        # Un bloc consolidé mélange l'ordre d'ACHAT parent (exécuté, donc NON
-        # annulable → 403) et la protection active. Textes réels constatés
-        # (28/07/2026, position AIR) :
-        #   3fdcf5bc… "Achat(CPT) Ordre exécuté 5/5 … Seuil183.54 Annulé …"
-        #   49d0ee12… "Vente(CPT) 0/5 - … Seuil196.84 En cours Profit217.10 En cours"
-        # On ne retient qu'un sous-ordre ACTIF et NON exécuté, et seulement
-        # s'il est identifié SANS AMBIGUÏTÉ : sur compte réel, annuler le
-        # mauvais id laisserait la position à nu.
-        entries = target.get("order_entries") or []
-        active = [e for e in entries
-                  if "En cours" in (e.get("text") or "")
-                  and "Ordre exécuté" not in (e.get("text") or "")]
-        if len(active) == 1:
-            cancel_id = active[0]["id"]
-        else:
-            cancel_id = None
-            print(f"[Trailing] {name} : protection active non identifiable "
-                  f"({len(active)} candidat(s) sur {len(entries)} sous-ordre(s)) — abstention")
-            if name not in _trailing_cancel_failed:
-                _trailing_cancel_failed.add(name)
-                # C'est ICI qu'il manque une donnée : l'id annulable de la
-                # protection rattachée au parent existe (l'annulation manuelle
-                # du 27/07 a réussi avec 96f844b8, absent de la page
-                # portefeuille) mais n'est lisible que sur la page carnet.
-                # Lecture seule, pour construire le fix définitif.
-                try:
-                    playwright_session.run(
-                        lambda page: reader.read_order_book(page), timeout=60
-                    )
-                except Exception as _rb:
-                    print(f"[Trailing] lecture carnet : {_rb}")
-                send_fn(
-                    f"⚠️ Trailing {name} : SL non remonté au PRU.\n"
-                    f"⚠️ La position reste protégée par son SL actuel ({cur_sl}).\n\n"
-                    f"La protection de cette position est rattachée à l'ordre d'achat "
-                    f"déjà exécuté : Bourse Direct n'expose pas d'identifiant annulable "
-                    f"pour elle. Le bot s'abstient plutôt que de risquer d'annuler le "
-                    f"mauvais ordre.\n\n"
-                    f"Pour remonter le SL à la main : annule la protection {name} depuis "
-                    f"« Mes ordres », puis repose un ordre Expert vente avec SL au PRU."
-                )
+        tp = (tp_ord or {}).get("limit") or pos.get("target_high")
+        if not tp:
+            if verbose:
+                send_fn(f"  ↳ {name} : Take Profit introuvable — abstention "
+                        f"(reposer un Expert sans lui créerait un doublon)")
+            continue
+        new_sl = round(entry, 4)
+        qty    = abs(sl_ord.get("qty") or pos.get("qty") or 0)
+        if qty < 1:
             continue
 
         try:
-            ok_cancel = playwright_session.run(
-                lambda page, oid=cancel_id: bd_orders.cancel_order(page, oid),
-                timeout=30,
-            )
-            if not ok_cancel:
-                # L'id ciblé est pourtant une protection ACTIVE (filtre
-                # « En cours » ci-dessus) : un échec ici est donc un cas non
-                # couvert, pas le vieux bug du parent exécuté. La position
-                # garde sa protection intacte (rien n'a été annulé).
-                print(f"[Trailing] {name} : cancel échoué sur id ACTIF {cancel_id} "
-                      f"(sous-ordres : {target.get('order_ids')})")
+            # ── Annulation : SL ET TP ────────────────────────────────────────
+            # Les deux sont des ordres distincts. Reposer un Expert (SL+TP)
+            # sans annuler l'ancien TP créerait une VENTE EN DOUBLE.
+            to_cancel = [sl_ord] + ([tp_ord] if tp_ord else [])
+            for o in to_cancel:
+                playwright_session.run(
+                    lambda page, r=o["ref"], rb=o["refbo"]:
+                        bd_orders.cancel_legacy_order(page, r, rb),
+                    timeout=30,
+                )
+
+            # ── VÉRIFICATION : la page legacy répond 200 même en échec ───────
+            after = playwright_session.run(
+                lambda page: reader.read_order_book(page), timeout=90
+            ) or []
+            still = [o["ref"] for o in to_cancel
+                     if any(a.get("ref") == o["ref"] for a in after)]
+            if still:
+                # Rien (ou partiellement) annulé : on NE crée PAS de nouvel
+                # ordre, sinon doublon de vente. La protection reste en place.
+                print(f"[Trailing] {name} : annulation non confirmée, refs restantes {still}")
                 if name not in _trailing_cancel_failed:
                     _trailing_cancel_failed.add(name)
                     send_fn(
-                        f"⚠️ Trailing {name} : annulation refusée par BD — SL inchangé.\n"
-                        f"⚠️ La position reste protégée (rien n'a été annulé).\n\n"
-                        f"L'ordre visé était pourtant actif. Pour capturer le refus :\n"
-                        f"1. /capture\n"
-                        f"2. DANS LA FENÊTRE CHROMIUM DU BOT : annule à la main la "
-                        f"protection {name}, puis repose-la avec le SL au PRU\n"
-                        f"3. Préviens-moi — le payload sera dans tradingbot.log\n\n"
-                        f"Le bot réessaiera à chaque cycle sans re-notifier."
+                        f"⚠️ Trailing {name} : annulation non confirmée — SL inchangé.\n"
+                        f"⚠️ La position reste protégée (aucun nouvel ordre créé).\n\n"
+                        f"Ordres encore présents au carnet : {', '.join(still)}"
                     )
                 continue
 
@@ -940,12 +903,15 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                     f"Perte impossible sur cette position désormais."
                 )
             else:
-                # L'ancien ordre est annulé mais le nouveau n'est pas passé :
-                # position SANS protection → alerte forte + commande de secours.
+                # SL ET TP ont été annulés (vérifié) mais le nouvel Expert
+                # n'est pas confirmé : la position est réellement À NU.
+                # Alerte maximale + commande de secours prête à coller.
+                print(f"[Trailing] {name} : POSITION SANS PROTECTION — recréation échouée")
                 send_fn(
-                    f"🚨 Trailing {name} : ancien Expert annulé mais NOUVEL ORDRE NON CONFIRMÉ.\n"
+                    f"🚨 Trailing {name} : anciennes protections annulées mais "
+                    f"NOUVEL ORDRE NON CONFIRMÉ.\n"
                     f"⚠️ POSITION SANS PROTECTION SUR BD — replace immédiatement :\n"
-                    f"/ordre vendre {pos['ticker']} {pos['qty']} expert {new_sl} {tp}"
+                    f"/ordre vendre {pos['ticker']} {qty} expert {new_sl} {tp}"
                 )
         except Exception as e:
             print(f"[Trailing] {name} : {e}")

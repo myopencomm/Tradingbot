@@ -213,6 +213,22 @@ def find_stop_loss_order(rows: list[dict], ticker: str, entry: float) -> dict | 
     return below[0] if len(below) == 1 else None
 
 
+def find_take_profit_order(rows: list[dict], ticker: str, entry: float) -> dict | None:
+    """
+    Take Profit d'une position : la vente dont la limite est AU-DESSUS du PRU.
+    None si non univoque. Nécessaire au trailing : reposer un ordre Expert
+    (SL+TP) sans avoir annulé l'ancien TP créerait un DOUBLON de vente — soit
+    deux fois la quantité détenue.
+    """
+    base = (ticker or "").upper().split(".")[0]
+    mine = [o for o in rows
+            if (o.get("ticker") or "").upper() == base
+            and o.get("limit") is not None
+            and (o.get("sens") or "").lower().startswith("vente")]
+    above = [o for o in mine if o["limit"] > entry]
+    return above[0] if len(above) == 1 else None
+
+
 def get_portfolio(page, send_fn=None) -> dict | None:
     """
     Lit le portefeuille CTO complet : cash + positions + ordres + invest. programmés.

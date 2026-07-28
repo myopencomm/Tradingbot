@@ -401,6 +401,38 @@ def send_order(page, order_id: str) -> dict | None:
     return result.get("data")
 
 
+BD_LEGACY_DETAIL_URL = "https://www.boursedirect.fr/priv/new/detailOrdre.php"
+
+
+def cancel_legacy_order(page, ref: str, refbo: str) -> bool:
+    """
+    Annule un ordre du CARNET LEGACY (ordres-en-carnet.php).
+
+    Confirmé par inspection manuelle (28/07/2026) : l'annulation est un simple
+    GET, sans formulaire ni POST :
+        detailOrdre.php?ref=<ref>&refbo=<refbo>&fn=1&isOpcvm=0
+    (`fn=1` déclenche l'annulation ; `num=1` dans le lien du carnet ouvre
+    seulement la popup de détail qui porte ce lien.)
+
+    C'est la SEULE voie qui atteigne les protections rattachées à un ordre
+    d'achat exécuté — l'API moderne /order/cancel ne connaît pas ces ordres.
+
+    Requête via le contexte du navigateur : mêmes cookies de session, sans
+    perturber la page courante.
+
+    ⚠️ Le retour HTTP 200 ne prouve PAS l'annulation (la page legacy répond 200
+    même sur erreur). L'appelant DOIT relire le carnet pour vérifier.
+    """
+    url = f"{BD_LEGACY_DETAIL_URL}?ref={ref}&refbo={refbo}&fn=1&isOpcvm=0"
+    try:
+        resp = page.request.get(url, timeout=20000)
+        print(f"[BD Legacy cancel] ref={ref} → HTTP {resp.status}")
+        return bool(resp.ok)
+    except Exception as e:
+        print(f"[BD Legacy cancel] ref={ref} : {e}")
+        return False
+
+
 def cancel_order(page, order_id: str) -> dict | None:
     """
     Annule un ordre en cours sur BD (Take Profit, Stop Loss, ordre limite...).
