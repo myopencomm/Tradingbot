@@ -736,7 +736,7 @@ def trailing_stop_cycle(send_fn) -> None:
     Les positions historiques SANS ordre Expert sur BD (ILMN, GVN, MCPHY…)
     ne sont jamais touchées : pas d'ordre à modifier = pas d'action.
     """
-    from config import BREAKEVEN_THRESHOLD
+    from config import BREAKEVEN_THRESHOLD, BREAKEVEN_TOLERANCE_PCT
 
     if not (bot_mode.is_playwright() and playwright_session.is_connected()):
         return
@@ -793,49 +793,84 @@ def trailing_stop_cycle(send_fn) -> None:
 
         entry  = pos["entry_price"]
         cur_sl = target.get("seuil")
-        # Le SL ne peut que MONTER : déjà au PRU ou au-dessus → rien à faire
-        if cur_sl is not None and cur_sl >= entry:
+        # Le SL ne peut que MONTER, avec une TOLÉRANCE : BD arrondit au pas de
+        # cotation, donc un SL à 196.84 pour un PRU de 196.90 est déjà au
+        # breakeven à 0.03% près. Annuler puis reposer la protection pour ces
+        # quelques centimes exposerait la position à une fenêtre SANS
+        # protection — risque réel pour un gain nul (cas AIR 28/07/2026).
+        if cur_sl is not None and cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100):
             continue
         tp     = target.get("profit") or pos.get("target_high")
         new_sl = round(entry, 4)
         if not tp:
             continue
 
+        # ── Choix de l'id à annuler ──────────────────────────────────────────
+        # Un bloc consolidé mélange l'ordre d'ACHAT parent (exécuté, donc NON
+        # annulable → 403) et la protection active. Textes réels constatés
+        # (28/07/2026, position AIR) :
+        #   3fdcf5bc… "Achat(CPT) Ordre exécuté 5/5 … Seuil183.54 Annulé …"
+        #   49d0ee12… "Vente(CPT) 0/5 - … Seuil196.84 En cours Profit217.10 En cours"
+        # On ne retient qu'un sous-ordre ACTIF et NON exécuté, et seulement
+        # s'il est identifié SANS AMBIGUÏTÉ : sur compte réel, annuler le
+        # mauvais id laisserait la position à nu.
+        entries = target.get("order_entries") or []
+        active = [e for e in entries
+                  if "En cours" in (e.get("text") or "")
+                  and "Ordre exécuté" not in (e.get("text") or "")]
+        if len(active) == 1:
+            cancel_id = active[0]["id"]
+        else:
+            cancel_id = None
+            print(f"[Trailing] {name} : protection active non identifiable "
+                  f"({len(active)} candidat(s) sur {len(entries)} sous-ordre(s)) — abstention")
+            if name not in _trailing_cancel_failed:
+                _trailing_cancel_failed.add(name)
+                # C'est ICI qu'il manque une donnée : l'id annulable de la
+                # protection rattachée au parent existe (l'annulation manuelle
+                # du 27/07 a réussi avec 96f844b8, absent de la page
+                # portefeuille) mais n'est lisible que sur la page carnet.
+                # Lecture seule, pour construire le fix définitif.
+                try:
+                    playwright_session.run(
+                        lambda page: reader.read_order_book(page), timeout=60
+                    )
+                except Exception as _rb:
+                    print(f"[Trailing] lecture carnet : {_rb}")
+                send_fn(
+                    f"⚠️ Trailing {name} : SL non remonté au PRU.\n"
+                    f"⚠️ La position reste protégée par son SL actuel ({cur_sl}).\n\n"
+                    f"La protection de cette position est rattachée à l'ordre d'achat "
+                    f"déjà exécuté : Bourse Direct n'expose pas d'identifiant annulable "
+                    f"pour elle. Le bot s'abstient plutôt que de risquer d'annuler le "
+                    f"mauvais ordre.\n\n"
+                    f"Pour remonter le SL à la main : annule la protection {name} depuis "
+                    f"« Mes ordres », puis repose un ordre Expert vente avec SL au PRU."
+                )
+            continue
+
         try:
             ok_cancel = playwright_session.run(
-                lambda page, oid=target["order_id"]: bd_orders.cancel_order(page, oid),
+                lambda page, oid=cancel_id: bd_orders.cancel_order(page, oid),
                 timeout=30,
             )
             if not ok_cancel:
-                # AIR 27/07/2026 : /order/cancel répond 403 « une erreur est
-                # intervenue » sur l'unique id exposé par le bloc consolidé
-                # (l'hypothèse « plusieurs ids, on vise le mauvais » a été
-                # infirmée : le DOM n'en expose qu'un). L'id des enfants TP/SL
-                # « En cours » n'est donc pas lisible dans la page ; il faut le
-                # payload réel du site (/capture) pour savoir quoi annuler.
-                # Notifie UNE fois, puis réessaie en silence chaque cycle.
-                print(f"[Trailing] {name} : cancel échoué (order_id {target['order_id']}, "
-                      f"ids du bloc : {target.get('order_ids')})")
+                # L'id ciblé est pourtant une protection ACTIVE (filtre
+                # « En cours » ci-dessus) : un échec ici est donc un cas non
+                # couvert, pas le vieux bug du parent exécuté. La position
+                # garde sa protection intacte (rien n'a été annulé).
+                print(f"[Trailing] {name} : cancel échoué sur id ACTIF {cancel_id} "
+                      f"(sous-ordres : {target.get('order_ids')})")
                 if name not in _trailing_cancel_failed:
                     _trailing_cancel_failed.add(name)
-                    # Journalise le carnet d'ordres (ids réels des enfants
-                    # SL/TP) pour pouvoir cibler le bon ordre au prochain fix.
-                    # Lecture seule — rien n'est annulé automatiquement.
-                    try:
-                        playwright_session.run(
-                            lambda page: reader.read_order_book(page), timeout=45
-                        )
-                    except Exception as _rb:
-                        print(f"[Trailing] lecture carnet : {_rb}")
                     send_fn(
-                        f"⚠️ Trailing {name} : annulation de l'ancien Expert impossible — SL inchangé sur BD.\n"
-                        f"⚠️ La position reste protégée par son SL D'ORIGINE (pas encore remonté au PRU).\n\n"
-                        f"Pour capturer le vrai payload d'annulation :\n"
+                        f"⚠️ Trailing {name} : annulation refusée par BD — SL inchangé.\n"
+                        f"⚠️ La position reste protégée (rien n'a été annulé).\n\n"
+                        f"L'ordre visé était pourtant actif. Pour capturer le refus :\n"
                         f"1. /capture\n"
-                        f"2. DANS LA FENÊTRE CHROMIUM DU BOT (pas le téléphone) : "
-                        f"annule à la main la protection {name} depuis « Mes ordres », "
-                        f"puis repose-la aussitôt avec le SL au PRU\n"
-                        f"3. Préviens-moi : le payload sera dans tradingbot.log ([CAPTURE])\n\n"
+                        f"2. DANS LA FENÊTRE CHROMIUM DU BOT : annule à la main la "
+                        f"protection {name}, puis repose-la avec le SL au PRU\n"
+                        f"3. Préviens-moi — le payload sera dans tradingbot.log\n\n"
                         f"Le bot réessaiera à chaque cycle sans re-notifier."
                     )
                 continue

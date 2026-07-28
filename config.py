@@ -87,6 +87,14 @@ VOL_SCALE_TRIGGER  = float(os.getenv("VOL_SCALE_TRIGGER", "1.5"))
 # gérée par le bot (hors HOLD long terme). Au-delà de CORR_VETO_THRESHOLD,
 # entrée bloquée (même pari) ; entre CORR_DAMPEN_THRESHOLD et le seuil de veto,
 # risque réduit de moitié.
+# Tolérance du trailing breakeven : BD arrondit les prix au pas de cotation,
+# donc un SL posé « au PRU » retombe quelques centimes en dessous (196.84 pour
+# un PRU de 196.90 = 0.03%). Sans tolérance, le bot annulerait et reposerait la
+# protection en boucle pour un gain nul — en exposant la position à une fenêtre
+# SANS protection à chaque fois. En deçà de ce seuil, le SL est considéré comme
+# déjà au breakeven.
+BREAKEVEN_TOLERANCE_PCT = float(os.getenv("BREAKEVEN_TOLERANCE_PCT", "0.3"))
+
 CORR_LOOKBACK_DAYS    = int(os.getenv("CORR_LOOKBACK_DAYS", "90"))
 CORR_DAMPEN_THRESHOLD = float(os.getenv("CORR_DAMPEN_THRESHOLD", "0.6"))
 CORR_VETO_THRESHOLD   = float(os.getenv("CORR_VETO_THRESHOLD", "0.85"))

@@ -109,18 +109,21 @@ def read_order_book(page, send_fn=None) -> list[dict]:
     seen: list[dict] = []
 
     def _on_response(resp):
+        # Filtre volontairement LARGE : la première tentative (filtrée sur des
+        # mots-clés) n'a rien capté du tout. On journalise toute réponse /hub/
+        # non triviale et on trie à la lecture.
         try:
             if "/hub/" not in resp.url:
                 return
-            body = resp.text()
-            # On ne garde que ce qui ressemble à une liste d'ordres
-            if not body or len(body) < 20:
+            print(f"[BD Carnet API] {resp.status} {resp.request.method} {resp.url}")
+            try:
+                body = resp.text()
+            except Exception as be:
+                print(f"[BD Carnet BODY] <illisible: {be}>")
                 return
-            if not any(k in body for k in ('"order', '"status"', '"stop', '"limit')):
-                return
-            print(f"[BD Carnet API] {resp.status} {resp.url}")
-            print(f"[BD Carnet BODY] {body[:2000]}")
-            seen.append({"url": resp.url, "body": body[:2000]})
+            if body and len(body) > 10:
+                print(f"[BD Carnet BODY] {body[:2000]}")
+                seen.append({"url": resp.url, "body": body[:2000]})
         except Exception:
             pass
 
