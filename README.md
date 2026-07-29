@@ -658,6 +658,18 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-29 — Univers découvert automatiquement : 36 → ~550 valeurs US
+- **`market_universe.py`** : l'univers US n'est plus écrit à la main. Source officielle **Nasdaq Trader** (fichiers publiés quotidiennement, libres, sans clé) → 5 149 actions ordinaires → filtre de liquidité → indicateurs calculés **par lot**. Pipeline complet mesuré : **3,8 min** pour 2 558 valeurs
+- **`compute_indicators_bulk()`** produit exactement les mêmes indicateurs que `get_technicals` (contrôle d'équivalence : 0 écart sur AIR.PA, GLE.PA, UNA.AS, OR.PA, ASML.AS). Indispensable : en unitaire, un an d'historique par ticker fait rate-limiter yfinance dès quelques centaines d'appels
+- **`SCAN_US_MIN_DOLLAR_VOLUME` (défaut 200 M$/jour)** — le réglage qui compte. Mesuré : à 5 M$/j le top 8 se remplit de micro-caps biotech à +230 %/+785 % qui évincent tout le reste ; à 200 M$/j on obtient JBHT, SCCO, CVS, HUM, TD… liquides et sûrement traitables chez BD. `0` désactive et revient à la liste manuelle
+- **Veto ATR déplacé dans le screen** : `validate_candidate` rejetait déjà les titres trop volatils (SL technique > `MAX_SL_PCT`) — les filtrer dès le classement évite de leur brûler une validation IA et empêche les « billets de loterie » de saturer le top 8
+- **Rafraîchissement planifié le dimanche 08h00**, marchés fermés. **Jamais à la demande** : un passage complet fait rate-limiter yfinance, ce qui dégraderait les cours du scan et du suivi de positions
+- Repli automatique et silencieux sur la liste manuelle si le cache est absent ou périmé (> 3 jours) — jamais de scan sur données mortes
+
+### 2026-07-29 — `/stats` : P&L latent faux, corrigé
+- **Une position dont le cours était indisponible disparaissait du total, sans aucun signal.** Constaté en réel : latent affiché **+7,91 €** au lieu de **+74,91 €**, AIR étant muette à cet instant (rate-limit yfinance). `/stats` liste désormais les positions non valorisées et annonce le total comme **INCOMPLET**
+- **Aucune conversion de devise** : le P&L latent d'une position en USD était additionné tel quel à un total en euros. Corrigé via `fx_to_eur` (invisible aujourd'hui — AIR et GLE sont en EUR — mais faux dès la première position US)
+
 ### 2026-07-29 — Univers de scan élargi : 115 → 149 valeurs Euronext
 - **+34 valeurs** (Paris, Amsterdam, Bruxelles). L'univers était incomplet **même sur le CAC 40** : `OR.PA` (L'Oréal, un des premiers poids de l'indice), `AKE.PA`, `BVI.PA`, `SW.PA`, `VIV.PA`, `URW.PA`, `FGR.PA` en étaient absents
 - **Chaque ajout validé sur données réelles**, pas ajouté de mémoire : technicals yfinance exploitables (RSI, momentum 12-1, MM200) **et** liquidité médiane ≥ **2 M€ échangés/jour** sur 3 mois. 23 candidats ont été écartés pour illiquidité (de 0,01 à 1,97 M€/jour) — avec ~4 € de frais aller-retour et un seuil de rentabilité à 5×, une valeur au spread large coûte plus cher que les frais eux-mêmes

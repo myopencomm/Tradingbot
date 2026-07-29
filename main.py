@@ -46,6 +46,25 @@ def _bounded(fn, name, timeout=240):
     return wrapped
 
 
+def _refresh_market_universe():
+    """Reconstruit l'univers US investissable (liste officielle Nasdaq Trader
+    → filtre de liquidité → indicateurs), mis en cache pour le scan.
+
+    Silencieux sauf échec : c'est de la maintenance, pas une décision de
+    trading. Le scan retombe seul sur la liste manuelle si le cache manque.
+    """
+    try:
+        import market_universe
+        r = market_universe.refresh_us()
+        print(f"[universe] rafraîchi : {r}")
+    except Exception as e:
+        print(f"[universe] échec du rafraîchissement : {e}")
+        telegram_bot.send(
+            f"⚠️ Rafraîchissement de l'univers de marché échoué : {e}\n"
+            f"Le scan continue sur la liste manuelle (149 valeurs)."
+        )
+
+
 def _weekly_version_check():
     """Vérifie silencieusement si une mise à jour est dispo sur GitHub. Envoie une notif si en retard."""
     import subprocess
@@ -176,6 +195,14 @@ def run_scheduler():
                  if _market_day() and datetime.now().day == 1 else None, "monthly_breach")
     )
     schedule.every().monday.at("09:20").do(_bounded(_weekly_version_check, "version_check"))
+    # Univers de marché : rafraîchi le week-end, marchés fermés. JAMAIS à la
+    # demande — un passage complet (~5000 symboles) fait rate-limiter yfinance,
+    # ce qui dégraderait les cours du scan et du suivi de positions.
+    # Budget large : le pipeline complet a été mesuré à ~4 min, mais il
+    # télécharge 2 ans d'historique pour ~2500 valeurs.
+    schedule.every().sunday.at("08:00").do(
+        _bounded(_refresh_market_universe, "universe_refresh", timeout=2400)
+    )
     schedule.every().hour.at(":35").do(_bounded(_hourly_bd_sync, "hourly_bd_sync"))
 
     # Séance US : les 4 CHECK_TIMES s'arrêtent à 17:00, mais Wall Street tourne

@@ -678,6 +678,11 @@ def cmd_stats(args, cid):
 
     lines.append(f"\nPOSITIONS OUVERTES")
     lines.append(f"P&L latent    : {s['unrealized_pnl']:+.0f}€")
+    # Un cours manquant amputait le latent en silence (bug 29/07) :
+    # on nomme les positions non valorisées plutôt que de mentir.
+    if s.get("unpriced"):
+        lines.append(f"  ⚠️ INCOMPLET — cours indisponible pour "
+                     f"{', '.join(s['unpriced'])} (exclues du latent)")
     lines.append(f"\nTOTAL P&L     : {s['total_pnl']:+.0f}€")
     if s.get("api_cost_eur"):
         lines.append(f"Couts API IA  : -{s['api_cost_eur']:.2f}€ "
@@ -1113,8 +1118,21 @@ def cmd_scan(args, cid):
                          "opportunités validées attendront l'ouverture.", cid)
                 # Pas de plancher de cash ici : contrairement au scan US
                 # PLANIFIÉ, une demande explicite doit toujours répondre.
+                # Univers US : cache découvert automatiquement si frais
+                # (~2500 valeurs liquides issues de la liste officielle
+                # Nasdaq Trader), sinon repli sur les 36 curatées.
+                us_univ, us_ind = list(analysis.US_UNIVERSE), {}
+                try:
+                    import market_universe
+                    us_ind = market_universe.load_indicators("us")
+                    if us_ind:
+                        us_univ = sorted(set(us_univ) | set(us_ind))
+                        send(f"🇺🇸 Univers US étendu : {len(us_univ)} valeurs "
+                             f"(liste officielle Nasdaq Trader, filtrées par liquidité).", cid)
+                except Exception as e:
+                    print(f"[scan us] univers etendu indisponible : {e}")
                 analysis.scan_opportunities(
-                    send_final, universe=analysis.US_UNIVERSE,
+                    send_final, universe=us_univ, precomputed=us_ind,
                     scan_label="🇺🇸 ", update_fn=update_fn,
                 )
             else:

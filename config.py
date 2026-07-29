@@ -95,6 +95,16 @@ VOL_SCALE_TRIGGER  = float(os.getenv("VOL_SCALE_TRIGGER", "1.5"))
 # déjà au breakeven.
 BREAKEVEN_TOLERANCE_PCT = float(os.getenv("BREAKEVEN_TOLERANCE_PCT", "0.3"))
 
+# Univers US découvert automatiquement (market_universe) : seuil de liquidité
+# appliqué AU SCAN. Le cache est construit large (5 M$/jour) ; ce filtre-ci
+# décide de ce qu'on classe réellement. Mesuré le 29/07/2026 :
+#   5 M$/j  -> 2558 valeurs, top 8 = micro-caps biotech à +230/+785% (ingérable)
+#  50 M$/j  -> 1340 valeurs, top 8 = biotechs mid-cap
+# 200 M$/j  ->  559 valeurs, top 8 = JBHT, SCCO, CVS, HUM… (liquides, sûrement
+#              traitables chez BD, cohérentes avec des positions de 500-1000€)
+# Mettre 0 pour désactiver l'univers étendu et revenir à la liste manuelle.
+SCAN_US_MIN_DOLLAR_VOLUME = float(os.getenv("SCAN_US_MIN_DOLLAR_VOLUME", "200000000"))
+
 CORR_LOOKBACK_DAYS    = int(os.getenv("CORR_LOOKBACK_DAYS", "90"))
 CORR_DAMPEN_THRESHOLD = float(os.getenv("CORR_DAMPEN_THRESHOLD", "0.6"))
 CORR_VETO_THRESHOLD   = float(os.getenv("CORR_VETO_THRESHOLD", "0.85"))

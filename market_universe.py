@@ -310,6 +310,74 @@ def load_cache(source: str = "us", max_age_days: int = 7) -> list[dict]:
         return []
 
 
+def refresh_us(top_n: int = 0, send_fn=None) -> dict:
+    """
+    Rafraîchit l'univers US complet : liste officielle → liquidité →
+    indicateurs, le tout mis en cache. À PLANIFIER (hebdomadaire), jamais à la
+    demande : yfinance rate-limite après un passage complet.
+
+    `top_n` > 0 limite aux N valeurs les plus liquides (le reste du gisement
+    apporte peu pour des positions de ~500-1000€ et multiplie les refus de
+    traitabilité côté BD).
+    """
+    def log(m):
+        print(f"[universe] {m}")
+        if send_fn:
+            send_fn(m)
+
+    t0 = time.time()
+    syms = fetch_us_symbols()
+    log(f"{len(syms)} actions ordinaires US listées")
+    liq = build_liquid_universe(syms)
+    log(f"{len(liq)} passent le filtre de liquidité "
+        f"(≥ {MIN_DOLLAR_VOLUME/1e6:.0f} M$/j, prix ≥ {MIN_PRICE}$)")
+    if top_n and len(liq) > top_n:
+        liq = liq[:top_n]
+        log(f"limité aux {top_n} plus liquides")
+    save_cache(liq, "us")
+
+    tickers = [e["ticker"] for e in liq]
+    ind = compute_indicators_bulk(tickers)
+    save_indicators(ind, "us")
+    log(f"indicateurs calculés pour {len(ind)} valeurs en {(time.time()-t0)/60:.1f} min")
+    return {"symbols": len(syms), "liquid": len(liq), "indicators": len(ind)}
+
+
+def save_indicators(ind: dict[str, dict], source: str = "us") -> None:
+    data = {}
+    if CACHE_PATH.exists():
+        try:
+            data = json.loads(CACHE_PATH.read_text())
+        except Exception:
+            data = {}
+    data[f"{source}_indicators"] = {
+        "updated": datetime.now().isoformat(timespec="seconds"),
+        "count": len(ind),
+        "data": ind,
+    }
+    CACHE_PATH.write_text(json.dumps(data, indent=1))
+
+
+def load_indicators(source: str = "us", max_age_days: int = 3) -> dict[str, dict]:
+    """
+    Indicateurs en cache. Vide si périmé — l'appelant retombe alors sur la
+    liste manuelle plutôt que de scanner avec des données mortes.
+
+    3 jours : le screen travaille sur des bougies quotidiennes (RSI, momentum,
+    MM200), une donnée de la veille est acceptable ; au-delà d'un week-end
+    prolongé elle ne l'est plus.
+    """
+    try:
+        d = json.loads(CACHE_PATH.read_text()).get(f"{source}_indicators") or {}
+        upd = datetime.fromisoformat(d["updated"])
+        if datetime.now() - upd > timedelta(days=max_age_days):
+            print(f"[universe] indicateurs '{source}' périmés ({upd.date()})")
+            return {}
+        return d.get("data", {})
+    except Exception:
+        return {}
+
+
 def cache_info() -> dict:
     try:
         data = json.loads(CACHE_PATH.read_text())

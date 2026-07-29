@@ -1495,7 +1495,8 @@ Si NEUTRE ou ÉVITER : explique pourquoi en 2 lignes max."""
 
 
 def _quant_screen(universe: list[str], held_tickers: set[str],
-                  regime: str = "BULL", index_mom: float = 0.0) -> list[dict]:
+                  regime: str = "BULL", index_mom: float = 0.0,
+                  precomputed: dict[str, dict] | None = None) -> list[dict]:
     """
     Filtre quantitatif parallèle sur tout l'univers de scan.
 
@@ -1518,15 +1519,20 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
                  Score = rel. Fallback si 0 candidats : force_relative > -3%.
     CRISIS     : retourne [] immédiatement, aucun trade.
     """
-    from config import RSI_ENTRY_MIN, RSI_ENTRY_MAX
+    from config import RSI_ENTRY_MIN, RSI_ENTRY_MAX, ATR_SL_MULT, MAX_SL_PCT
 
     if regime == "CRISIS":
         return []
 
     candidates = [t for t in universe if t.upper() not in held_tickers]
+    precomputed = precomputed or {}
 
     def fetch_one(ticker):
-        tech = prices.get_technicals(ticker)
+        # Indicateurs déjà calculés en lot (univers étendu) : on évite un appel
+        # d'un an d'historique par ticker, impossible à tenir sur des milliers
+        # de valeurs. Format strictement identique à get_technicals — contrôle
+        # d'équivalence fait le 29/07/2026, 0 écart.
+        tech = precomputed.get(ticker) or prices.get_technicals(ticker)
         if not tech:
             return None
         rsi  = tech.get("rsi")
@@ -1559,6 +1565,16 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
         if not (RSI_ENTRY_MIN <= rsi <= RSI_ENTRY_MAX):
             return None
         if mom < -12:
+            return None
+        # VETO VOLATILITÉ, appliqué DÈS LE SCREEN (29/07/2026). validate_candidate
+        # rejette déjà tout titre dont le SL technique (ATR_SL_MULT × ATR)
+        # dépasse MAX_SL_PCT — autant ne pas le classer ni lui brûler une
+        # validation IA. Sans ce filtre, l'ouverture de l'univers US (2500
+        # valeurs) faisait remonter en tête des micro-caps biotech à +485% ou
+        # +785% sur 12 mois : le plafond de score (80) limite leur note mais ne
+        # les empêche pas de saturer le top 8, évinçant les valeurs de qualité.
+        atr_screen = tech.get("atr_pct")
+        if atr_screen and ATR_SL_MULT * atr_screen > MAX_SL_PCT:
             return None
         if regime == "NEUTRAL":
             if rel <= 0:
@@ -1601,7 +1617,8 @@ def _extract_tickers(text: str) -> list[str]:
 
 
 def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=None,
-                       universe: list = None, scan_label: str = "") -> None:
+                       universe: list = None, scan_label: str = "",
+                       precomputed: dict | None = None) -> None:
     """
     Scanner pro en 3 étapes :
     - Étape 0 : filtre quantitatif parallèle sur ~100 actions réelles (RSI/momentum/volume)
@@ -1614,7 +1631,34 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
     universe — sous-ensemble à scanner (défaut : SCAN_UNIVERSE complet).
     scan_label — préfixe d'en-tête (ex "🇺🇸 " pour un scan de séance US).
     """
-    universe = universe or SCAN_UNIVERSE
+    # ── Univers : liste manuelle + gisement US découvert automatiquement ──
+    # SCAN_UNIVERSE est curatée à la main (149 valeurs). Le cache
+    # market_universe apporte les actions US liquides issues de la liste
+    # OFFICIELLE Nasdaq Trader — sans lui, on regarde 36 valeurs sur ~5000.
+    # Repli silencieux sur la liste manuelle si le cache est absent ou périmé :
+    # jamais de scan sur des données mortes.
+    precomputed_tech: dict = precomputed or {}
+    if universe is None:
+        universe = list(SCAN_UNIVERSE)
+        try:
+            import market_universe as _mu
+            from config import SCAN_US_MIN_DOLLAR_VOLUME as _MINDV
+            _ind = _mu.load_indicators("us") if _MINDV > 0 else {}
+            if _ind and _MINDV > 0:
+                # Filtre de liquidité appliqué au scan : le cache est volontai-
+                # rement large, c'est ici qu'on décide du niveau de qualité.
+                _liq = {e["ticker"]: e["dollar_volume"] for e in _mu.load_cache("us")}
+                _ind = {t: v for t, v in _ind.items() if _liq.get(t, 0) >= _MINDV}
+            if _ind:
+                extra = [t for t in _ind if t not in set(universe)]
+                universe += extra
+                precomputed_tech = _ind
+                print(f"[scan] univers étendu : {len(SCAN_UNIVERSE)} manuels "
+                      f"+ {len(extra)} US découverts = {len(universe)}")
+            else:
+                print("[scan] cache univers US absent/périmé — liste manuelle seule")
+        except Exception as _ue:
+            print(f"[scan] univers étendu indisponible : {_ue}")
     # Compat : progress_fn ancienne API → update_fn
     if progress_fn and not update_fn:
         _pf = progress_fn
@@ -1665,7 +1709,8 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
         )
 
         # ── Étape 0 : filtre quantitatif parallèle ───────────────────────────
-        screened = _quant_screen(universe, held_tickers, regime=regime, index_mom=index_mom)
+        screened = _quant_screen(universe, held_tickers, regime=regime,
+                                 index_mom=index_mom, precomputed=precomputed_tech)
         print(f"[scan] régime={regime} | {len(screened)}/{len(universe)} candidats")
 
         # En CRISIS : analyse positions uniquement, aucun nouveau trade

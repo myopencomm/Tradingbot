@@ -81,13 +81,24 @@ def get_stats() -> dict:
     # P&L latent des positions ouvertes GÉRÉES par le bot. Les positions HOLD
     # long terme (hold: true, ex ILMN) sont hors périmètre trading : leur
     # latent n'entre pas dans le bilan du bot.
+    # Deux pièges corrigés le 29/07/2026 :
+    #  1. un cours indisponible (rate-limit yfinance, suspension) faisait
+    #     DISPARAÎTRE la position du total, sans aucun signal : le latent
+    #     affichait +7.91€ au lieu de +74.91€ car AIR était muet à cet instant.
+    #     On remonte donc la liste des positions non valorisées à l'appelant.
+    #  2. aucune conversion de devise : le P&L d'une position en USD était
+    #     additionné tel quel à un total en EUR.
     unrealized_pnl = 0.0
+    unpriced: list[str] = []
     positions = portfolio.get_managed_positions()
-    for cfg in positions.values():
+    for name, cfg in positions.items():
         q = prices.get_quote(cfg["ticker"])
         price = q.get("price")
-        if price:
-            unrealized_pnl += (price - cfg["entry_price"]) * cfg["qty"]
+        if not price:
+            unpriced.append(name)
+            continue
+        gain = (price - cfg["entry_price"]) * cfg["qty"]
+        unrealized_pnl += gain * prices.fx_to_eur(q.get("currency") or "EUR")
 
     # Coûts API IA — 2e charge réelle après les frais de courtage (déjà déduits
     # par trade). Sans eux, le bilan surestime l'efficacité du bot.
@@ -107,6 +118,7 @@ def get_stats() -> dict:
         "win_rate":       round(win_rate, 1),
         "realized_pnl":   round(realized_pnl, 2),
         "unrealized_pnl": round(unrealized_pnl, 2),
+        "unpriced":       unpriced,   # positions non valorisables : le latent est PARTIEL
         "total_pnl":      total_pnl,
         "api_cost_eur":   api_cost_eur,
         "api_month_eur":  api_month_eur,
