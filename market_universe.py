@@ -166,6 +166,121 @@ def build_liquid_universe(symbols: list[str], batch: int = 250,
     return sorted(kept, key=lambda x: -x["dollar_volume"])
 
 
+def compute_indicators_bulk(tickers: list[str], batch: int = 200,
+                            progress=None) -> dict[str, dict]:
+    """
+    Calcule les MÊMES indicateurs que `prices.get_technicals`, mais par
+    téléchargement GROUPÉ — seule façon de couvrir des milliers de valeurs.
+
+    En unitaire, `get_technicals` fait un appel d'un an d'historique PAR
+    ticker : à 2500 valeurs c'est intenable et yfinance rate-limite (constaté
+    le 29/07/2026). Ici un seul appel couvre 200 tickers.
+
+    Clés retournées identiques à get_technicals pour que `_quant_screen` ne
+    voie aucune différence : rsi, momentum_1m, mom_12_1, above_ma200,
+    ma200_dist_pct, atr_pct, vol_ratio, vol_ratio_20_250.
+    """
+    import yfinance as yf
+    import pandas as pd
+    import numpy as np
+
+    out: dict[str, dict] = {}
+    total = len(tickers)
+    for i in range(0, total, batch):
+        chunk = tickers[i:i + batch]
+        try:
+            df = yf.download(chunk, period="2y", interval="1d",
+                             auto_adjust=True, threads=True, progress=False)
+        except Exception as e:
+            print(f"[universe] indicateurs batch {i}: {e}")
+            continue
+        if df is None or df.empty:
+            continue
+        try:
+            def field(name):
+                d = df[name] if name in df else None
+                if d is None:
+                    return None
+                return d.to_frame(chunk[0]) if isinstance(d, pd.Series) else d
+
+            closes, highs, lows, vols = (field("Close"), field("High"),
+                                         field("Low"), field("Volume"))
+            if closes is None:
+                continue
+            for t in closes.columns:
+                try:
+                    c = closes[t].dropna()
+                    if len(c) < 210:      # besoin de la MM200 + marge
+                        continue
+                    # RSI 14 (Wilder simplifié, comme prices.rsi)
+                    delta = c.diff()
+                    gain = delta.clip(lower=0).rolling(14).mean()
+                    loss = (-delta.clip(upper=0)).rolling(14).mean()
+                    rs = gain / loss.replace(0, np.nan)
+                    rsi = float((100 - 100 / (1 + rs)).iloc[-1])
+
+                    ma200 = float(c.rolling(200).mean().iloc[-1])
+                    px    = float(c.iloc[-1])
+                    mom1m = float((px / c.iloc[-22] - 1) * 100) if len(c) > 22 else None
+                    # Momentum 12 mois HORS dernier mois — ancrage sur une
+                    # fenêtre CALENDAIRE de 365 jours, comme
+                    # prices.get_technicals qui fait (iloc[-22] / iloc[0]) sur
+                    # period="1y". Un décalage fixe de 252 barres serait FAUX :
+                    # Euronext cote ~256 séances/an, donc l'ancre glisserait de
+                    # plusieurs jours (mesuré le 29/07/2026 : GLE 44.8 au lieu
+                    # de 53.6, AIR 15.0 au lieu de 10.4). mom_12_1 étant LE
+                    # signal de classement, l'écart fausserait tout le top 8.
+                    m121 = None
+                    win = c[c.index >= (c.index[-1] - pd.Timedelta(days=365))]
+                    if len(win) > 22:
+                        m121 = float((win.iloc[-22] / win.iloc[0] - 1) * 100)
+
+                    atr_pct = None
+                    if highs is not None and lows is not None and t in highs.columns:
+                        h, l = highs[t].dropna(), lows[t].dropna()
+                        idx = c.index.intersection(h.index).intersection(l.index)
+                        if len(idx) > 15:
+                            cc, hh, ll = c.loc[idx], h.loc[idx], l.loc[idx]
+                            prev = cc.shift()
+                            tr = pd.concat([hh - ll, (hh - prev).abs(),
+                                            (ll - prev).abs()], axis=1).max(axis=1)
+                            atr_pct = float(tr.rolling(14).mean().iloc[-1] / px * 100)
+
+                    vol_ratio = None
+                    if vols is not None and t in vols.columns:
+                        v = vols[t].dropna()
+                        if len(v) > 20:
+                            avg20 = float(v.rolling(20).mean().iloc[-1])
+                            if avg20:
+                                vol_ratio = round(float(v.iloc[-1]) / avg20, 2)
+
+                    ret = c.pct_change().dropna()
+                    vr20_250 = None
+                    if len(ret) > 250:
+                        s20  = float(ret.tail(20).std())
+                        s250 = float(ret.tail(250).std())
+                        if s250:
+                            vr20_250 = round(s20 / s250, 2)
+
+                    out[t] = {
+                        "rsi": round(rsi, 1),
+                        "momentum_1m": round(mom1m, 1) if mom1m is not None else None,
+                        "mom_12_1": round(m121, 1) if m121 is not None else None,
+                        "above_ma200": bool(px > ma200),
+                        "ma200_dist_pct": round((px / ma200 - 1) * 100, 1),
+                        "atr_pct": round(atr_pct, 2) if atr_pct is not None else None,
+                        "vol_ratio": vol_ratio,
+                        "vol_ratio_20_250": vr20_250,
+                    }
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"[universe] parse indicateurs {i}: {e}")
+        if progress:
+            progress(min(i + batch, total), total, len(out))
+    return out
+
+
 def save_cache(entries: list[dict], source: str = "us") -> None:
     data = {}
     if CACHE_PATH.exists():
