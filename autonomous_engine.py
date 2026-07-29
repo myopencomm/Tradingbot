@@ -362,6 +362,29 @@ def entry_blocked_reason() -> str | None:
     available = min(info["available"], portfolio.get_cash())
     if available < 50:
         return f"budget autonome insuffisant ({available:.0f}€ libre)"
+
+    # Budget libre non nul mais trop petit pour le MOINS CHER des candidats en
+    # attente : le cycle refuse alors chaque ticker un par un, en silence côté
+    # Telegram (incident 28-29/07 : NVDA/LLY/JNJ recalés toutes les heures sur
+    # « cours 173€ > budget 103€ », alors que le scan annonçait une entrée auto).
+    # Le seuil de 50€ ne suffit pas à décrire ce cas.
+    pending = portfolio.get_pending_opportunities()
+    if pending:
+        cheapest, cheapest_t = None, ""
+        for opp in pending:
+            t = opp.get("ticker", "")
+            q = prices.get_quote(t)
+            px = q.get("price")
+            if not px:
+                continue
+            eur = px * prices.fx_to_eur(q.get("currency") or "EUR")
+            if cheapest is None or eur < cheapest:
+                cheapest, cheapest_t = eur, t
+        if cheapest is not None and cheapest > available:
+            return (f"budget autonome libre {available:.0f}€ — insuffisant même pour "
+                    f"1 titre du moins cher en attente ({cheapest_t} à {cheapest:.0f}€). "
+                    f"{info['engaged']:.0f}€ sont engagés sur {info['total']:.0f}€ de "
+                    f"budget : /auto on MONTANT pour l'augmenter")
     return None
 
 
