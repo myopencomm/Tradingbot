@@ -92,11 +92,21 @@ def build_data() -> dict:
         # devise de cotation ramené en euros au taux du jour.
         _eur = cfg["entry_price"] * fx
         entry_eur = cfg.get("bd_pru_raw") or round(_eur, 2 if _eur >= 1 else 4)
+        from_bd = False
         if price:
             pnl_eur = round((price - cfg["entry_price"]) * cfg["qty"] * fx, 2)
             chg     = round((price / cfg["entry_price"] - 1) * 100, 2)
         else:
-            pnl_eur, chg = None, None
+            # Cours introuvable chez yfinance (faillite, cotation suspendue :
+            # GVN, MCPHY) → on prend le dernier relevé de Bourse Direct, qui
+            # continue de valoriser la ligne. Mieux vaut le chiffre du courtier
+            # qu'un trou dans le tableau.
+            price   = cfg.get("bd_price")
+            pnl_eur = cfg.get("bd_pnl_eur")
+            cur     = cfg.get("bd_price_currency") or cur
+            from_bd = price is not None or pnl_eur is not None
+            chg = (round((pnl_eur / (entry_eur * cfg["qty"])) * 100, 2)
+                   if pnl_eur is not None and entry_eur else None)
         open_pos.append({
             "name":   name,
             "ticker": cfg["ticker"],
@@ -107,8 +117,13 @@ def build_data() -> dict:
             "price":  price,
             "chg":    chg,
             "pnl":    pnl_eur,
+            "from_bd": from_bd,
             "sl":     cfg.get("target_low"),
             "tp":     cfg.get("target_high"),
+            # Position hors gestion du bot (hold: true) : ses SL/TP ne sont
+            # jamais surveillés — les afficher comme des seuils actifs serait
+            # mensonger, d'où le ⛔.
+            "hold":   bool(cfg.get("hold")),
             "auto":   bool(cfg.get("autonomous")),
             "sym":    prices.currency_symbol(cur),
         })
@@ -180,6 +195,7 @@ input { flex: 1; min-width: 130px; }
 button.on { border-color: #3fd583; color: #3fd583; }
 .badge { font-size: .68em; padding: 2px 7px; border-radius: 6px;
   background: #1f3a5c; color: #8db8ec; vertical-align: middle; }
+.badge.hold { background: #2a2f3a; color: #8b96a5; }
 @media (max-width: 540px) {
   .chartbox { height: 235px; padding: 8px; }
   .card .v { font-size: 1.15em; }
@@ -325,22 +341,29 @@ def render_html() -> str:
     rows = []
     for p in d["open"]:
         sym = p["sym"]
-        if p["price"] is not None:
-            var = f'<td class="{cls(p["chg"])}">{p["chg"]:+.2f}%</td>'
-            pnl = f'<td class="{cls(p["pnl"])}">{p["pnl"]:+.0f}€</td>'
-            price = f"{p['price']}{sym}"
-        else:
-            var, pnl, price = "<td>—</td>", "<td>⛔</td>", "—"
+        # ᴮᴰ : chiffre relevé sur Bourse Direct au dernier sync (titre plus
+        # coté chez yfinance), pas un cours live.
+        src = '<span class="muted"> ᴮᴰ</span>' if p["from_bd"] else ""
+        var = (f'<td class="{cls(p["chg"])}">{p["chg"]:+.2f}%{src}</td>'
+               if p["chg"] is not None else "<td>—</td>")
+        pnl = (f'<td class="{cls(p["pnl"])}">{p["pnl"]:+.0f}€{src}</td>'
+               if p["pnl"] is not None else "<td>—</td>")
+        price = f"{p['price']}{sym}{src}" if p["price"] is not None else "—"
         tag = ' <span class="badge">auto</span>' if p["auto"] else ""
+        if p["hold"]:
+            tag = ' <span class="badge hold">hors bot</span>'
         # PRU en deux colonnes : devise de cotation (celle qui sert au suivi et
         # aux bornes SL/TP) et euros (ce qui a réellement quitté le compte).
         # ᴮᴰ signale un PRU euro repris tel quel de Bourse Direct.
         eur_tag = '<span class="muted"> ᴮᴰ</span>' if p["pru_bd"] else ""
+        # SL/TP d'une position hors gestion : ⛔ plutôt qu'un seuil que
+        # personne ne surveille.
+        sl_tp = ("<td>⛔</td><td>⛔</td>" if p["hold"] else
+                 f"<td>{p['sl']}{sym}</td><td>{p['tp']}{sym}</td>")
         rows.append(
             f"<tr><td>{p['name']}{tag}</td><td class='m-hide'>{p['qty']}</td>"
             f"<td>{p['entry']}{sym}</td><td>{p['entry_eur']}€{eur_tag}</td>"
-            f"<td>{price}</td>{var}{pnl}"
-            f"<td>{p['sl']}{sym}</td><td>{p['tp']}{sym}</td></tr>"
+            f"<td>{price}</td>{var}{pnl}{sl_tp}</tr>"
         )
 
     repl = {

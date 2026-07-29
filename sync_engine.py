@@ -128,6 +128,27 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     matched_local_keys = set()
     added_keys = []
     sold_keys = []
+    meta_changed = False   # valorisations BD : sauvegardées, mais jamais
+                           # annoncées comme « modification » (elles bougent
+                           # à chaque cotation, ce n'est pas un événement)
+
+    def _bd_snapshot(cfg: dict, pos: dict) -> bool:
+        """Mémorise cours/valorisation/±value tels que BD les affiche.
+        C'est la SEULE source chiffrée pour les titres que yfinance ne cote
+        plus (GVN, MCPHY : faillite, cotation suspendue) — sans elle leur P&L
+        reste un trou dans le dashboard. Retourne True si quelque chose a bougé."""
+        snap = {
+            "bd_price":          pos.get("price"),
+            "bd_price_currency": pos.get("price_currency"),
+            "bd_value_eur":      pos.get("value_eur"),
+            "bd_pnl_eur":        pos.get("pnl_eur"),
+        }
+        moved = False
+        for k, v in snap.items():
+            if v is not None and cfg.get(k) != v:
+                cfg[k] = v
+                moved = True
+        return moved
 
     for pos in bd["positions"]:
         bd_ticker = (pos.get("bd_ticker") or "").upper()
@@ -156,6 +177,8 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
         if local_key:
             matched_local_keys.add(local_key)
             loc = local[local_key]
+            if _bd_snapshot(data["positions"][local_key], pos):
+                meta_changed = True
             sub = []
             if loc["qty"] != bd_qty:
                 sub.append(f"qté {loc['qty']} → {bd_qty}")
@@ -242,6 +265,7 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                     # Référence brute BD : sert à ne reconvertir que si BD
                     # change son PRU (cf. mise à jour ci-dessus).
                     data["positions"][new_key]["bd_pru_raw"] = round(bd_pru, 5)
+                _bd_snapshot(data["positions"][new_key], pos)
                 if auto_rec:
                     data["positions"][new_key]["autonomous"] = True
                     # Consomme l'engagement "ordre en attente" (exécuté)
@@ -390,6 +414,8 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
         portfolio.save(data)
         lines.append("\npositions.json mis à jour.")
     else:
+        if meta_changed:
+            portfolio.save(data)     # valorisations BD seules : silencieux
         lines.append("\nAucune modification détectée.")
 
     # ── Investissements programmés ───────────────────────────────────────

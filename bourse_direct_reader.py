@@ -481,11 +481,39 @@ def _parse_position(text: str) -> dict | None:
                 qty = int(clean)
                 break
 
+    # ── Cours, valorisation et +/- value latente vus par BD ──────────────
+    # Seule source chiffrée pour les titres que yfinance ne cote plus (GVN,
+    # MCPHY : sociétés en faillite, cotation suspendue). Structure de la ligne :
+    #   [logo] nom | place › mnémo | COURS dev | var % | qté | PRU : x € |
+    #   perf % | VALORISATION € | +/- VALUE € | poids %
+    price = price_currency = value_eur = pnl_eur = None
+    pru_idx = next((i for i, p in enumerate(parts) if p.startswith("PRU")), None)
+    for i, p in enumerate(parts):
+        if pru_idx is not None and i >= pru_idx:
+            break
+        m = re.match(r'^([\d\s.,]+)\s*(EUR|USD|GBP|CHF|€|\$)$', p.strip())
+        if m:
+            price = _parse_float(m.group(1))
+            price_currency = _detect_currency(p)
+            break
+    if pru_idx is not None:
+        for p in parts[pru_idx + 1:]:
+            s = p.strip()
+            if not s.endswith("€"):
+                continue
+            if s[0] in "+-":
+                if pnl_eur is None:
+                    pnl_eur = _parse_float(s)      # +/- value latente
+            elif value_eur is None:
+                value_eur = _parse_float(s)        # valorisation
+
     # bd_ticker optionnel (valeurs suspendues) : nom + qty suffisent
     if not name or qty is None:
         return None
     return {"name": _clean_name(name), "bd_ticker": bd_ticker or "", "qty": qty,
-            "pru": pru, "mic": mic or "", "pru_currency": pru_currency}
+            "pru": pru, "mic": mic or "", "pru_currency": pru_currency,
+            "price": price, "price_currency": price_currency,
+            "value_eur": value_eur, "pnl_eur": pnl_eur}
 
 
 # ── Montants multi-devises ────────────────────────────────────────────────
