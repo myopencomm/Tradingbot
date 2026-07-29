@@ -83,8 +83,15 @@ def build_data() -> dict:
     for name, cfg in data.get("positions", {}).items():
         q     = prices.get_quote(cfg["ticker"])
         price = q.get("price")
-        cur   = q.get("currency") or "EUR"
+        # Titre suspendu / cours indisponible : yfinance ne renvoie pas de
+        # devise. Le suffixe de place tranche (pas de suffixe = valeur US).
+        cur   = q.get("currency") or ("EUR" if "." in cfg["ticker"] else "USD")
         fx    = prices.fx_to_eur(cur)
+        # PRU en euros : valeur BRUTE de Bourse Direct quand on l'a (c'est SA
+        # référence, frais inclus, sans erreur de conversion) ; sinon le PRU en
+        # devise de cotation ramené en euros au taux du jour.
+        _eur = cfg["entry_price"] * fx
+        entry_eur = cfg.get("bd_pru_raw") or round(_eur, 2 if _eur >= 1 else 4)
         if price:
             pnl_eur = round((price - cfg["entry_price"]) * cfg["qty"] * fx, 2)
             chg     = round((price / cfg["entry_price"] - 1) * 100, 2)
@@ -94,7 +101,9 @@ def build_data() -> dict:
             "name":   name,
             "ticker": cfg["ticker"],
             "qty":    cfg["qty"],
-            "entry":  cfg["entry_price"],
+            "entry":     cfg["entry_price"],
+            "entry_eur": entry_eur,
+            "pru_bd":    bool(cfg.get("bd_pru_raw")),
             "price":  price,
             "chg":    chg,
             "pnl":    pnl_eur,
@@ -214,7 +223,7 @@ button.on { border-color: #3fd583; color: #3fd583; }
 
 <h2>Positions ouvertes</h2>
 <div class="tablewrap">
-<table><thead><tr><th>Nom</th><th class="m-hide">Qté</th><th class="m-hide">PRU</th>
+<table><thead><tr><th>Nom</th><th class="m-hide">Qté</th><th>PRU</th><th>PRU €</th>
 <th>Cours</th><th>Var</th><th>P&L</th><th>SL</th><th>TP</th></tr></thead>
 <tbody>@OPEN_ROWS@</tbody></table>
 </div>
@@ -323,9 +332,14 @@ def render_html() -> str:
         else:
             var, pnl, price = "<td>—</td>", "<td>⛔</td>", "—"
         tag = ' <span class="badge">auto</span>' if p["auto"] else ""
+        # PRU en deux colonnes : devise de cotation (celle qui sert au suivi et
+        # aux bornes SL/TP) et euros (ce qui a réellement quitté le compte).
+        # ᴮᴰ signale un PRU euro repris tel quel de Bourse Direct.
+        eur_tag = '<span class="muted"> ᴮᴰ</span>' if p["pru_bd"] else ""
         rows.append(
             f"<tr><td>{p['name']}{tag}</td><td class='m-hide'>{p['qty']}</td>"
-            f"<td class='m-hide'>{p['entry']}{sym}</td><td>{price}</td>{var}{pnl}"
+            f"<td>{p['entry']}{sym}</td><td>{p['entry_eur']}€{eur_tag}</td>"
+            f"<td>{price}</td>{var}{pnl}"
             f"<td>{p['sl']}{sym}</td><td>{p['tp']}{sym}</td></tr>"
         )
 

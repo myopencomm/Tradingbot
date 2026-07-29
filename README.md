@@ -613,7 +613,7 @@ Un tableau de bord local est servi en permanence par le bot : **http://localhost
 - **Courbe du P&L cumulé** sur axe temporel réel — la taille de chaque point est proportionnelle au cash engagé sur le deal
 - **P&L par trade** : une barre par trade avec nom, date, cash engagé et résultat annoté
 - **Tableau des trades filtrable** (texte, WIN/LOSS) avec colonnes Investi et ROI
-- **Positions ouvertes** : cours live, variation, P&L latent, SL/TP, badge `auto` pour les positions du mode autonome
+- **Positions ouvertes** : **PRU en devise de cotation ET PRU en euros** (marqué `ᴮᴰ` quand la valeur euro vient telle quelle de Bourse Direct), cours live, variation, P&L latent, SL/TP, badge `auto` pour les positions du mode autonome. Les valeurs sans cours (titres suspendus : GVN, MCPHY) gardent leur ligne avec un ⛔ en P&L
 
 La page se régénère à chaque visite — les données sont toujours fraîches. Sur Telegram, `/dashboard` envoie la même vue en image avec le résumé chiffré.
 
@@ -667,6 +667,8 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
   - Le PRU n'est plus ignoré : il est **converti** dans la devise de cotation (`fx_to_eur`) puis écrit normalement. C'est la meilleure source de prix d'entrée (frais inclus)
   - **Pas de dérive du fx** : la valeur brute de BD est mémorisée (`bd_pru_raw`) et la conversion n'est refaite que si **BD** change son PRU (renfort, correction). Sans ce garde-fou, `entry_price` aurait bougé à chaque sync au rythme du taux de change, et le P&L avec lui
   - Si le taux est indisponible, `fx_to_eur` renvoie `1.0` en repli : la conversion est alors **refusée** (elle donnerait un PRU faux de ~14 % sur l'USD) et le sync le signale. Repli : prix d'exécution de l'ordre BD, puis prix de l'ordre autonome
+- **Pourquoi convertir plutôt que garder le PRU en euros** : tout le suivi compare `entry_price` au cours yfinance, qui est en **devise de cotation** (`stats`, `monitor`, trailing, breakeven, dashboard). Un PRU en euros face à un cours en dollars donnait, sur ILMN, **-39,30 % / -3 610 €** au lieu de **-46,7 % / -4 892 €** (chiffres BD) — 1 280 € d'erreur. La valeur euro n'est pas perdue pour autant : elle est conservée telle quelle dans `bd_pru_raw` et **affichée dans le dashboard**. La conversion inverse (euro → devise) reste faite au moment de poser un ordre SL/TP, où les bornes doivent être dans la devise du marché
+- **Dashboard : colonnes `PRU` et `PRU €`** côte à côte, la seconde marquée `ᴮᴰ` quand elle vient directement de Bourse Direct. Visibles aussi sur mobile (le tableau défile horizontalement)
 - **Messages de `/sync` éphémères** : « Synchronisation en cours » et les traces de lecture sont supprimés dès que le résultat s'affiche (`progress_fn`). Ils ne subsistent qu'en cas d'échec — c'est alors le seul message qui explique pourquoi
 - **Les lignes de position brutes ne partent plus dans Telegram** : la trace ajoutée pour ce diagnostic passait par `log()`, qui envoie AUSSI au chat — le résultat du sync était noyé sous les lignes brutes. Elle va désormais dans le fichier de log uniquement (`trace()`), comme celle des ordres
 
