@@ -48,3 +48,6 @@ macro_summary_cache.json
 # Suivi des coûts API (conso perso)
 api_costs.json
 dashboard-link.local.txt
+
+# Univers de marché découvert automatiquement (régénérable, volumineux)
+universe_cache.json
