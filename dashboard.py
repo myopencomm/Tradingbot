@@ -107,6 +107,16 @@ def build_data() -> dict:
             from_bd = price is not None or pnl_eur is not None
             chg = (round((pnl_eur / (entry_eur * cfg["qty"])) * 100, 2)
                    if pnl_eur is not None and entry_eur else None)
+        if pnl_eur is None and cfg.get("worthless"):
+            # Titre acté sans valeur (faillite, cotation suspendue définitive) :
+            # le PRU suffit à chiffrer la perte, aucun cours n'est nécessaire.
+            # Perte = tout le capital engagé. Marqué ≈ : c'est un calcul, pas
+            # un relevé (il ignore un éventuel résidu, 0.26 € sur GVN).
+            pnl_eur   = -round(entry_eur * cfg["qty"], 2)
+            chg       = -100.0
+            estimated = True
+        else:
+            estimated = False
         open_pos.append({
             "name":   name,
             "ticker": cfg["ticker"],
@@ -118,6 +128,7 @@ def build_data() -> dict:
             "chg":    chg,
             "pnl":    pnl_eur,
             "from_bd": from_bd,
+            "estimated": estimated,
             "sl":     cfg.get("target_low"),
             "tp":     cfg.get("target_high"),
             # Position hors gestion du bot (hold: true) : ses SL/TP ne sont
@@ -344,6 +355,8 @@ def render_html() -> str:
         # ᴮᴰ : chiffre relevé sur Bourse Direct au dernier sync (titre plus
         # coté chez yfinance), pas un cours live.
         src = '<span class="muted"> ᴮᴰ</span>' if p["from_bd"] else ""
+        if p["estimated"]:
+            src = '<span class="muted"> ≈</span>'
         var = (f'<td class="{cls(p["chg"])}">{p["chg"]:+.2f}%{src}</td>'
                if p["chg"] is not None else "<td>—</td>")
         pnl = (f'<td class="{cls(p["pnl"])}">{p["pnl"]:+.0f}€{src}</td>'

@@ -148,6 +148,21 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
             if v is not None and cfg.get(k) != v:
                 cfg[k] = v
                 moved = True
+
+        # Titre acté sans valeur : BD valorise la ligne à ~0 alors que le PRU
+        # dit ce qu'elle a coûté (GVN : 0.26 € pour 133 € investis). Le drapeau
+        # permet au dashboard de chiffrer la perte SANS aucun cours — donc dès
+        # maintenant, sans attendre un relevé. Réversible si la valeur revient.
+        val, pru, qty = pos.get("value_eur"), pos.get("pru"), pos.get("qty")
+        if (val is not None and pru and qty
+                and (pos.get("pru_currency") or "EUR") == "EUR"):
+            worthless = val < 0.01 * pru * qty
+            if bool(cfg.get("worthless")) != worthless:
+                if worthless:
+                    cfg["worthless"] = True
+                else:
+                    cfg.pop("worthless", None)
+                moved = True
         return moved
 
     for pos in bd["positions"]:
