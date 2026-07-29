@@ -329,9 +329,13 @@ def get_portfolio(page, send_fn=None) -> dict | None:
         positions = []
         try:
             for row in page.locator(".position-row").all():
-                parsed = _parse_position(row.inner_text(timeout=2000))
+                raw = row.inner_text(timeout=2000)
+                parsed = _parse_position(raw)
                 if parsed:
                     positions.append(parsed)
+                # Trace brute (comme pour les ordres) : indispensable pour
+                # diagnostiquer un format inattendu (valeurs US, devises).
+                log("[BD Reader position raw] " + " | ".join(raw.split("\n")))
         except Exception as e:
             log(f"Lecture positions échouée : {e}")
 
@@ -439,6 +443,7 @@ def _parse_position(text: str) -> dict | None:
         return None
 
     name = bd_ticker = qty = pru = mic = None
+    pru_currency = "EUR"
     for p in parts:
         if "›" in p:
             seg = p.split("›")
@@ -451,6 +456,10 @@ def _parse_position(text: str) -> dict | None:
             m = re.search(r'PRU\s*:\s*([\d\s.,]+)', p)
             if m:
                 pru = _parse_float(m.group(1))
+            # La devise du PRU décide s'il est comparable au cours yfinance :
+            # BD affiche le PRU des valeurs US converti en EUR sur cet onglet,
+            # alors que les ordres restent en $US.
+            pru_currency = _detect_currency(p)
 
     for p in parts:
         if "›" in p or p.startswith("PRU") or "€" in p or "%" in p:
@@ -470,7 +479,28 @@ def _parse_position(text: str) -> dict | None:
     if not name or qty is None:
         return None
     return {"name": name, "bd_ticker": bd_ticker or "", "qty": qty, "pru": pru,
-            "mic": mic or ""}
+            "mic": mic or "", "pru_currency": pru_currency}
+
+
+# ── Montants multi-devises ────────────────────────────────────────────────
+# BD n'écrit PAS les valeurs US en euros : "Seuil255.60 $US", "Lim. 268.65 $US",
+# cours "267.430 USD". Les regex ne cherchaient que "€" → sur JNJ (29/07/2026)
+# le sync affichait « ? : Achat Take Profit ⚠️ SL/TP non lus » alors que
+# l'ordre était bien présent sur BD.
+_CUR    = r'(?:€|\$\s?US\b|\$|USD|EUR|£|GBP|CHF)'
+_AMT    = r'([\d.,]+)\s*' + _CUR      # capturant
+_AMT_NC = r'[\d.,]+\s*' + _CUR        # non capturant
+
+
+def _detect_currency(flat: str) -> str:
+    """Devise d'un bloc BD, déduite des libellés ('$US', 'USD', '£'…)."""
+    if re.search(r'\$\s?US\b|\bUSD\b|\$', flat):
+        return "USD"
+    if re.search(r'£|\bGBP\b', flat):
+        return "GBP"
+    if re.search(r'\bCHF\b', flat):
+        return "CHF"
+    return "EUR"
 
 
 def _parse_order(text: str) -> dict | None:
@@ -496,12 +526,28 @@ def _parse_order(text: str) -> dict | None:
     if m_mic:
         order["mic"] = m_mic.group(1)
     # Nom = premier mot avant le premier séparateur/marché
-    m_name = re.match(r'^([A-Za-zÀ-ÿ0-9.\- ]+?)\s*[|›]', flat)
+    # La classe de caractères DOIT accepter & ( ) ' / : sans ça
+    # "Johnson & Johnson(XNYS) | XNYS › JNJ" ne matchait pas et l'ordre
+    # s'affichait « ? » (constaté le 29/07/2026 sur JNJ).
+    m_name = re.match(r"^([A-Za-zÀ-ÿ0-9.\-&()'’/ ]+?)\s*[|›]", flat)
     if m_name:
         nm = m_name.group(1).strip()
-        # Retire un MIC accolé en fin de nom ("Unilever PLC XAMS" → "Unilever PLC")
-        nm = re.sub(r'\s+X[A-Z]{3}$', '', nm).strip()
+        # Retire un MIC accolé en fin de nom ("Unilever PLC XAMS" → "Unilever PLC",
+        # "Johnson & Johnson(XNYS)" → "Johnson & Johnson")
+        # Boucle : le nom peut porter les DEUX formes à la fois
+        # ("Johnson & Johnson(XNYS) XNYS" quand le séparateur suivant est '›').
+        for _ in range(3):
+            new = re.sub(r'\s*\(X[A-Z]{3}\)$', '', nm).strip()
+            new = re.sub(r'\s+X[A-Z]{3}$', '', new).strip()
+            if new == nm:
+                break
+            nm = new
         order["name"] = nm
+
+    # Devise de l'ordre : BD libelle les valeurs US en "$US" ("Seuil255.60 $US")
+    # et affiche le cours en "267.430 USD". Sans ça tous les montants étaient
+    # lus comme des euros — ou pas lus du tout.
+    order["currency"] = _detect_currency(flat)
 
     # Sens — dans un bloc consolidé plusieurs ordres coexistent (ex: Achat exécuté
     # + Vente en cours). On prend le DERNIER match = l'ordre actif le plus récent.
@@ -522,18 +568,18 @@ def _parse_order(text: str) -> dict | None:
 
     # Seuil (SL) — on cherche d'abord "Seuil X € En cours" (partie active),
     # pas "Seuil X € Annulé" (partie annulée d'un ancien ordre dans le même bloc).
-    m_seuil = (re.search(r'Seuil\s*([\d.,]+)\s*€\s*En cours', flat)
-               or re.search(r'Stop\s+([\d.,]+)\s*€\s*En cours', flat)
-               or re.search(r'Seuil\s*([\d.,]+)\s*€', flat)
-               or re.search(r'Stop\s+([\d.,]+)\s*€', flat))
+    m_seuil = (re.search(rf'Seuil\s*{_AMT}\s*En cours', flat)
+               or re.search(rf'Stop\s+{_AMT}\s*En cours', flat)
+               or re.search(rf'Seuil\s*{_AMT}', flat)
+               or re.search(rf'Stop\s+{_AMT}', flat))
     if m_seuil:
         order["seuil"] = _parse_float(m_seuil.group(1))
 
     # Profit (TP) — idem : priorité à "Profit X € En cours"
-    m_profit = (re.search(r'Profit\s*([\d.,]+)\s*€\s*En cours', flat)
-                or re.search(r'Limite\s+([\d.,]+)\s*€\s*En cours', flat)
-                or re.search(r'Profit\s*([\d.,]+)\s*€', flat)
-                or re.search(r'Limite\s+([\d.,]+)\s*€', flat))
+    m_profit = (re.search(rf'Profit\s*{_AMT}\s*En cours', flat)
+                or re.search(rf'Limite\s+{_AMT}\s*En cours', flat)
+                or re.search(rf'Profit\s*{_AMT}', flat)
+                or re.search(rf'Limite\s+{_AMT}', flat))
     if m_profit:
         order["profit"] = _parse_float(m_profit.group(1))
 
@@ -549,10 +595,10 @@ def _parse_order(text: str) -> dict | None:
     #   ordre simple rempli : "Ordre exécuté 18/18 Lim. 53.06 € 53.05 €"
     # Le prix après "Exé." est le prix RÉEL (peut différer du seuil posé, ex:
     # gap d'ouverture au-dessus du TP).
-    m_ex = (re.search(r'Profit\s*Exé\.?\s*([\d.,]+)\s*€', flat)
-            or re.search(r'Seuil\s*Exé\.?\s*([\d.,]+)\s*€', flat)
-            or re.search(r'Lim(?:ite)?\.?\s*Exé\.?\s*([\d.,]+)\s*€', flat)
-            or re.search(r'Ordre exécuté\s*\d+\s*/\s*\d+\s*Lim\.\s*[\d.,]+\s*€\s*([\d.,]+)\s*€', flat))
+    m_ex = (re.search(rf'Profit\s*Exé\.?\s*{_AMT}', flat)
+            or re.search(rf'Seuil\s*Exé\.?\s*{_AMT}', flat)
+            or re.search(rf'Lim(?:ite)?\.?\s*Exé\.?\s*{_AMT}', flat)
+            or re.search(rf'Ordre exécuté\s*\d+\s*/\s*\d+\s*Lim\.\s*{_AMT_NC}\s*{_AMT}', flat))
     if m_ex:
         order["exec_price"] = _parse_float(m_ex.group(1))
 
@@ -579,7 +625,10 @@ def _parse_float(s: str) -> float | None:
     if not s:
         return None
     try:
-        clean = re.sub(r'[€$£\s\xa0]', '', str(s))
+        # On retire TOUT sauf chiffres/séparateurs : symboles (€ $ £), codes
+        # devise ("$US", "USD", "EUR"), espaces fines et insécables. Sans ça
+        # "255.60 $US" (format BD des valeurs US) renvoyait None.
+        clean = re.sub(r'[^\d.,\-]', '', str(s))
         if ',' in clean and '.' in clean:
             clean = clean.replace(',', '')      # virgule = séparateur milliers
         elif ',' in clean:

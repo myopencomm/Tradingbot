@@ -13,6 +13,18 @@ MIC_SUFFIX = {
 }
 
 
+# Devise de cotation par place. Sert à détecter le piège du PRU : sur l'onglant
+# « Mes positions » BD convertit le PRU des valeurs US en EUR, alors que le bot
+# stocke entry_price/SL/TP dans la devise de cotation (stats.py convertit
+# ensuite via fx_to_eur). Écraser entry_price avec le PRU en EUR d'une position
+# en USD fausse le P&L latent et le suivi SL/TP.
+MIC_CURRENCY = {
+    "XPAR": "EUR", "XAMS": "EUR", "XBRU": "EUR", "XETR": "EUR",
+    "XNAS": "USD", "XNYS": "USD", "XNGS": "USD", "XNMS": "USD", "ARCX": "USD",
+    "XLON": "GBP",
+}
+
+
 def _yf_ticker(bd_ticker: str, mic: str) -> str:
     """Reconstruit le ticker yfinance depuis le mnémo BD + la place (MIC)."""
     bd_ticker = (bd_ticker or "").upper()
@@ -79,7 +91,8 @@ def sync(page, send_fn, silent: bool = False) -> bool:
     for o in bd.get("orders", []):
         if o.get("statut") != "En cours":
             continue
-        prot = {"seuil": o.get("seuil"), "profit": o.get("profit"), "mic": o.get("mic", "")}
+        prot = {"seuil": o.get("seuil"), "profit": o.get("profit"), "mic": o.get("mic", ""),
+                "currency": o.get("currency") or "EUR", "exec_price": o.get("exec_price")}
         if o.get("bd_ticker"):
             order_protect[o["bd_ticker"].upper()] = prot
         if o.get("name"):
@@ -95,7 +108,20 @@ def sync(page, send_fn, silent: bool = False) -> bool:
         bd_qty    = pos["qty"]
         bd_pru    = pos["pru"]
 
+        # Devise réelle du titre (place de cotation) vs devise du PRU affiché
+        # par BD. Si elles diffèrent, le PRU n'est PAS comparable au cours ni
+        # aux SL/TP de l'ordre : on refuse de l'écrire.
         local_key = _match_local(bd_ticker, bd_name)
+
+        prot_pre  = order_protect.get(bd_ticker) or order_protect.get(bd_name) or {}
+        pos_mic   = (prot_pre.get("mic") or pos.get("mic") or "").upper()
+        pos_cur   = prot_pre.get("currency") or MIC_CURRENCY.get(pos_mic)
+        if not pos_cur and local_key:
+            # Repli : un ticker local sans suffixe de place est une valeur US.
+            pos_cur = "USD" if "." not in local[local_key]["ticker"] else "EUR"
+        pos_cur   = pos_cur or "EUR"
+        pru_cur   = (pos.get("pru_currency") or "EUR").upper()
+        pru_usable = (pru_cur == pos_cur)
 
         if local_key:
             matched_local_keys.add(local_key)
@@ -105,7 +131,17 @@ def sync(page, send_fn, silent: bool = False) -> bool:
                 sub.append(f"qté {loc['qty']} → {bd_qty}")
                 data["positions"][local_key]["qty"] = bd_qty
                 changed = True
-            if bd_pru and abs((bd_pru - loc["entry_price"]) / max(loc["entry_price"], 0.001)) > 0.001:
+            if bd_pru and not pru_usable:
+                # Ex. JNJ : BD affiche PRU 238.65 € pour une position cotée en
+                # USD (PRU réel ~267.84 $). L'écrire donnerait un P&L faux.
+                # Silencieux sur les positions HOLD (hors gestion bot) : sinon
+                # la note reviendrait à chaque sync sans rien apporter.
+                if not loc.get("hold"):
+                    lines.append(
+                        f"    ⓘ PRU BD ignoré pour {local_key} : affiché en {pru_cur} "
+                        f"alors que le titre cote en {pos_cur}."
+                    )
+            elif bd_pru and abs((bd_pru - loc["entry_price"]) / max(loc["entry_price"], 0.001)) > 0.001:
                 sub.append(f"PRU {loc['entry_price']} → {bd_pru}")
                 data["positions"][local_key]["entry_price"] = round(bd_pru, 5)
                 changed = True
@@ -127,13 +163,29 @@ def sync(page, send_fn, silent: bool = False) -> bool:
                         or data.get("auto_pending_orders", {}).get(bd_ticker))
             sl = prot.get("seuil") or (auto_rec or {}).get("sl")
             tp = prot.get("profit") or (auto_rec or {}).get("tp")
-            # Sans SL/TP connus (aucun ordre Expert actif) : valeurs par défaut -7%/+10%
-            if not sl and bd_pru:
-                sl = round(bd_pru * 0.93, 4)
-            if not tp and bd_pru:
-                tp = round(bd_pru * 1.10, 4)
 
-            if not yf_t or bd_qty is None or not bd_pru:
+            # Prix d'entrée DANS LA DEVISE DE COTATION. Le PRU BD ne convient
+            # que s'il est affiché dans cette devise (faux pour les valeurs US,
+            # converties en EUR par BD) : on prend alors le prix d'exécution de
+            # l'ordre BD, puis le prix de l'ordre autonome, sinon on convertit.
+            entry = bd_pru if pru_usable else (
+                prot.get("exec_price") or (auto_rec or {}).get("entry"))
+            entry_src = ""
+            if entry is None and bd_pru:
+                import prices
+                fx = prices.fx_to_eur(pos_cur) or 1.0
+                entry = round(bd_pru / fx, 4) if fx else bd_pru
+                entry_src = f" (PRU {bd_pru} {pru_cur} converti en {pos_cur})"
+            elif not pru_usable and entry:
+                entry_src = f" (prix d'exécution BD en {pos_cur} — PRU affiché en {pru_cur})"
+
+            # Sans SL/TP connus (aucun ordre Expert actif) : valeurs par défaut -7%/+10%
+            if not sl and entry:
+                sl = round(entry * 0.93, 4)
+            if not tp and entry:
+                tp = round(entry * 1.10, 4)
+
+            if not yf_t or bd_qty is None or not entry:
                 # Données insuffisantes → on garde le fallback manuel
                 lines.append(
                     f"⚠️ {pos['name']} ({bd_ticker}) sur BD : {bd_qty}t @ {bd_pru}€\n"
@@ -144,7 +196,7 @@ def sync(page, send_fn, silent: bool = False) -> bool:
                 data.setdefault("positions", {})[new_key] = {
                     "ticker":      yf_t,
                     "qty":         bd_qty,
-                    "entry_price": round(bd_pru, 5),
+                    "entry_price": round(entry, 5),
                     "target_high": round(tp, 4),
                     "target_low":  round(sl, 4),
                     "bd_name":     pos["name"],
@@ -161,9 +213,11 @@ def sync(page, send_fn, silent: bool = False) -> bool:
                 src = "SL/TP lus sur l'ordre BD" if prot.get("seuil") or prot.get("profit") else \
                       ("SL/TP de l'ordre autonome" if auto_rec else "SL/TP par défaut -7%/+10%")
                 tag = "🤖 " if auto_rec else ""
+                import prices
+                psym = prices.currency_symbol(pos_cur)
                 lines.append(
-                    f"➕ {tag}{new_key} ({yf_t}) AJOUTÉ auto : {bd_qty}t @ {bd_pru}€ | "
-                    f"SL {sl}€ TP {tp}€ ({src})"
+                    f"➕ {tag}{new_key} ({yf_t}) AJOUTÉ auto : {bd_qty}t @ {entry}{psym}{entry_src} | "
+                    f"SL {sl}{psym} TP {tp}{psym} ({src})"
                 )
 
     # ── Positions locales absentes de BD → vendues : clôture AUTOMATIQUE ──
@@ -252,11 +306,14 @@ def sync(page, send_fn, silent: bool = False) -> bool:
             o_ticker = (o.get("bd_ticker") or "").upper()
             o_name   = (o.get("name") or "").upper()
 
+            import prices
+            csym = prices.currency_symbol(o.get("currency") or "EUR")
+
             detail = []
             if seuil:
-                detail.append(f"SL {seuil}€")
+                detail.append(f"SL {seuil}{csym}")
             if profit:
-                detail.append(f"TP {profit}€")
+                detail.append(f"TP {profit}{csym}")
             if not detail:
                 detail.append("⚠️ SL/TP non lus — voir logs")
             lines.append(f"  {o.get('name','?')} : {sens} {typ} {' | '.join(detail)} ({statut})")

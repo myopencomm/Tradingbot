@@ -658,6 +658,14 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-29 — Ordres et PRU des valeurs US : lecture BD corrigée
+- **Un ordre US était illisible** : `/sync` affichait `? : Achat Take Profit ⚠️ SL/TP non lus` alors que l'ordre JNJ était bien présent sur BD. Deux causes, toutes deux dans `bourse_direct_reader.py` :
+  - **les montants US ne sont pas libellés en euros** — BD écrit `Seuil255.60 $US`, `Lim. 268.65 $US`, cours `267.430 USD`. Les regex n'acceptaient que `€` → seuil, profit **et prix d'exécution** revenaient vides. Les montants sont désormais reconnus dans toutes les devises BD (`€`, `$US`, `USD`, `£`, `CHF`) et l'ordre porte sa devise (`currency`), affichée dans le message de sync (`SL 255.6$`)
+  - **le nom tombait sur `?`** — la classe de caractères du nom n'acceptait ni `&` ni parenthèses : `Johnson & Johnson(XNYS)` ne matchait pas. Corrigée, avec suppression du code marché accolé (`(XNYS)`, ` XNYS`)
+- **Conséquence silencieuse la plus grave : le prix d'exécution non lu** — c'est lui qui donne le prix de sortie réel lors d'une clôture automatique. Une vente US déclenchée serait tombée sur un fallback de prix
+- **PRU : BD convertit en euros ce que le bot stocke en devise de cotation.** L'onglet « Mes positions » affichait `238,65 €` pour JNJ, écrit tel quel dans `positions.json` à côté d'un SL/TP en dollars (255,60 / 294,42) — P&L latent et suivi SL/TP faux. Le sync compare désormais la devise du PRU à celle de la place (`MIC_CURRENCY`) : PRU non comparable → **jamais écrit**, et à la création le prix d'entrée vient du **prix d'exécution de l'ordre BD** (en devise de cotation), sinon de l'ordre autonome, sinon converti via `fx_to_eur`
+- Les lignes de position brutes sont désormais tracées dans les logs (`[BD Reader position raw]`), comme les ordres — sans elles ce diagnostic aurait été impossible
+
 ### 2026-07-29 — Univers découvert automatiquement : 36 → ~550 valeurs US
 - **`market_universe.py`** : l'univers US n'est plus écrit à la main. Source officielle **Nasdaq Trader** (fichiers publiés quotidiennement, libres, sans clé) → 5 149 actions ordinaires → filtre de liquidité → indicateurs calculés **par lot**. Pipeline complet mesuré : **3,8 min** pour 2 558 valeurs
 - **`compute_indicators_bulk()`** produit exactement les mêmes indicateurs que `get_technicals` (contrôle d'équivalence : 0 écart sur AIR.PA, GLE.PA, UNA.AS, OR.PA, ASML.AS). Indispensable : en unitaire, un an d'historique par ticker fait rate-limiter yfinance dès quelques centaines d'appels
