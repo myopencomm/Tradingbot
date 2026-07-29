@@ -1718,10 +1718,29 @@ def cmd_sync(args, cid):
         return
     import sync_engine
 
+    # Messages d'étape ÉPHÉMÈRES : « Synchronisation en cours » et les traces
+    # de lecture n'ont aucune valeur une fois le résultat affiché — ils
+    # encombraient la conversation à chaque /sync. Ils sont supprimés dès que
+    # le résultat part. En cas d'échec (aucun résultat envoyé), ils RESTENT :
+    # c'est alors le seul message qui explique pourquoi.
+    step_ids = []
+
+    def send_step(m):
+        mid = send_editable(m, cid)
+        if mid:
+            step_ids.append(mid)
+        else:
+            send(m, cid)
+
+    def send_result(m):
+        while step_ids:
+            delete_message(step_ids.pop(), cid)
+        send(m, cid)
+
     def _do_sync():
         try:
             playwright_session.run(
-                lambda page: sync_engine.sync(page, lambda m: send(m, cid)),
+                lambda page: sync_engine.sync(page, send_result, progress_fn=send_step),
                 timeout=90,
             )
         except Exception as e:

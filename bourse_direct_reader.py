@@ -298,6 +298,12 @@ def get_portfolio(page, send_fn=None) -> dict | None:
         if send_fn:
             send_fn(msg)
 
+    def trace(msg):
+        """Trace de diagnostic : fichier de log UNIQUEMENT.
+        Le contenu brut des lignes BD n'a aucun intérêt dans Telegram — il y
+        noyait le résultat du sync (constaté le 29/07/2026)."""
+        print(f"[BD Reader] {msg}")
+
     try:
         page.goto(BD_PORTFOLIO_URL, wait_until="domcontentloaded", timeout=20000)
         time.sleep(3)
@@ -335,7 +341,7 @@ def get_portfolio(page, send_fn=None) -> dict | None:
                     positions.append(parsed)
                 # Trace brute (comme pour les ordres) : indispensable pour
                 # diagnostiquer un format inattendu (valeurs US, devises).
-                log("[BD Reader position raw] " + " | ".join(raw.split("\n")))
+                trace("[position raw] " + " | ".join(raw.split("\n")))
         except Exception as e:
             log(f"Lecture positions échouée : {e}")
 
@@ -478,8 +484,8 @@ def _parse_position(text: str) -> dict | None:
     # bd_ticker optionnel (valeurs suspendues) : nom + qty suffisent
     if not name or qty is None:
         return None
-    return {"name": name, "bd_ticker": bd_ticker or "", "qty": qty, "pru": pru,
-            "mic": mic or "", "pru_currency": pru_currency}
+    return {"name": _clean_name(name), "bd_ticker": bd_ticker or "", "qty": qty,
+            "pru": pru, "mic": mic or "", "pru_currency": pru_currency}
 
 
 # ── Montants multi-devises ────────────────────────────────────────────────
@@ -490,6 +496,23 @@ def _parse_position(text: str) -> dict | None:
 _CUR    = r'(?:€|\$\s?US\b|\$|USD|EUR|£|GBP|CHF)'
 _AMT    = r'([\d.,]+)\s*' + _CUR      # capturant
 _AMT_NC = r'[\d.,]+\s*' + _CUR        # non capturant
+
+
+def _clean_name(raw: str) -> str:
+    """
+    Nom de valeur débarrassé du code marché accolé par BD :
+    "Unilever PLC XAMS" → "Unilever PLC", "ILLUMINA INC(XNGS)" → "ILLUMINA INC".
+    Boucle car le nom peut porter les DEUX formes à la fois
+    ("Johnson & Johnson(XNYS) XNYS" quand le séparateur suivant est '›').
+    """
+    nm = (raw or "").strip()
+    for _ in range(3):
+        new = re.sub(r'\s*\(X[A-Z]{3}\)$', '', nm).strip()
+        new = re.sub(r'\s+X[A-Z]{3}$', '', new).strip()
+        if new == nm:
+            break
+        nm = new
+    return nm
 
 
 def _detect_currency(flat: str) -> str:
@@ -531,18 +554,7 @@ def _parse_order(text: str) -> dict | None:
     # s'affichait « ? » (constaté le 29/07/2026 sur JNJ).
     m_name = re.match(r"^([A-Za-zÀ-ÿ0-9.\-&()'’/ ]+?)\s*[|›]", flat)
     if m_name:
-        nm = m_name.group(1).strip()
-        # Retire un MIC accolé en fin de nom ("Unilever PLC XAMS" → "Unilever PLC",
-        # "Johnson & Johnson(XNYS)" → "Johnson & Johnson")
-        # Boucle : le nom peut porter les DEUX formes à la fois
-        # ("Johnson & Johnson(XNYS) XNYS" quand le séparateur suivant est '›').
-        for _ in range(3):
-            new = re.sub(r'\s*\(X[A-Z]{3}\)$', '', nm).strip()
-            new = re.sub(r'\s+X[A-Z]{3}$', '', new).strip()
-            if new == nm:
-                break
-            nm = new
-        order["name"] = nm
+        order["name"] = _clean_name(m_name.group(1))
 
     # Devise de l'ordre : BD libelle les valeurs US en "$US" ("Seuil255.60 $US")
     # et affiche le cours en "267.430 USD". Sans ça tous les montants étaient

@@ -25,6 +25,29 @@ MIC_CURRENCY = {
 }
 
 
+def _pru_in_quote_currency(bd_pru, pru_cur: str, pos_cur: str):
+    """
+    PRU BD ramené dans la devise de cotation du titre.
+    Retourne (valeur, note) ; (None, raison) si la conversion est impossible —
+    dans ce cas seulement on renonce à écrire le PRU.
+
+    BD affiche le PRU des valeurs US converti en EUR : le convertir dans l'autre
+    sens (fx du jour) est la seule façon de le comparer au cours, au SL et au TP,
+    tous en devise de cotation.
+    """
+    if not bd_pru:
+        return None, ""
+    if pru_cur == pos_cur:
+        return bd_pru, ""
+    import prices
+    fx = prices.fx_to_eur(pos_cur)      # 1 unité devise → EUR
+    if not fx or (fx == 1.0 and pos_cur != "EUR"):
+        # fx_to_eur renvoie 1.0 en repli quand le taux est indisponible :
+        # l'appliquer donnerait un PRU faux de ~14 % sur l'USD.
+        return None, f"taux {pos_cur}→EUR indisponible"
+    return round(bd_pru / fx, 4), f"PRU BD {bd_pru} {pru_cur} converti au taux {round(fx, 4)}"
+
+
 def _yf_ticker(bd_ticker: str, mic: str) -> str:
     """Reconstruit le ticker yfinance depuis le mnémo BD + la place (MIC)."""
     bd_ticker = (bd_ticker or "").upper()
@@ -32,18 +55,22 @@ def _yf_ticker(bd_ticker: str, mic: str) -> str:
     return f"{bd_ticker}{suffix}" if bd_ticker else ""
 
 
-def sync(page, send_fn, silent: bool = False) -> bool:
+def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     """
     Lit le portefeuille depuis BD et met à jour positions.json.
     `page` fourni par playwright_session.run() (thread worker).
     silent=True (check horaire auto) : aucun message sauf si une vente ou un
     achat exécuté est détecté.
+    `progress_fn` (optionnel) reçoit les messages d'ÉTAPE — « Synchronisation
+    en cours », erreurs de lecture — que l'appelant peut rendre éphémères. Le
+    RÉSULTAT part toujours par `send_fn`. Sans progress_fn : tout par send_fn.
     Retourne True si sync réussie.
     """
+    prog = progress_fn or send_fn
     if not silent:
-        send_fn("Synchronisation avec Bourse Direct...")
+        prog("Synchronisation avec Bourse Direct...")
 
-    bd = reader.get_portfolio(page, send_fn=None if silent else send_fn)
+    bd = reader.get_portfolio(page, send_fn=None if silent else prog)
     if not bd:
         return False
 
@@ -109,8 +136,11 @@ def sync(page, send_fn, silent: bool = False) -> bool:
         bd_pru    = pos["pru"]
 
         # Devise réelle du titre (place de cotation) vs devise du PRU affiché
-        # par BD. Si elles diffèrent, le PRU n'est PAS comparable au cours ni
-        # aux SL/TP de l'ordre : on refuse de l'écrire.
+        # par BD, qui convertit en EUR le PRU des valeurs US (relevé : ILMN
+        # coté 192.52 USD, PRU affiché 317.1087 € — et le -46.74 % de BD ne
+        # tombe juste QUE si les deux termes sont en EUR). Le bot, lui, stocke
+        # entry_price dans la devise de cotation : on CONVERTIT le PRU, on ne
+        # le jette pas.
         local_key = _match_local(bd_ticker, bd_name)
 
         prot_pre  = order_protect.get(bd_ticker) or order_protect.get(bd_name) or {}
@@ -121,7 +151,7 @@ def sync(page, send_fn, silent: bool = False) -> bool:
             pos_cur = "USD" if "." not in local[local_key]["ticker"] else "EUR"
         pos_cur   = pos_cur or "EUR"
         pru_cur   = (pos.get("pru_currency") or "EUR").upper()
-        pru_usable = (pru_cur == pos_cur)
+        pru_native, pru_conv_note = _pru_in_quote_currency(bd_pru, pru_cur, pos_cur)
 
         if local_key:
             matched_local_keys.add(local_key)
@@ -131,20 +161,31 @@ def sync(page, send_fn, silent: bool = False) -> bool:
                 sub.append(f"qté {loc['qty']} → {bd_qty}")
                 data["positions"][local_key]["qty"] = bd_qty
                 changed = True
-            if bd_pru and not pru_usable:
-                # Ex. JNJ : BD affiche PRU 238.65 € pour une position cotée en
-                # USD (PRU réel ~267.84 $). L'écrire donnerait un P&L faux.
-                # Silencieux sur les positions HOLD (hors gestion bot) : sinon
-                # la note reviendrait à chaque sync sans rien apporter.
-                if not loc.get("hold"):
-                    lines.append(
-                        f"    ⓘ PRU BD ignoré pour {local_key} : affiché en {pru_cur} "
-                        f"alors que le titre cote en {pos_cur}."
-                    )
-            elif bd_pru and abs((bd_pru - loc["entry_price"]) / max(loc["entry_price"], 0.001)) > 0.001:
-                sub.append(f"PRU {loc['entry_price']} → {bd_pru}")
-                data["positions"][local_key]["entry_price"] = round(bd_pru, 5)
-                changed = True
+            if pru_native:
+                same_cur = (pru_cur == pos_cur)
+                # PRU converti : le taux bouge tous les jours alors que le PRU
+                # BD, lui, ne bouge qu'en cas de renfort ou de correction. On
+                # mémorise donc la valeur BRUTE de BD et on ne reconvertit que
+                # si ELLE a changé — sinon entry_price dériverait au rythme du
+                # fx, et avec lui le P&L et les distances au SL/TP.
+                raw_ref   = round(bd_pru, 5)
+                prev_ref  = loc.get("bd_pru_raw")
+                ref_moved = (prev_ref is None
+                             or abs(raw_ref - prev_ref) > 0.001 * max(prev_ref, 0.001))
+                gap = abs((pru_native - loc["entry_price"]) / max(loc["entry_price"], 0.001))
+                if gap > 0.001 and (same_cur or ref_moved):
+                    note = f" ({pru_conv_note})" if pru_conv_note else ""
+                    sub.append(f"PRU {loc['entry_price']} → {pru_native}{note}")
+                    data["positions"][local_key]["entry_price"] = round(pru_native, 5)
+                    changed = True
+                if not same_cur and prev_ref != raw_ref:
+                    data["positions"][local_key]["bd_pru_raw"] = raw_ref
+                    changed = True
+            elif bd_pru and not loc.get("hold"):
+                lines.append(
+                    f"    ⚠️ PRU BD non repris pour {local_key} ({bd_pru} {pru_cur} "
+                    f"vs cotation en {pos_cur}) : {pru_conv_note}."
+                )
             if sub:
                 lines.append(f"{local_key} mis à jour : {', '.join(sub)}")
             else:
@@ -164,20 +205,16 @@ def sync(page, send_fn, silent: bool = False) -> bool:
             sl = prot.get("seuil") or (auto_rec or {}).get("sl")
             tp = prot.get("profit") or (auto_rec or {}).get("tp")
 
-            # Prix d'entrée DANS LA DEVISE DE COTATION. Le PRU BD ne convient
-            # que s'il est affiché dans cette devise (faux pour les valeurs US,
-            # converties en EUR par BD) : on prend alors le prix d'exécution de
-            # l'ordre BD, puis le prix de l'ordre autonome, sinon on convertit.
-            entry = bd_pru if pru_usable else (
-                prot.get("exec_price") or (auto_rec or {}).get("entry"))
+            # Prix d'entrée DANS LA DEVISE DE COTATION. Le PRU BD est la
+            # meilleure source (frais inclus), converti si BD l'affiche en EUR
+            # pour une valeur US. Repli si la conversion échoue : prix
+            # d'exécution de l'ordre BD, puis prix de l'ordre autonome.
+            entry = pru_native or prot.get("exec_price") or (auto_rec or {}).get("entry")
             entry_src = ""
-            if entry is None and bd_pru:
-                import prices
-                fx = prices.fx_to_eur(pos_cur) or 1.0
-                entry = round(bd_pru / fx, 4) if fx else bd_pru
-                entry_src = f" (PRU {bd_pru} {pru_cur} converti en {pos_cur})"
-            elif not pru_usable and entry:
-                entry_src = f" (prix d'exécution BD en {pos_cur} — PRU affiché en {pru_cur})"
+            if pru_native and pru_conv_note:
+                entry_src = f" ({pru_conv_note})"
+            elif not pru_native and entry:
+                entry_src = f" (prix d'exécution BD — {pru_conv_note or 'PRU BD inutilisable'})"
 
             # Sans SL/TP connus (aucun ordre Expert actif) : valeurs par défaut -7%/+10%
             if not sl and entry:
@@ -201,6 +238,10 @@ def sync(page, send_fn, silent: bool = False) -> bool:
                     "target_low":  round(sl, 4),
                     "bd_name":     pos["name"],
                 }
+                if pru_native and pru_cur != pos_cur:
+                    # Référence brute BD : sert à ne reconvertir que si BD
+                    # change son PRU (cf. mise à jour ci-dessus).
+                    data["positions"][new_key]["bd_pru_raw"] = round(bd_pru, 5)
                 if auto_rec:
                     data["positions"][new_key]["autonomous"] = True
                     # Consomme l'engagement "ordre en attente" (exécuté)
