@@ -512,7 +512,7 @@ Le mode Autonome permet au bot de gérer un **budget isolé** en totale indépen
 
 ### Ce que le bot fait seul
 
-1. **Recherche** — À chaque check planifié (9h, 12h, 15h, 17h), il filtre ~100 actions selon la stratégie validée par la recherche (momentum 12 mois hors dernier mois, cours > MM200, zone d'entrée RSI 35-65), puis valide les meilleurs candidats avec l'IA (contrôle qualitatif : news, OPA, événements binaires)
+1. **Recherche** — À chaque check planifié (9h, 12h, 15h, 17h), il filtre ~150 actions selon la stratégie validée par la recherche (momentum 12 mois hors dernier mois, cours > MM200, zone d'entrée RSI 35-65), puis valide les meilleurs candidats avec l'IA (contrôle qualitatif : news, OPA, événements binaires)
 2. **Entrée** — Place un ordre Expert achat (entrée + SL + TP) sur Bourse Direct — le SL et le TP sont garantis côté BD
 3. **Trailing stop** — Quand la position atteint **+6%** du PRU (`AUTO_BREAKEVEN_PCT`), relève le SL au PRU (P&L ≥ 0 garanti)
 4. **Sortie** — Les ordres Expert sur BD gèrent les sorties automatiquement (SL ou TP atteint). Le bot détecte la sortie et vous notifie
@@ -657,6 +657,14 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-29 — Univers de scan élargi : 115 → 149 valeurs Euronext
+- **+34 valeurs** (Paris, Amsterdam, Bruxelles). L'univers était incomplet **même sur le CAC 40** : `OR.PA` (L'Oréal, un des premiers poids de l'indice), `AKE.PA`, `BVI.PA`, `SW.PA`, `VIV.PA`, `URW.PA`, `FGR.PA` en étaient absents
+- **Chaque ajout validé sur données réelles**, pas ajouté de mémoire : technicals yfinance exploitables (RSI, momentum 12-1, MM200) **et** liquidité médiane ≥ **2 M€ échangés/jour** sur 3 mois. 23 candidats ont été écartés pour illiquidité (de 0,01 à 1,97 M€/jour) — avec ~4 € de frais aller-retour et un seuil de rentabilité à 5×, une valeur au spread large coûte plus cher que les frais eux-mêmes
+- Effet mesuré immédiatement : le filtre quantitatif passe de **7 à 12 candidats** (régime NEUTRAL), dont 3 nouveaux dans le top 8 envoyé à l'IA (`KBC.BR`, `AGS.BR`, `GNFT.PA`). Durée du screen inchangée (~5 s, 10 threads)
+- Les garde-fous restent souverains : `GNFT.PA` (+195 % sur 12 mois) et `SOI.PA` arrivent haut au score mais sont **vetoés sur l'ATR** (5,6 % et 10,5 % → SL requis au-delà du plafond `MAX_SL_PCT`). Le momentum les remonte, le risque les écarte
+- ⚠️ **Ne jamais ajouter un ticker sans repasser les deux tests** (données yfinance + liquidité) — la liste fixe existe précisément parce que l'IA inventait des tickers (commit `5a7dc2f`)
+- `/scan us` et `US_UNIVERSE` inchangés (36 valeurs)
 
 ### 2026-07-28 — `/scan us` : scan US à la demande
 - **`/scan us`** (ou `/scan_us` en un tap depuis le menu) : relance le scan sur les **36 valeurs US** seulement. Jusqu'ici le scan US n'existait qu'en automatique à `US_SCAN_TIME` (16h) — impossible de le relancer pendant la séance de Wall Street sans lancer le scan complet (~100 tickers), bien plus lent et coûteux en appels IA

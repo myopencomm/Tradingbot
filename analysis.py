@@ -17,9 +17,21 @@ from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
                     ATR_SL_MULT, MIN_SL_PCT, MAX_SL_PCT, MIN_RR,
                     SMALL_GAIN_MODE, EARNINGS_VETO_DAYS)
 
-# ── Univers de scan (~100 actions Bourse Direct) ──────────────────────────────
+# ── Univers de scan (~150 actions Bourse Direct) ──────────────────────────────
 # Le filtre quantitatif (RSI/momentum/volume) élimine les tickers invalides
 # ou sans données — inutile de maintenir cette liste à la main.
+#
+# POURQUOI UNE LISTE FIXE (commit 5a7dc2f, 24/06/2026) : avant, l'IA inventait
+# 6-10 tickers depuis sa mémoire de training — certains inexistants ou non
+# traitables chez BD. La liste garantit des valeurs réelles et cotées.
+#
+# EXTENSION DU 29/07/2026 (+34 Euronext) : chaque ajout a été validé sur
+# données réelles — technicals yfinance exploitables (RSI, momentum 12-1,
+# MM200) ET liquidité médiane ≥ 2 M€ échangés/jour sur 3 mois. Le seuil de
+# liquidité n'est pas cosmétique : avec ~4€ de frais aller-retour et un seuil
+# de rentabilité à 5×, une valeur au spread large coûte plus que les frais
+# eux-mêmes. 23 candidats ont été écartés à ce titre (micro-caps, 0.01 à
+# 1.97 M€/jour). Ne PAS ajouter de ticker sans repasser ces deux tests.
 SCAN_UNIVERSE = [
     # CAC 40
     "AI.PA", "AIR.PA", "ALO.PA", "BN.PA", "BNP.PA", "CA.PA", "CAP.PA",
@@ -28,17 +40,28 @@ SCAN_UNIVERSE = [
     "MT.AS", "ORA.PA", "PUB.PA", "RI.PA", "RMS.PA", "RNO.PA", "SAF.PA",
     "SAN.PA", "SGO.PA", "STM.PA", "SU.PA", "TEP.PA", "VIE.PA", "AC.PA",
     "ACA.PA", "STLAM.PA",
+    # CAC 40 / grandes capitalisations — ajoutés 29/07/2026 (absents à tort,
+    # dont L'Oréal, l'un des premiers poids de l'indice)
+    "OR.PA", "AKE.PA", "BVI.PA", "SW.PA", "VIV.PA", "URW.PA", "FGR.PA",
     # Euronext Paris — Midcap / SBF 120
     "AF.PA", "AMUN.PA", "BIM.PA", "DASSAV.PA", "FDJ.PA", "FR.PA",
     "GET.PA", "GTT.PA", "RXL.PA", "SEB.PA", "SFCA.PA", "UBI.PA",
     "VK.PA", "COFA.PA", "SCOR.PA", "SPIE.PA", "TFI.PA", "LI.PA",
     "TKTT.PA", "FNAC.PA", "WLN.PA", "BOL.PA", "EDEN.PA", "FLO.PA",
     "OREP.PA", "LANC.PA", "TNG.PA", "SESL.PA", "CAPP.PA",
+    # Euronext Paris — SBF 120 complément (ajoutés 29/07/2026)
+    "ATO.PA", "COV.PA", "DBV.PA", "ELIS.PA", "ETL.PA", "GFC.PA",
+    "GNFT.PA", "IPN.PA", "IPS.PA", "MF.PA", "NEX.PA", "RCO.PA",
+    "RUI.PA", "SESG.PA", "SOI.PA", "SOP.PA", "TE.PA", "VCT.PA",
     # Euronext Amsterdam
     "ASML.AS", "INGA.AS", "PHIA.AS", "UNA.AS", "ADYEN.AS", "HEIA.AS",
     "NN.AS", "AKZA.AS", "WKL.AS",
+    # Euronext Amsterdam — complément (ajoutés 29/07/2026)
+    "AD.AS", "ASM.AS", "BESI.AS", "DSFIR.AS", "KPN.AS", "RAND.AS",
     # Euronext Bruxelles
     "UCB.BR", "ABI.BR", "SOLB.BR", "GBLB.BR",
+    # Euronext Bruxelles — complément (ajoutés 29/07/2026)
+    "AGS.BR", "KBC.BR", "PROX.BR",
     # US — Tech
     "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA",
     "AMD", "QCOM", "NFLX", "CRM", "ORCL", "INTC", "MU",
