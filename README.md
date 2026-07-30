@@ -658,6 +658,25 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-30 — Veto d'extension : testé, **réfuté**, non livré
+Après la sortie au SL de JNJ (acheté au 5ᵉ jour d'une hausse de +4,3 %, au plus haut historique), hypothèse à tester : refuser un candidat dont le mouvement des 5 dernières séances est déjà tendu. Mesuré en **ATR quotidiens** (`ext_5d_atr`), seuils 1,0 à 3,0, sur 2023-2026, bootstrap 3000× et walk-forward 4 fenêtres.
+
+| Seuil | Euronext (137 valeurs) | US (36 valeurs) |
+|---|---|---|
+| sans veto (référence) | -285 € · P(gagnante) **10 %** | -53 € · P(gagnante) **40 %** |
+| ≤ 1,0 ATR | **-134 € · 28 %** (meilleur) | **-273 € · 12 %** (pire) |
+| ≤ 2,0 ATR | -403 € · 4 % (pire) | -19 € · 47 % (meilleur) |
+
+- **Le meilleur seuil sur un marché est le pire sur l'autre** : le signe s'inverse d'un univers à l'autre, c'est du bruit ajusté a posteriori. **Le filtre n'est pas activé.** Le code de mesure reste dans `backtest.py` (`--ext`, désactivé par défaut) pour que la conclusion soit rejouable
+- JNJ était à **1,98 ATR** : aucun seuil défendable ne l'aurait bloqué. L'intuition était plausible, les données ne la soutiennent pas
+- **Piège rencontré en route** : `backtest.py` figeait le trailing breakeven à **+3 %** alors que la production tourne à **+6 %** depuis juillet. Le premier verdict — « le trailing détruit la performance » — n'était qu'un artefact de ce réglage périmé ; au bon seuil, le trailing **améliore** le résultat (-285 € contre -338 € sans). Le backtest lit désormais `AUTO_BREAKEVEN_PCT` depuis `config.py`
+- **Ce que le backtest dit vraiment** : le moteur quantitatif SEUL reste perdant sur les deux univers (P(gagnante) 10-40 %), ce qui confirme l'audit de juillet — l'étage de validation IA, non simulable, est ce qui doit porter l'edge
+- `backtest.py` gagne `--ext` (comparaison des seuils), `--us` (univers US) et valide désormais **toutes** les variantes, plus seulement B et C
+
+### 2026-07-30 — Alerte « SL proche » : ne part plus à l'ouverture de la position
+- La zone d'alerte était `SL + 5 %`. Avec un SL à 2×ATR, toute valeur dont l'ATR est sous ~2,5 % ouvrait sa position **déjà dans la zone** : l'alerte partait immédiatement, à chaque fois (JNJ : SL à -4,6 %, zone d'alerte 0,2 % **au-dessus** du PRU)
+- Nouvelle règle : le plus bas de `SL + 5 %` et des **deux tiers du chemin du PRU vers le SL** — l'alerte ne peut plus se déclencher au-dessus du PRU, quelle que soit la largeur du SL. Réarmement à +2 % au-dessus de la zone (au lieu de +8 % au-dessus du SL, inatteignable sur un SL serré)
+
 ### 2026-07-30 — P&L réalisé : conversion de devise à la clôture
 - **Le P&L d'un trade en dollars était additionné tel quel à un total en euros.** Le correctif du 29/07 ne portait que sur le P&L **latent** ; la clôture, elle, enregistrait `pnl` dans la devise du trade. Première victime : JNJ, clôturé au SL le 30/07 à **-48,82 $** comptés comme -48,82 € — soit **6,4 € d'erreur** sur un seul trade
 - `record_close` enregistre désormais `currency` et `pnl_eur` (converti au taux de la clôture) ; `/stats` et le dashboard raisonnent sur `pnl_eur`. Les trades antérieurs, tous en euros, ont été complétés avec les deux champs

@@ -14,6 +14,28 @@ def _is_us(ticker: str) -> bool:
     return "." not in (ticker or "")
 
 
+def _sl_proche_level(cfg: dict) -> float:
+    """
+    Cours à partir duquel on prévient que le SL approche.
+
+    L'ancienne règle — SL + 5% — était inutilisable dès que le SL était plus
+    serré que 5% : la zone d'alerte englobait le PRU, donc l'alerte partait à
+    la SECONDE où la position s'ouvrait. Avec un SL à 2×ATR, c'est le cas de
+    toute valeur dont l'ATR est sous ~2,5% (JNJ, 29/07/2026 : SL à -4,6%, zone
+    d'alerte à +0,2% au-dessus du PRU).
+
+    Nouvelle règle : le plus BAS des deux seuils — SL + 5%, ou les deux tiers
+    du chemin parcouru du PRU vers le SL. Le second borne le premier sous le
+    PRU, quelle que soit la largeur du SL.
+    """
+    sl = cfg.get("target_low") or 0
+    entry = cfg.get("entry_price") or 0
+    band = sl * 1.05
+    if entry > sl > 0:
+        band = min(band, entry - 0.67 * (entry - sl))
+    return band
+
+
 def check_pending_orders(send_fn, us_only: bool = False) -> None:
     """Vérifie les ordres en attente sur le range intraday des 4 dernières heures.
     us_only : ne traite que les tickers US (séance US, après clôture Euronext)."""
@@ -113,8 +135,13 @@ def check_positions(send_fn, us_only: bool = False) -> None:
         if cfg.get("tp_breach_notified") and high4h < cfg["target_high"]:
             portfolio.mark_tp_breach(name, False)
 
-        # Réarme l'alerte SL proche quand le cours remonte au-dessus du seuil + marge
-        if cfg.get("sl_proche_notified") and price > cfg["target_low"] * 1.08:
+        # Zone d'alerte « SL proche » — voir _sl_proche_level : jamais au-dessus
+        # du PRU, sinon l'alerte partait à l'ouverture de toute position dont le
+        # SL est à moins de 5% (cas JNJ le 29/07/2026, SL à 2×ATR = 4.6%).
+        sl_zone = _sl_proche_level(cfg)
+
+        # Réarme l'alerte SL proche quand le cours ressort de la zone (+2%)
+        if cfg.get("sl_proche_notified") and price > sl_zone * 1.02:
             portfolio.mark_sl_proche(name, False)
 
         # Réarme l'alerte breakeven si le SL a finalement été relevé au PRU
@@ -131,9 +158,8 @@ def check_positions(send_fn, us_only: bool = False) -> None:
                 alerts.append({"type": "SL_BREACH", "name": name, "cfg": cfg,
                                "price": price, "trigger": low4h,
                                "change": change_pct, "pnl": pnl, "sym": sym})
-        elif low4h <= cfg["target_low"] * 1.05:
+        elif low4h <= sl_zone:
             # Anti-spam : une seule alerte par épisode d'approche du SL.
-            # Se réarme quand le cours remonte à +8% au-dessus du SL.
             if not cfg.get("sl_proche_notified", False):
                 alerts.append({"type": "SL_PROCHE", "name": name, "cfg": cfg,
                                "price": price, "trigger": low4h,

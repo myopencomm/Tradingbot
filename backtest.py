@@ -29,11 +29,15 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from analysis import SCAN_UNIVERSE
+from analysis import SCAN_UNIVERSE, US_UNIVERSE
 
 FEE = 1.98            # frais BD par ordre
 BUDGET = 2000.0       # budget autonome de référence
-BREAKEVEN_PCT = 3.0   # trailing : SL au PRU à +3%
+# Trailing : seuil de remontée du SL au PRU. LU DEPUIS LA CONFIG DE PRODUCTION —
+# la valeur était figée à 3.0 ici alors que le bot tourne à +6% depuis le
+# backtest de juillet 2026. Comparer le trail « du backtest » à la production
+# revenait à mesurer un réglage que plus personne n'utilise (constaté 30/07).
+BREAKEVEN_PCT = float(__import__("config").AUTO_BREAKEVEN_PCT)
 MAX_HOLD_DAYS = 60    # time-stop (jours de bourse)
 
 
@@ -71,6 +75,13 @@ def build_indicators(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         ind["mom_12_1"] = (c.shift(21) / c.shift(252) - 1) * 100
         ind["ma200"] = c.rolling(200).mean()
         ind["atr_pct"] = atr14_pct(df)
+        # Extension courte : hausse des 5 dernières séances mesurée en ATR
+        # quotidiens. 2.0 = le titre a déjà parcouru deux journées normales
+        # de volatilité en une semaine — acheter là, c'est payer la fin du
+        # mouvement (cas JNJ, 30/07/2026 : 1.98 ATR à l'entrée, SL touché le
+        # lendemain sur un gap). En ATR et non en %, sinon le seuil serait
+        # ridicule pour une valeur calme et inatteignable pour une nerveuse.
+        ind["ext_5d_atr"] = (c / c.shift(5) - 1) * 100 / ind["atr_pct"]
         out[t] = ind
     return out
 
@@ -82,7 +93,7 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              risk_pct: float = 1.0, max_pos: int = 2,
              max_cost_pct: float = 30.0, be_trail: bool = True,
              tp_mult_r: float | None = None, fee: float = FEE,
-             cadence: str = "weekly") -> dict:
+             cadence: str = "weekly", max_ext_atr: float | None = None) -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR)."""
     positions = []   # {ticker, entry, sl, tp, qty, entry_date, be_done}
     closed = []
@@ -150,6 +161,11 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                         or not (35 <= r["rsi"] <= 65) or r["mom_1m"] < -12
                         or np.isnan(r["atr_pct"]) or 2 * r["atr_pct"] > 10):
                     continue
+                # Veto d'extension : le titre a-t-il déjà couru sur 5 séances ?
+                if max_ext_atr is not None:
+                    ext = r["ext_5d_atr"]
+                    if not np.isnan(ext) and ext > max_ext_atr:
+                        continue
                 cands.append((t, min(r["mom_12_1"], 80)))
         cands.sort(key=lambda x: -x[1])
 
@@ -292,9 +308,14 @@ def main():
                     help="nombre de rééchantillonnages bootstrap")
     ap.add_argument("--folds", type=int, default=4,
                     help="nombre de fenêtres walk-forward")
+    ap.add_argument("--ext", action="store_true",
+                    help="compare le veto d'extension (plusieurs seuils) à la stratégie livrée")
+    ap.add_argument("--us", action="store_true", help="univers US uniquement")
     args = ap.parse_args()
 
-    universe = SCAN_UNIVERSE[:30] if args.fast else SCAN_UNIVERSE
+    universe = US_UNIVERSE if args.us else SCAN_UNIVERSE
+    if args.fast:
+        universe = universe[:30]
     dl_start = (pd.Timestamp(args.start) - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
 
     print(f"Téléchargement {len(universe)} tickers depuis {dl_start}…", flush=True)
@@ -328,7 +349,17 @@ def main():
     regime_ok = regime_ok.reindex(pd.DatetimeIndex(all_dates).tz_localize(None)).ffill()
     regime_ok.index = pd.DatetimeIndex(all_dates)
 
-    configs = [
+    base = dict(mode="new", risk_pct=1.0, max_pos=2, max_cost_pct=30)
+    if args.ext:
+        # Le veto d'extension est né d'UN trade perdant (JNJ, 30/07/2026) :
+        # il ne sera activé que s'il tient sur l'historique complet, bootstrap
+        # et walk-forward à l'appui. Une règle posée sur un échantillon de 1
+        # est du sur-apprentissage, pas une amélioration.
+        configs = [("B. PHASE1 (référence, sans veto d'extension)", dict(base))]
+        configs += [(f"EXT ≤ {s:.1f} ATR sur 5 séances", dict(base, max_ext_atr=s))
+                    for s in (1.0, 1.5, 2.0, 2.5, 3.0)]
+    else:
+        configs = [
         ("A. OLD (mom 1M, SL7/TP10, 50% budget)", dict(mode="old", max_pos=2)),
         ("B. PHASE1 (12-1, risque 1%, max 2 pos, cout<=30%)",
          dict(mode="new", risk_pct=1.0, max_pos=2, max_cost_pct=30)),
@@ -369,7 +400,10 @@ def main():
     print("(un point unique peut être un coup de chance ; ici on mesure la dispersion)")
     print("=" * 74)
     for name, (cfg, r) in results.items():
-        if not (name.startswith("B. PHASE1") or name.startswith("C. RECOVERY")):
+        # Tout sauf le proxy « OLD » (A), qui ne sert que de repère historique :
+        # les variantes B2/C2/C3 méritent la même validation que B et C, sinon
+        # on compare des P&L bruts sans savoir lesquels sont du bruit.
+        if name.startswith("A."):
             continue
         print(f"\n{name}")
         if r["trades"] == 0:
