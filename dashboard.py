@@ -41,14 +41,17 @@ def build_data() -> dict:
     trades = stats.load_history().get("closed_trades", [])
     cum, total = [], 0.0
     for t in trades:
-        total += t.get("pnl", 0)
+        # P&L toujours en euros (cf. stats.record_close) : `pnl` seul est dans
+        # la devise du trade et fausserait la courbe dès un trade US.
+        pnl_eur = t.get("pnl_eur", t.get("pnl", 0))
+        total += pnl_eur
         # Cash engagé sur CE deal (qté × entrée), converti en EUR au taux
         # actuel pour les titres en devise (approximation : taux historique
         # non stocké).
         ticker = t.get("ticker", "")
         fx = prices.fx_to_eur("USD") if "." not in ticker else 1.0
         invested = round((t.get("entry_price") or 0) * t.get("qty", 0) * fx, 2)
-        roi = round(t.get("pnl", 0) / invested * 100, 2) if invested else 0
+        roi = round(pnl_eur / invested * 100, 2) if invested else 0
         cum.append({
             "date":     t.get("date", ""),
             "date_iso": _date_iso(t.get("date", "")),
@@ -57,7 +60,7 @@ def build_data() -> dict:
             "qty":    t.get("qty", 0),
             "entry":  t.get("entry_price"),
             "exit":   t.get("exit_price"),
-            "pnl":    round(t.get("pnl", 0), 2),
+            "pnl":    round(pnl_eur, 2),
             "cum":    round(total, 2),
             "invested": invested,
             "roi":      roi,

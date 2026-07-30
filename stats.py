@@ -40,6 +40,13 @@ def record_close(name: str, ticker: str, qty: int, entry_price: float,
     except Exception:
         tags = []
 
+    # P&L en EUR — le bilan est tenu en euros alors que le trade se dénoue dans
+    # la devise de cotation. Sans ça la perte JNJ du 30/07/2026 (-48.82 $) a été
+    # additionnée telle quelle à des gains en euros : le total était faux de
+    # ~6 € sur ce seul trade, et l'erreur grandit avec chaque trade US.
+    cur = prices._ticker_currency(ticker)
+    pnl_eur = round(pnl * prices.fx_to_eur(cur), 2)
+
     record = {
         "name":         name,
         "ticker":       ticker,
@@ -48,6 +55,8 @@ def record_close(name: str, ticker: str, qty: int, entry_price: float,
         "exit_price":   exit_price,
         "fees":         fees,
         "pnl":          pnl,
+        "currency":     cur,
+        "pnl_eur":      pnl_eur,
         "result":       result,
         "date":         datetime.now(PARIS).strftime("%Y-%m-%d"),
         "source":       ctx.get("source", "inconnu"),
@@ -68,15 +77,21 @@ def get_stats() -> dict:
     wins   = [t for t in closed if t["result"] == "win"]
     losses = [t for t in closed if t["result"] == "loss"]
 
-    realized_pnl  = sum(t["pnl"] for t in closed)
+    # TOUJOURS raisonner en euros : `pnl` est dans la devise du trade, `pnl_eur`
+    # est la conversion faite à la clôture (trades antérieurs au 30/07/2026 :
+    # pas de champ → ils étaient tous en euros, `pnl` fait foi).
+    def _eur(t):
+        return t.get("pnl_eur", t["pnl"])
+
+    realized_pnl  = sum(_eur(t) for t in closed)
     win_rate      = (len(wins) / len(closed) * 100) if closed else 0
-    avg_win       = sum(t["pnl"] for t in wins)   / len(wins)   if wins   else 0
-    avg_loss      = sum(t["pnl"] for t in losses) / len(losses) if losses else 0
-    gross_wins    = sum(t["pnl"] for t in wins)
-    gross_losses  = abs(sum(t["pnl"] for t in losses))
+    avg_win       = sum(_eur(t) for t in wins)   / len(wins)   if wins   else 0
+    avg_loss      = sum(_eur(t) for t in losses) / len(losses) if losses else 0
+    gross_wins    = sum(_eur(t) for t in wins)
+    gross_losses  = abs(sum(_eur(t) for t in losses))
     profit_factor = round(gross_wins / gross_losses, 2) if gross_losses > 0 else None
-    best  = max(closed, key=lambda t: t["pnl"]) if closed else None
-    worst = min(closed, key=lambda t: t["pnl"]) if closed else None
+    best  = max(closed, key=_eur) if closed else None
+    worst = min(closed, key=_eur) if closed else None
 
     # P&L latent des positions ouvertes GÉRÉES par le bot. Les positions HOLD
     # long terme (hold: true, ex ILMN) sont hors périmètre trading : leur

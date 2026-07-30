@@ -658,6 +658,10 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-07-30 — P&L réalisé : conversion de devise à la clôture
+- **Le P&L d'un trade en dollars était additionné tel quel à un total en euros.** Le correctif du 29/07 ne portait que sur le P&L **latent** ; la clôture, elle, enregistrait `pnl` dans la devise du trade. Première victime : JNJ, clôturé au SL le 30/07 à **-48,82 $** comptés comme -48,82 € — soit **6,4 € d'erreur** sur un seul trade
+- `record_close` enregistre désormais `currency` et `pnl_eur` (converti au taux de la clôture) ; `/stats` et le dashboard raisonnent sur `pnl_eur`. Les trades antérieurs, tous en euros, ont été complétés avec les deux champs
+
 ### 2026-07-29 — Ordres et PRU des valeurs US : lecture BD corrigée
 - **Un ordre US était illisible** : `/sync` affichait `? : Achat Take Profit ⚠️ SL/TP non lus` alors que l'ordre JNJ était bien présent sur BD. Deux causes, toutes deux dans `bourse_direct_reader.py` :
   - **les montants US ne sont pas libellés en euros** — BD écrit `Seuil255.60 $US`, `Lim. 268.65 $US`, cours `267.430 USD`. Les regex n'acceptaient que `€` → seuil, profit **et prix d'exécution** revenaient vides. Les montants sont désormais reconnus dans toutes les devises BD (`€`, `$US`, `USD`, `£`, `CHF`) et l'ordre porte sa devise (`currency`), affichée dans le message de sync (`SL 255.6$`)
