@@ -222,6 +222,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Briefing matinal 9h05** | Analyse IA : état des positions + contexte macro + top opportunités |
 | **Surveillance 4×/jour + sync horaire** | Checks 9h / 12h / 15h / 17h (alertes SL/TP) + sync BD silencieux chaque heure : détection automatique des exécutions |
 | **Séance US prolongée** | Wall Street tournant jusqu'à 22h Paris, le bot prolonge la surveillance des positions US (checks 18h / 20h / 21h40, alertes seules) et lance un **scan US** à 16h — plus seulement au briefing de 9h05 (`US_EXTENDED_HOURS`) |
+| **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
 | **Trailing stop automatique** | À +5% (manuel) / +6% (autonome, `AUTO_BREAKEVEN_PCT`), l'ordre Expert est **remplacé sur BD** avec le SL au PRU (P&L ≥ 0 garanti) |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
@@ -283,7 +284,7 @@ TradingBot/
 **Flux de données :**
 `positions.json` est la source de vérité en mode Classic. En mode Playwright, `bourse_direct_reader.py` synchronise les données réelles de BD dans ce même fichier — les deux modes sont compatibles. Les positions autonomes sont taguées `"autonomous": true` dans ce même fichier.
 
-**Scheduler :** `schedule` (Python) — 4 checks SL/TP/jour + briefing 9h05. À chaque check, `autonomous_engine` est invoqué pour surveiller les positions autonomes et tenter de nouvelles entrées si Playwright est connecté. **Séance US** (`US_EXTENDED_HOURS=on`, défaut) : checks positions/ordres **US uniquement** à `US_CHECK_TIMES` (18h/20h/21h40, alertes seules — silencieux sans position US) + scan US à `US_SCAN_TIME` (16h). Les entrées/trailing autonomes, eux, tournent déjà chaque heure jusqu'à 22h via le sync horaire.
+**Scheduler :** `schedule` (Python) — 4 checks SL/TP/jour + briefing 9h05. À chaque check, `autonomous_engine` est invoqué pour surveiller les positions autonomes et tenter de nouvelles entrées si Playwright est connecté. **Séance US** (`US_EXTENDED_HOURS=on`, défaut) : checks positions/ordres **US uniquement** à `US_CHECK_TIMES` (18h/20h/21h40, alertes seules — silencieux sans position US) + scan US à `US_SCAN_TIME` (16h). Les entrées/trailing autonomes, eux, tournent déjà chaque heure jusqu'à 22h via le sync horaire. **Garde-fou de capacité** : avant toute analyse IA planifiée (scan US, candidats du briefing), `autonomous_engine.entry_capacity_block()` vérifie qu'une entrée est structurellement possible — place libre et budget suffisant — sinon le travail coûteux est sauté.
 
 **IA :** chaque provider expose `complete(prompt)` et `complete_with_image(prompt, bytes)`. Ajouter un provider = hériter de `AIProvider` dans `ai_provider.py`.
 
@@ -523,6 +524,7 @@ Le mode Autonome permet au bot de gérer un **budget isolé** en totale indépen
 - **SL/TP obligatoires** — aucune entrée sans protection Expert BD
 - **Playwright requis pour les entrées** — si la session expire, le bot ne peut plus entrer mais les positions existantes restent protégées par leurs ordres Expert sur BD
 - **Marché ouvert uniquement** — aucune entrée en dehors des heures 9h05–17h35
+- **Aucune analyse IA quand toutes les places sont prises** — dès que les emplacements autonomes sont occupés (positions + ordres d'achat en attente), les analyses IA *planifiées* sont sautées : scan US de 16h et recherche de candidats du briefing. Elles ne pourraient produire que des opportunités inachetables. Le bot le dit une fois par jour dans Telegram, plutôt que de rester silencieux
 - **Annulation auto des ordres d'entrée périmés** — un ordre d'achat limite non exécuté à la clôture du marché du titre est **annulé sur BD** (vérifié à chaque cycle d'entrée + sync horaire). Un limite qui traîne ne se remplit que quand le cours retombe à travers — c'est-à-dire quand la thèse momentum est déjà morte (anti-sélection). Idem si une validation ultérieure rend EXCLUS sur le même titre : l'ordre en attente est annulé immédiatement
 
 ### Exemple d'utilisation
@@ -657,6 +659,13 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-07-31 — Analyses IA automatiques sautées quand aucun achat n'est possible
+- **Le scan US planifié (16h) ne regardait que le cash, jamais les emplacements libres.** Constaté le 31/07 : 3 positions autonomes sur 3 places, cash 495 € — le scan a quand même lancé **8 validations IA** (~4 min), dont une opportunité (`GOOGL`) que le moteur ne pouvait pas acheter et qui est restée en attente. Le log dit tout : `[Auto] Max positions atteint (3 + 0 / 3)` puis, ligne suivante, `[scan] validation 1/8`
+- **Nouveau garde-fou commun : `autonomous_engine.entry_capacity_block()`** — blocage *structurel* d'une entrée autonome (plus d'emplacement libre, ou budget/cash sous le plancher de viabilité). **Aucun appel réseau, aucun état transitoire** : ni session BD (elle se reconnecte) ni cours. Il répond `None` si le mode autonome est désactivé — c'est alors à l'utilisateur de décider quoi faire d'une opportunité, et rien n'est sauté
+- **Scan US 16h** : sauté aussi quand toutes les places sont prises (en plus du plancher de cash existant). **Le briefing 9h05** : la recherche de candidats (passe 1 « ===CANDIDATS=== » + jusqu'à 10 validations) est sautée de la même façon — **l'analyse portefeuille, elle, reste faite** : c'est le rapport quotidien, il ne dépend pas d'une capacité d'achat
+- **Le silence devient un message** : un scan sauté envoie désormais **une** ligne Telegram par jour (`⏭️ Scan US 🇺🇸 sauté — 3/3 emplacements occupés (AIR, GLE, BAC)`), le briefing affiche la raison à la place des opportunités. Sans ça, l'absence de scan est indiscernable d'une panne du scheduler (incident du 21-23/07)
+- **`/scan`, `/scan us` et `/research` ne sont jamais concernés** : une demande explicite répond toujours, complète
 
 ### 2026-07-30 — Veto d'extension : testé, **réfuté**, non livré
 Après la sortie au SL de JNJ (acheté au 5ᵉ jour d'une hausse de +4,3 %, au plus haut historique), hypothèse à tester : refuser un candidat dont le mouvement des 5 dernières séances est déjà tendu. Mesuré en **ATR quotidiens** (`ext_5d_atr`), seuils 1,0 à 3,0, sur 2023-2026, bootstrap 3000× et walk-forward 4 fenêtres.

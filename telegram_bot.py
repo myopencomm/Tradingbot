@@ -1319,6 +1319,14 @@ def _tuto_classic(cid):
         "  16h → scan US · 18/20/21h40 → check positions US\n"
         "  Lundi 9h10 → analyse de rotation\n"
         "\n"
+        "Le scan US de 16h et la recherche de\n"
+        "candidats du briefing sont SAUTES quand\n"
+        "aucun achat n'est possible (cash trop bas,\n"
+        "ou mode auto sans place libre) : pas\n"
+        "d'analyse IA payee pour rien. Un message\n"
+        "par jour explique pourquoi. /scan force\n"
+        "toujours une analyse complete.\n"
+        "\n"
         "A LA DEMANDE\n"
         "  /status   → portefeuille + P&L live\n"
         "  /morning  → briefing maintenant\n"
@@ -2330,6 +2338,15 @@ def cmd_auto(args, cid):
         else:
             if cfg.get("enabled"):
                 lines.append("Aucune position autonome active.")
+
+        if cfg.get("enabled"):
+            block = autonomous_engine.entry_capacity_block()
+            if block:
+                lines.append(f"\n⏸️ Aucune entrée possible : {block}")
+                lines.append("Tant que c'est le cas, les analyses IA planifiées "
+                             "(scan US 16h, candidats du briefing) sont sautées — "
+                             "elles ne pourraient rien acheter. /scan force une "
+                             "analyse complète quand même.")
 
         if not cfg.get("enabled"):
             lines.append("\nUsage :\n/auto on 500      (budget fixe)\n/auto on 20%      (% du cash)\n/auto positions 3 (places simultanees)")

@@ -339,6 +339,48 @@ def compute_position_size(ticker: str, entry: float, sl: float,
             "cost_cap": cost_cap, "notes": notes, "veto": None, "reason": reason}
 
 
+def entry_capacity_block(min_cash: float | None = None) -> str | None:
+    """
+    Blocage STRUCTUREL d'une nouvelle entrée autonome : plus aucun emplacement
+    libre, ou budget/cash trop faible pour un achat viable. `None` = une entrée
+    reste possible — ou le mode autonome est désactivé, et c'est alors à
+    l'utilisateur de décider quoi faire d'une opportunité.
+
+    Volontairement AUCUN test de session BD ni de cours : pas d'appel réseau,
+    pas d'état transitoire (une session déconnectée se reconnecte, une place
+    prise ne se libère qu'à une sortie). Sert de garde-fou EN AMONT des
+    analyses IA coûteuses — scan US planifié, candidats du briefing. Sans lui,
+    le bot brûle 8 validations IA pour des opportunités que rien ne pourra
+    acheter (31/07/2026 : scan US de 16h lancé sur 3/3 places occupées).
+
+    `min_cash` : plancher de cash exigé (défaut : garde-fou frais du scan).
+    """
+    cfg = portfolio.get_autonomous_config()
+    if not cfg.get("enabled"):
+        return None
+
+    max_pos  = cfg.get("max_positions", MAX_POSITIONS)
+    auto_pos = portfolio.get_autonomous_positions()
+    pending  = portfolio.get_auto_pending_orders()
+    used     = len(auto_pos) + len(pending)
+    if used >= max_pos:
+        held = ", ".join(list(auto_pos.keys()) + list(pending.keys()))
+        return (f"{used}/{max_pos} emplacements occupés ({held}) — il faut une "
+                f"sortie pour libérer une place (/auto positions N pour en ouvrir plus)")
+
+    if min_cash is None:
+        try:
+            import analysis
+            min_cash = analysis.min_viable_cash()
+        except Exception:
+            min_cash = 50.0
+    available = min(get_budget_info()["available"], portfolio.get_cash())
+    if available < min_cash:
+        return (f"budget autonome libre {available:.0f}€ — sous le minimum de "
+                f"{min_cash:.0f}€ pour qu'un achat couvre ses frais aller-retour")
+    return None
+
+
 def entry_blocked_reason() -> str | None:
     """
     Pourquoi le moteur autonome n'entrera PAS en position en ce moment.

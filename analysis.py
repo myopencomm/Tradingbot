@@ -837,8 +837,9 @@ def morning_briefing(send_fn) -> None:
     """
     Briefing quotidien 9h05.
     - Analyse portefeuille : prompt direct avec données réelles.
-    - Opportunités (si cash >= 1000€) : même 2 passes que scan_opportunities
-      pour éviter que l'IA invente des prix depuis des articles web périmés.
+    - Opportunités (si cash >= 1000€ ET une entrée reste possible) : même 2
+      passes que scan_opportunities pour éviter que l'IA invente des prix
+      depuis des articles web périmés.
     """
     print(f"[{datetime.now(PARIS).strftime('%Y-%m-%d %H:%M:%S')}] Analyse matinale...")
     try:
@@ -866,8 +867,23 @@ def morning_briefing(send_fn) -> None:
                 enriched_lines.append(f"  {name} : " + " | ".join(parts))
         enriched_block = ("\nNEWS & DONNÉES ANALYSTES\n" + "\n".join(enriched_lines)) if enriched_lines else ""
 
-        # ── Passe 1 : analyse portefeuille (+ candidats si cash suffisant) ───
-        if cash >= 1000:
+        # ── Chasse aux candidats : seulement si un achat est POSSIBLE ────────
+        # Cash suffisant ET, en mode autonome, un emplacement libre avec du
+        # budget. Sinon les validations IA produiraient des opportunités que
+        # personne ne pourra acheter (le moteur les refuserait, et l'utilisateur
+        # n'a rien demandé) — l'analyse portefeuille, elle, reste faite.
+        auto_block = None
+        try:
+            import autonomous_engine as _ae
+            auto_block = _ae.entry_capacity_block()
+        except Exception as _be:
+            print(f"[briefing] capacité autonome indisponible : {_be}")
+        hunt = cash >= 1000 and not auto_block
+        if auto_block:
+            print(f"[briefing] recherche de candidats sautée — {auto_block}")
+
+        # ── Passe 1 : analyse portefeuille (+ candidats si achat possible) ───
+        if hunt:
             catalysts = research.market_catalysts()
             opps_mission = f"""
 2. Risque global portefeuille : LOW / MEDIUM / HIGH
@@ -885,9 +901,10 @@ Et APRÈS cette ligne uniquement, identifie 6 à 10 tickers CANDIDATS de deux ty
    numéro — juste les tickers bruts un par ligne."""
         else:
             catalysts = ""
-            opps_mission = f"\n2. Risque global : LOW / MEDIUM / HIGH\n(Cash {cash}€ insuffisant pour nouvelles positions)"
+            why = auto_block or f"Cash {cash}€ insuffisant pour nouvelles positions"
+            opps_mission = f"\n2. Risque global : LOW / MEDIUM / HIGH\n({why})"
 
-        macro_ctx = _macro_context() if cash >= 1000 else ""
+        macro_ctx = _macro_context() if hunt else ""
         prompt1 = f"""{TRADER_SYSTEM}
 {FORMAT_TELEGRAM}
 {macro_ctx}
@@ -920,7 +937,7 @@ MISSION
         else:
             pass1_analysis, pass1_candidates = pass1, pass1
 
-        if cash >= 1000:
+        if hunt:
             held_tickers = {cfg["ticker"].upper()
                             for cfg in portfolio.load().get("positions", {}).values()}
             ai_tickers = _extract_tickers(pass1_candidates)
@@ -982,7 +999,7 @@ MISSION
         # 2000) — c'est cette passe qui proposait AF.PA à résistance en 07/2026.
         # Zéro trade est un résultat acceptable.
         small_opps, small_rejected = [], []
-        if SMALL_GAIN_MODE and cash >= 1000 and not opportunities and quant:
+        if SMALL_GAIN_MODE and hunt and not opportunities and quant:
             print(f"[briefing] 0 opportunité à +{_TP}% — passe gain réduit sur "
                   f"{[c['ticker'] for c in quant[:3]]}")
             small_opps, small_rejected = _small_gain_pass(ai, quant, cash, ctx, today_str)
@@ -1003,7 +1020,7 @@ MISSION
             msg += "\n\nOPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities)
             if rejected_morning:
                 msg += "\n\nAnalysés et écartés :\n" + "\n".join(rejected_morning)
-        elif cash >= 1000:
+        elif hunt:
             no_opp = f"Aucun candidat validé à +{_TP}% aujourd'hui."
             if small_opps:
                 no_opp += ("\n\n⚡ OPPORTUNITÉS COURT TERME (gain réduit, 1-5 jours)\n"
@@ -1015,6 +1032,10 @@ MISSION
             if not small_opps:
                 no_opp += "\n\n→ /scan pour relancer | /research TICKER pour un avis ciblé."
             msg += "\n\n" + no_opp
+        elif auto_block:
+            msg += (f"\n\nPas de recherche d'opportunités ce matin : {auto_block}\n"
+                    f"Aucune validation IA lancée — elle ne pourrait déboucher sur "
+                    f"aucun achat.\n→ /scan pour en forcer une quand même.")
         send_fn(msg)
 
         # Mode autonome : si actif + Playwright connecté + opportunités trouvées
@@ -2001,6 +2022,24 @@ def min_viable_cash() -> float:
     return round(2 * BROKERAGE_FEE * MIN_NET_GAIN_FEE_RATIO / (DEFAULT_TP_PCT / 100), 0)
 
 
+# Anti-spam : un seul message « scan sauté » par jour et par scan planifié.
+_scan_skip_notified: dict[str, str] = {}
+
+
+def _notify_scan_skipped(send_fn, label: str, reason: str) -> None:
+    """Explique UNE fois par jour qu'un scan planifié a été sauté. Sans ce
+    message, l'absence de scan est indiscernable d'une panne du scheduler."""
+    today = datetime.now(PARIS).strftime("%Y-%m-%d")
+    if _scan_skip_notified.get(label) == today:
+        return
+    _scan_skip_notified[label] = today
+    send_fn(
+        f"⏭️ {label} sauté — {reason}\n\n"
+        f"Aucune analyse IA lancée : elle ne pourrait déboucher sur aucun achat.\n"
+        f"→ /scan pour forcer une analyse complète malgré tout."
+    )
+
+
 def scan_us_opportunities(send_fn) -> None:
     """Scan d'opportunités limité aux valeurs US, lancé pendant la séance de
     Wall Street (planifié à US_SCAN_TIME). Même moteur que /scan mais univers
@@ -2008,14 +2047,28 @@ def scan_us_opportunities(send_fn) -> None:
     plus seulement au briefing de 9h05. Les opportunités validées alimentent le
     moteur autonome (entrées dès que la séance US est ouverte, 15:35-22:00).
 
-    Sauté si le cash ne permet AUCUN achat (garde-fou frais) : inutile de brûler
-    8 validations IA pour des vetos « cash insuffisant » garantis. Le /scan
-    MANUEL n'est pas concerné (toujours complet, positions incluses)."""
+    Sauté quand AUCUN achat n'est possible — cash sous le garde-fou frais, ou
+    mode autonome sans emplacement libre ni budget : inutile de brûler 8
+    validations IA pour des opportunités que rien ne pourra acheter. Le /scan
+    MANUEL n'est jamais concerné (toujours complet, positions incluses)."""
     floor = min_viable_cash()
     cash = portfolio.get_cash()
     if cash < floor:
         print(f"[scan US] sauté — cash {cash:.0f}€ < plancher {floor:.0f}€ "
               f"(aucun achat ne passerait le garde-fou frais)")
+        _notify_scan_skipped(send_fn, "Scan US 🇺🇸",
+                             f"cash {cash:.0f}€ sous le plancher de {floor:.0f}€ "
+                             f"(aucun achat ne couvrirait ses frais)")
+        return
+    try:
+        import autonomous_engine as _ae
+        blocked = _ae.entry_capacity_block(min_cash=floor)
+    except Exception as _ce:
+        print(f"[scan US] capacité autonome indisponible : {_ce}")
+        blocked = None
+    if blocked:
+        print(f"[scan US] sauté — {blocked}")
+        _notify_scan_skipped(send_fn, "Scan US 🇺🇸", blocked)
         return
     scan_opportunities(send_fn, universe=US_UNIVERSE, scan_label="🇺🇸 ")
 
