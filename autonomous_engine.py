@@ -282,7 +282,8 @@ def compute_position_size(ticker: str, entry: float, sl: float,
     Retourne : qty, entry_eur, risk_eur, cost_cap, notes[], veto (str|None),
     reason (str : pourquoi qty vaut 0).
     """
-    from config import RISK_PER_TRADE_PCT, MAX_POSITION_PCT, VOL_SCALE_TRIGGER
+    from config import (RISK_PER_TRADE_PCT, MAX_POSITION_PCT, VOL_SCALE_TRIGGER,
+                        CASH_SWEEP_MIN_LEFTOVER, order_fees)
     import lessons
     import correlation_risk
 
@@ -330,13 +331,46 @@ def compute_position_size(ticker: str, entry: float, sl: float,
     if qty * entry_eur > cost_cap:
         qty = int(cost_cap / entry_eur)
 
+    # ── Balayage du reliquat de cash ─────────────────────────────────────────
+    # Un fond de cash trop petit pour financer un second trade ne travaille pas.
+    # S'il reste moins de CASH_SWEEP_MIN_LEFTOVER après l'achat, on agrandit la
+    # position pour l'absorber, frais inclus.
+    #
+    # PRIME délibérément sur cost_cap : sans ça le balayage serait sans effet
+    # dès que le plafond de taille est la contrainte active. La contrepartie est
+    # réelle et annoncée — la perte au SL grandit dans la même proportion.
+    swept_from = 0
+    if qty >= 1 and CASH_SWEEP_MIN_LEFTOVER > 0 and entry_eur > 0:
+        base_cost = qty * entry_eur
+        leftover  = available - base_cost - order_fees(ticker, base_cost)
+        if 0 < leftover < CASH_SWEEP_MIN_LEFTOVER:
+            extra = 0
+            while True:
+                trial = (qty + extra + 1) * entry_eur
+                if trial + order_fees(ticker, trial) > available:
+                    break
+                extra += 1
+            if extra:
+                swept_from = qty
+                qty += extra
+                new_cost = qty * entry_eur
+                new_risk = qty * sl_dist_eur
+                n = (f"reliquat de {leftover:.0f}€ sous le seuil de "
+                     f"{CASH_SWEEP_MIN_LEFTOVER:.0f}€ → {swept_from} → {qty} titres "
+                     f"({new_cost:.0f}€), risque au SL {new_risk:.0f}€ "
+                     f"au lieu de {swept_from * sl_dist_eur:.0f}€")
+                notes.append(n)
+                _say(f"💰 {ticker} : {n}. Ce cash ne pouvait financer aucun "
+                     f"autre trade — il travaille ici plutôt que de dormir.")
+
     reason = ""
     if qty < 1:
         reason = (f"titre trop cher pour le budget de risque — 1 titre à "
                   f"{entry_eur:.0f}€ dépasse le plafond ({cost_cap:.0f}€) ou "
                   f"le risque au SL ({risk_eur:.0f}€)")
     return {"qty": qty, "entry_eur": entry_eur, "risk_eur": risk_eur,
-            "cost_cap": cost_cap, "notes": notes, "veto": None, "reason": reason}
+            "cost_cap": cost_cap, "notes": notes, "veto": None, "reason": reason,
+            "swept_from": swept_from}
 
 
 def entry_capacity_block(min_cash: float | None = None) -> str | None:
@@ -510,6 +544,10 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         f"TP : {tp}{sym} (+{(tp - entry) / entry * 100:.1f}%)\n"
         f"Coût : {qty * entry:.0f}{sym}{fx_note} | Gain net au TP ≈ +{net_tp:.0f}€ "
         f"(frais {roundtrip:.2f}€) | {reason}"
+        + (f"\n💰 Taille portée de {plan['swept_from']} à {qty} titres : le "
+           f"reliquat de cash ne pouvait financer aucun autre trade. "
+           f"Perte au SL si touché ≈ -{qty * (entry - sl) * fx:.0f}€."
+           if plan.get("swept_from") else "")
     )
     cost = cost_eur
 

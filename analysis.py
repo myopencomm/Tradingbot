@@ -1853,10 +1853,15 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                     if portfolio.get_autonomous_config().get("enabled"):
                         _sl_pre = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
                         if _sl_pre:
+                            # MÊME enveloppe que le moteur : budget autonome
+                            # libre plafonné au cash réel. Passer le cash total
+                            # ferait diverger l'affichage du balayage de
+                            # reliquat de celui réellement appliqué à l'ordre.
+                            _avail = min(_ae.get_budget_info()["available"], cash)
                             _plan = _ae.compute_position_size(
                                 t, current_price,
                                 float(_sl_pre.group(1).replace(",", ".")),
-                                cash,
+                                _avail,
                             )
                             auto_qty = _plan["qty"]
                             auto_reason = _plan["veto"] or _plan["reason"]

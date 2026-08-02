@@ -525,6 +525,7 @@ Le mode Autonome permet au bot de gérer un **budget isolé** en totale indépen
 - **SL/TP obligatoires** — aucune entrée sans protection Expert BD
 - **Playwright requis pour les entrées** — si la session expire, le bot ne peut plus entrer mais les positions existantes restent protégées par leurs ordres Expert sur BD
 - **Marché ouvert uniquement** — aucune entrée en dehors des heures 9h05–17h35
+- **Balayage du reliquat de cash** — si le cash restant après l'achat tombe sous `CASH_SWEEP_MIN_LEFTOVER` (500 €), la position est agrandie pour l'absorber : ce fond ne pouvait financer aucun autre trade. ⚠️ Ce mécanisme **prime sur le plafond de taille** et augmente donc la perte au SL dans la même proportion — c'est un arbitrage assumé entre capital déployé et respect strict du sizing par le risque. La nouvelle perte au SL est annoncée dans le message d'achat ; `CASH_SWEEP_MIN_LEFTOVER=0` désactive
 - **Aucune analyse IA quand toutes les places sont prises** — dès que les emplacements autonomes sont occupés (positions + ordres d'achat en attente), les analyses IA *planifiées* sont sautées : scan US de 16h et recherche de candidats du briefing. Elles ne pourraient produire que des opportunités inachetables. Le bot le dit une fois par jour dans Telegram, plutôt que de rester silencieux
 - **Annulation auto des ordres d'entrée périmés** — un ordre d'achat limite non exécuté à la clôture du marché du titre est **annulé sur BD** (vérifié à chaque cycle d'entrée + sync horaire). Un limite qui traîne ne se remplit que quand le cours retombe à travers — c'est-à-dire quand la thèse momentum est déjà morte (anti-sélection). Idem si une validation ultérieure rend EXCLUS sur le même titre : l'ordre en attente est annulé immédiatement
 
@@ -661,6 +662,13 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-02 — Balayage du reliquat de cash + plafond de position à 1 000 €
+- **`POSITION_BUDGET_MAX` passe de 800 € à 1 000 €.** Effet de bord voulu : le plancher de viabilité US étant à 930 €, le scan US n'est plus bloqué par construction (voir l'entrée frais ci-dessous)
+- **Nouveau : `CASH_SWEEP_MIN_LEFTOVER` (défaut 500 €).** Si le cash restant APRÈS l'achat prévu tombe sous ce seuil, la position est agrandie pour l'absorber, frais inclus. Motif : un fond de portefeuille trop petit pour financer un second trade ne travaille pas, il attend. Exemple mesuré (GLE à 81 €) : à 900 € disponibles le moteur achetait 11 titres et laissait 9 € dormir ; à 1 200 € il achetait 5 titres d'Airbus et laissait **218 €** — désormais porté à 6 titres, 21 € de reliquat
+- **Le balayage prime volontairement sur `MAX_POSITION_PCT`** — sans ça il serait sans effet dès que le plafond de taille est la contrainte active. **La contrepartie est réelle** : la perte au SL grandit dans la même proportion, et le sizing par le risque (`RISK_PER_TRADE_PCT`) n'est plus respecté sur un trade balayé. Le message d'achat annonce la nouvelle perte au SL en clair (`risque au SL 78 € au lieu de 65 €`), et `0` désactive le mécanisme
+- **Pas de balayage quand le reliquat reste utile** : à 1 800 € disponibles, 577 € restent après l'achat — au-dessus du seuil, donc intacts, ils peuvent financer un autre trade
+- **Le scan dimensionne sur la même enveloppe que le moteur** (budget autonome libre plafonné au cash réel, plus le cash total) : sinon l'affichage annonçait un balayage différent de celui réellement appliqué à l'ordre
+
 ### 2026-08-02 — Frais BD : barème réel, vérifié au centime sur nos ordres
 Le forfait unique de 1,98 €/ordre a été remplacé le matin même par 1,98 € Euronext / 8,50 € « US et étranger ». Le tarif US était juste ; le reste ne l'était pas. Contrôle sur les tarifs publics BD **et** sur le PRU de nos propres positions (le PRU BD inclut tous les frais — la différence avec le montant exécuté les donne exactement) :
 
@@ -674,7 +682,7 @@ Le forfait unique de 1,98 €/ordre a été remplacé le matin même par 1,98 �
 - **Le courtage Euronext est par tranches**, pas forfaitaire : 0,99 € < 500 € · 1,90 € < 1 000 € · 2,90 € < 2 000 € · 3,80 € < 4 400 € · 0,09 % au-delà. Les frais enregistrés dans l'historique le confirment un par un (AL2SI 1 130 € → 2,90 € · GNFT 851 € → 1,90 € · LBIRD 1 174 € → 2,90 €)
 - **La commission de change (0,08 % par opération) manquait** : c'est elle qui complète les 8,50 € de courtage US pour retomber sur les 9,03 € réellement payés sur BAC
 - **Les places non-US étaient tarifées comme les US** (8,50 €) alors que Londres et Xetra coûtent **0,15 % avec un minimum de 15 €**, Madrid/Suisse/Lisbonne 0,20 % min 18 €, et les autres marchés (dont Milan) **0,48 % min 41,90 €** — soit 5× le tarif annoncé. Latent aujourd'hui (l'univers de scan est Euronext + US), faux dès qu'on l'élargit
-- **Conséquence directe sur le plancher de scan** : `min_viable_cash()` passe de 198 € partout à **130 € sur Euronext** (100 € hors TTF) et **930 € aux US**. Le forfait de 1,98 € avait fait sauter 5 scans Euronext entre le 17 et le 29/07 à 154 € de cash — alors que 154 € suffisait. À l'inverse, aucun achat US ne peut passer le seuil 5× sous `POSITION_BUDGET_MAX=800 €` : le scan US le dit maintenant explicitement (voir « Frais Bourse Direct — barème réel »)
+- **Conséquence directe sur le plancher de scan** : `min_viable_cash()` passe de 198 € partout à **130 € sur Euronext** (100 € hors TTF) et **930 € aux US**. Le forfait de 1,98 € avait fait sauter 5 scans Euronext entre le 17 et le 29/07 à 154 € de cash — alors que 154 € suffisait. À l'inverse, aucun achat US ne peut passer le seuil 5× tant que `POSITION_BUDGET_MAX` reste sous 930 € : le scan US le dit maintenant explicitement (voir « Frais Bourse Direct — barème réel »)
 - `config.order_fees()` / `roundtrip_fee()` / `min_viable_amount()` prennent le **montant** de l'ordre, plus seulement le ticker ; scan, gain réduit, achat autonome et backtest y sont branchés, et le détail des frais est affiché (`courtage 3,80€ + TTF 3,63€`)
 
 ### 2026-07-31 — Analyses IA automatiques sautées quand aucun achat n'est possible
@@ -931,7 +939,8 @@ DEFAULT_SL_PCT=7          # stop-loss fixe fallback en % sous le PRU
 DEFAULT_TP_PCT=10         # take-profit minimum en % au-dessus du PRU
 BREAKEVEN_THRESHOLD=5     # trailing stop positions manuelles : % au-dessus du PRU
 POSITION_BUDGET_PCT=50    # % du cash investi par nouvelle position (suggestions /scan)
-POSITION_BUDGET_MAX=800   # plafond en € par position (à adapter à votre capital)
+POSITION_BUDGET_MAX=1000  # plafond en € par position (à adapter à votre capital)
+CASH_SWEEP_MIN_LEFTOVER=500  # sous ce reliquat, la position est agrandie (0 = off)
 
 RSI_ENTRY_MIN=35          # zone d'entrée saine (pullback dans la tendance)
 RSI_ENTRY_MAX=65          # au-delà : on attend le repli
@@ -1017,15 +1026,12 @@ AL2SI 1 130 € → 2,90 € · GNFT 851 € → 1,90 € · LBIRD 1 174 € →
 Calculé par balayage (`config.min_viable_amount`) et non par formule : le
 barème mêle un forfait par tranches et des composantes proportionnelles.
 
-⚠️ **Conséquence à connaître** : un trade US exige une position d'environ
-**930 €**, au-dessus de `POSITION_BUDGET_MAX` (800 €) — aucun achat US ne peut
-donc passer. Le scan US le dit explicitement au lieu d'échouer en silence. Pour
-rouvrir le US, au choix :
-
-- monter `POSITION_BUDGET_MAX` à 950 € ou plus (positions US plus grosses) ;
-- ou baisser `MIN_NET_GAIN_FEE_RATIO_US` à 3 (~560 € de position mini), en
-  acceptant que les frais pèsent plus lourd dans le gain ;
-- ou rester sur Euronext, où les frais sont 4 à 5× moindres.
+⚠️ **Le US ne passe qu'au-dessus de 930 €.** `POSITION_BUDGET_MAX` est à
+**1 000 €** précisément pour laisser cette marge — sous 930 €, aucun achat US
+ne peut respecter le seuil 5× et le scan US le dit explicitement au lieu
+d'échouer en silence. Si vous redescendez ce plafond sous 930 €, le US se
+referme ; l'autre levier est `MIN_NET_GAIN_FEE_RATIO_US` (à 3 : ~560 € de
+position mini, mais les frais pèsent plus lourd dans le gain).
 
 ## Lancer en tâche de fond
 

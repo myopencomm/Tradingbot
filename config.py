@@ -117,7 +117,19 @@ SMALL_GAIN_MODE = os.getenv("SMALL_GAIN_MODE", "off").strip().lower() in ("on", 
 
 # Sizing d'une nouvelle position : % du cash, plafonné en €
 POSITION_BUDGET_PCT = float(os.getenv("POSITION_BUDGET_PCT", "50"))
-POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "800"))
+POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "1000"))
+
+# ── Balayage du reliquat de cash ─────────────────────────────────────────────
+# Si, APRÈS l'achat prévu, le cash restant tombe sous ce seuil, la position est
+# agrandie pour l'absorber : un fond de portefeuille trop petit pour financer un
+# second trade ne travaille pas, il attend.
+#
+# ⚠️ Ce réglage PRIME sur le plafond de taille (MAX_POSITION_PCT) : c'est un
+# choix assumé de déployer le capital plutôt que de le laisser dormir. La perte
+# au SL grandit dans la même proportion que la position — le sizing par le
+# risque (RISK_PER_TRADE_PCT) n'est donc plus respecté sur un trade balayé. Le
+# nouveau risque est annoncé dans le message d'achat. 0 = désactivé.
+CASH_SWEEP_MIN_LEFTOVER = float(os.getenv("CASH_SWEEP_MIN_LEFTOVER", "500"))
 
 # ── Frais Bourse Direct — BARÈME RÉEL, PAR ORDRE ──────────────────────────────
 # Tarifs publics BD (boursedirect.fr/fr/bourse/tarifs), VÉRIFIÉS au centime près
