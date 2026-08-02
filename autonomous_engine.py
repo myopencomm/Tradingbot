@@ -454,16 +454,23 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     cost_eur = round(qty * entry_eur, 2)
 
     # ── Garde rentabilité : les frais A/R ne doivent pas manger le gain visé ──
-    # Tarif de la place : 3.96€ A/R sur Euronext, 17€ sur US/étranger.
-    from config import roundtrip_fee, min_gain_fee_ratio, is_foreign_ticker
-    roundtrip  = roundtrip_fee(ticker)
+    # Frais RÉELS de la place ET de la taille : courtage par tranches, plus la
+    # TTF française (0.4% à l'achat) et la commission de change (0.08%) — sur
+    # une grande valeur française la TTF pèse plus lourd que le courtage.
+    from config import (roundtrip_fee, min_gain_fee_ratio, brokerage_fee,
+                        is_foreign_currency, _ttf_liable, FX_COMMISSION_RATE, TTF_RATE)
+    roundtrip  = roundtrip_fee(ticker, cost_eur)
     gain_ratio = min_gain_fee_ratio(ticker)
     gross_tp_eur = qty * (tp - entry) * fx
     if gross_tp_eur <= 0 or gross_tp_eur < roundtrip * gain_ratio:
-        place = " (tarif étranger)" if is_foreign_ticker(ticker) else ""
+        detail = [f"courtage {2 * brokerage_fee(ticker, cost_eur):.2f}€"]
+        if is_foreign_currency(ticker):
+            detail.append(f"change {2 * cost_eur * FX_COMMISSION_RATE:.2f}€")
+        if _ttf_liable(ticker):
+            detail.append(f"TTF {cost_eur * TTF_RATE:.2f}€")
         send_fn(
             f"🚫 {ticker} : achat auto annulé — gain visé {gross_tp_eur:.0f}€ trop faible "
-            f"vs frais A/R {roundtrip:.2f}€{place} (seuil {gain_ratio:.0f}×). "
+            f"vs frais A/R {roundtrip:.2f}€ ({' + '.join(detail)}, seuil {gain_ratio:.0f}×). "
             f"Position trop petite pour rentabiliser les frais."
         )
         print(f"[Auto] {ticker} : gain {gross_tp_eur:.0f}€ < {roundtrip*gain_ratio:.0f}€ — skip frais")

@@ -51,3 +51,5 @@ dashboard-link.local.txt
 
 # Univers de marché découvert automatiquement (régénérable, volumineux)
 universe_cache.json
+# Assujettissement TTF par ticker (pays + capitalisation yfinance, régénérable)
+ttf_cache.json

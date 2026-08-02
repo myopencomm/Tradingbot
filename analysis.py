@@ -11,8 +11,9 @@ from ai_provider import get_provider, VISION_PROMPT
 from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT,
                     POSITION_BUDGET_PCT, POSITION_BUDGET_MAX,
-                    BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO,
-                    roundtrip_fee, min_gain_fee_ratio, is_foreign_ticker,
+                    roundtrip_fee, min_gain_fee_ratio, brokerage_fee,
+                    is_foreign_currency, min_viable_amount,
+                    FX_COMMISSION_RATE, TTF_RATE, _ttf_liable,
                     FALLBACK_TP_MIN_PCT, FALLBACK_TP_MAX_PCT,
                     RSI_ENTRY_MIN, RSI_ENTRY_MAX, RSI_HARD_MAX,
                     ATR_SL_MULT, MIN_SL_PCT, MAX_SL_PCT, MIN_RR,
@@ -769,10 +770,6 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
 
     for c in candidates[:3]:
         t = c["ticker"]
-        # Frais propres à la place : un aller-retour US coûte 17€, contre
-        # 3.96€ sur Euronext. Une constante unique sous-estimait de 4x le
-        # coût réel de tout candidat étranger.
-        roundtrip = roundtrip_fee(t)
         try:
             # SOURCE DE DÉCISION UNIQUE — même moteur que le scan, mode gain_reduit
             res = validate_candidate(t, mode="gain_reduit", cash=cash, ai=ai, item=c)
@@ -810,12 +807,18 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
             # Budget en EUR, cours en devise du titre → conversion FX
             budget   = min(cash * POSITION_BUDGET_PCT / 100, POSITION_BUDGET_MAX)
             qty      = max(1, int(budget / (entry * g_fx)))
+            # Frais réels de la place ET de la taille : le barème BD est par
+            # tranches, et la TTF (0.4% à l'achat sur une grande valeur
+            # française) comme la commission de change sont proportionnelles.
+            cost_eur   = qty * entry * g_fx
+            roundtrip  = roundtrip_fee(t, cost_eur)
+            gain_ratio = min_gain_fee_ratio(t)
             gross_tp = qty * (tp_v - entry) * g_fx
             net_tp   = gross_tp - roundtrip
-            if gross_tp < roundtrip * MIN_NET_GAIN_FEE_RATIO:
+            if gross_tp < roundtrip * gain_ratio:
                 rejected.append(
                     f"- {company_label} : gain net {net_tp:.0f}€ trop faible vs frais "
-                    f"({MIN_NET_GAIN_FEE_RATIO:.0f}× {roundtrip:.2f}€ requis)"
+                    f"({gain_ratio:.0f}× {roundtrip:.2f}€ requis)"
                 )
                 continue
 
@@ -1917,16 +1920,24 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                             f"expert {sl_v} {tp_v}{stretch}"
                         )
 
-                        # ── Rentabilité nette de frais (courtage A/R, en EUR) ──
-                        roundtrip = roundtrip_fee(t)
+                        # ── Rentabilité nette de TOUS les frais, en EUR ───────
+                        # Courtage (barème par tranches) + commission de change
+                        # + TTF française à l'achat : sur une grande valeur
+                        # française la TTF dépasse le courtage à elle seule.
+                        roundtrip = roundtrip_fee(t, cost_eur)
                         gain_ratio = min_gain_fee_ratio(t)
                         gross_tp  = qty_sugg * (tp_v - current_price) * q_fx
                         net_tp    = gross_tp - roundtrip
                         loss_sl   = qty_sugg * (current_price - sl_v) * q_fx + roundtrip
                         fee_pct   = roundtrip / cost_eur * 100 if cost_eur else 0
-                        place = " 🇺🇸/étranger" if is_foreign_ticker(t) else ""
+                        parts = [f"courtage {2 * brokerage_fee(t, cost_eur):.2f}€"]
+                        if is_foreign_currency(t):
+                            parts.append(f"change {2 * cost_eur * FX_COMMISSION_RATE:.2f}€")
+                        if _ttf_liable(t):
+                            parts.append(f"TTF {cost_eur * TTF_RATE:.2f}€")
                         val += (
-                            f"\n💸 Frais A/R ≈ {roundtrip:.2f}€{place} ({fee_pct:.1f}% de la position)"
+                            f"\n💸 Frais A/R ≈ {roundtrip:.2f}€ ({fee_pct:.1f}% de la position)"
+                            f" — {' + '.join(parts)}"
                             f"\n   Gain net au TP ≈ +{net_tp:.0f}€ | Perte au SL ≈ -{loss_sl:.0f}€"
                         )
                         # Garde : si les frais mangent une part trop grande du gain
@@ -2022,14 +2033,17 @@ US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
 
 def min_viable_cash(us: bool = False) -> float:
     """Cash minimum pour qu'UN achat puisse passer le garde-fou frais : le gain
-    brut au TP (+DEFAULT_TP_PCT%) doit valoir ≥ MIN_NET_GAIN_FEE_RATIO × les
+    brut au TP (+DEFAULT_TP_PCT%) doit valoir ≥ le seuil de rentabilité × les
     frais aller-retour. En dessous, tout candidat serait vetoé — un scan
     automatique ne peut alors rien produire.
 
-    `us=True` applique le tarif étranger : à 8.50€/ordre le plancher grimpe de
-    ~200€ à ~850€, ce qui change complètement la faisabilité d'un scan US."""
+    Résolu sur le barème RÉEL (tranches + TTF + change), pas sur un forfait :
+    Euronext ~130€ sur une valeur soumise à la TTF, ~100€ sinon ; US ~930€.
+    L'ancien forfait de 1.98€/ordre donnait 198€ partout — il a fait sauter des
+    scans Euronext alors que le cash suffisait (5 fois entre le 17 et le 29/07,
+    à 154€ de cash pour un plancher réel de 130€)."""
     ref = "NVDA" if us else "MC.PA"        # tickers témoins des deux tarifs
-    return round(roundtrip_fee(ref) * min_gain_fee_ratio(ref) / (DEFAULT_TP_PCT / 100), 0)
+    return min_viable_amount(ref)
 
 
 # Anti-spam : un seul message « scan sauté » par jour et par scan planifié.
@@ -2061,15 +2075,17 @@ def scan_us_opportunities(send_fn) -> None:
     mode autonome sans emplacement libre ni budget : inutile de brûler 8
     validations IA pour des opportunités que rien ne pourra acheter. Le /scan
     MANUEL n'est jamais concerné (toujours complet, positions incluses)."""
-    # Plancher au TARIF US : 8.50€/ordre au lieu de 1.98€ change tout.
+    # Plancher au TARIF US RÉEL : 8.50€/ordre + 0.08% de commission de change,
+    # soit ~18.50€ l'aller-retour sur une position de 900€.
     floor = min_viable_cash(us=True)
     cash = portfolio.get_cash()
+    us_roundtrip = roundtrip_fee("NVDA", max(floor, POSITION_BUDGET_MAX))
 
     # Cas particulier à dire franchement : si le plancher dépasse le plafond de
     # taille de position, aucun achat US ne pourra JAMAIS passer, quel que soit
     # le cash. Mieux vaut l'annoncer que laisser le scan échouer en silence.
     if floor > POSITION_BUDGET_MAX:
-        msg = (f"frais US {roundtrip_fee('NVDA'):.0f}€ A/R : il faudrait une position de "
+        msg = (f"frais US {us_roundtrip:.0f}€ A/R : il faudrait une position de "
                f"{floor:.0f}€ pour respecter le seuil {min_gain_fee_ratio('NVDA'):.0f}×, "
                f"or POSITION_BUDGET_MAX={POSITION_BUDGET_MAX:.0f}€. "
                f"Aucun achat US ne peut passer — augmente POSITION_BUDGET_MAX "
@@ -2083,7 +2099,7 @@ def scan_us_opportunities(send_fn) -> None:
               f"(aucun achat ne passerait le garde-fou frais US)")
         _notify_scan_skipped(send_fn, "Scan US 🇺🇸",
                              f"cash {cash:.0f}€ sous le plancher de {floor:.0f}€ "
-                             f"(frais US {roundtrip_fee('NVDA'):.0f}€ A/R)")
+                             f"(frais US {us_roundtrip:.0f}€ A/R)")
         return
     try:
         import autonomous_engine as _ae

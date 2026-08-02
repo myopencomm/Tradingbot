@@ -1,6 +1,8 @@
+import json
 import math
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 import pytz
 import requests
 import yfinance as yf
@@ -55,6 +57,70 @@ def fx_to_eur(currency: str) -> float:
     except Exception as e:
         print(f"⚠️ FX error {cur}: {e}")
     return 1.0
+
+
+# ── Assujettissement à la TTF française ─────────────────────────────────────
+# Critère officiel : siège social en France ET capitalisation > 1 Md€ (appréciée
+# au 1er décembre précédent). Ni la place ni le suffixe ne le disent — Airbus
+# cote à Paris mais son siège est aux Pays-Bas, Genfit est française mais sous
+# le milliard : les deux sont exonérées, et nos ordres réels le confirment.
+# Cache disque : `country` et `marketCap` ne bougent pas d'un jour à l'autre, et
+# `yf.Ticker().info` est lent (~1s) — inacceptable dans un calcul de frais.
+_TTF_CACHE_PATH = Path(__file__).resolve().parent / "ttf_cache.json"
+_TTF_TTL = 30 * 24 * 3600
+_ttf_cache: dict | None = None
+
+
+def _load_ttf_cache() -> dict:
+    global _ttf_cache
+    if _ttf_cache is None:
+        try:
+            _ttf_cache = json.loads(_TTF_CACHE_PATH.read_text())
+        except Exception:
+            _ttf_cache = {}
+    return _ttf_cache
+
+
+def is_french_large_cap(ticker: str) -> bool:
+    """Société de droit français capitalisant plus de TTF_MIN_MARKET_CAP.
+
+    En cas de donnée indisponible : True pour un `.PA` (surestimer les frais
+    fait renoncer à un trade marginal, les sous-estimer fait entrer dans un
+    trade qui ne couvre pas ses coûts).
+    """
+    import time as _time
+    from config import TTF_MIN_MARKET_CAP
+    t = (ticker or "").strip().upper()
+    if not t.endswith(".PA"):
+        return False
+
+    cache = _load_ttf_cache()
+    entry = cache.get(t)
+    if entry and _time.time() - entry.get("ts", 0) < _TTF_TTL:
+        return bool(entry["liable"])
+
+    try:
+        info = yf.Ticker(t).info or {}
+        country = (info.get("country") or "").strip()
+        cap     = info.get("marketCap")
+        if not country or cap is None:
+            raise ValueError("country/marketCap indisponibles")
+        liable = country == "France" and float(cap) > TTF_MIN_MARKET_CAP
+    except Exception as e:
+        # Échec mémorisé 24h : sans ça, un titre que yfinance ne sait pas
+        # classer relance une requête réseau à CHAQUE calcul de frais.
+        print(f"[TTF] {t} : classement impossible ({e}) — considéré assujetti")
+        cache[t] = {"liable": True, "country": "?", "cap": 0.0,
+                    "ts": _time.time() - _TTF_TTL + 24 * 3600}
+        return True
+
+    cache[t] = {"liable": liable, "country": country,
+                "cap": float(cap), "ts": _time.time()}
+    try:
+        _TTF_CACHE_PATH.write_text(json.dumps(cache, indent=1))
+    except Exception as e:
+        print(f"[TTF] cache non écrit : {e}")
+    return liable
 
 
 def get_price(ticker: str) -> float | None:

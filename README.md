@@ -223,6 +223,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Surveillance 4×/jour + sync horaire** | Checks 9h / 12h / 15h / 17h (alertes SL/TP) + sync BD silencieux chaque heure : détection automatique des exécutions |
 | **Séance US prolongée** | Wall Street tournant jusqu'à 22h Paris, le bot prolonge la surveillance des positions US (checks 18h / 20h / 21h40, alertes seules) et lance un **scan US** à 16h — plus seulement au briefing de 9h05 (`US_EXTENDED_HOURS`) |
 | **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
+| **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
 | **Trailing stop automatique** | À +5% (manuel) / +6% (autonome, `AUTO_BREAKEVEN_PCT`), l'ordre Expert est **remplacé sur BD** avec le SL au PRU (P&L ≥ 0 garanti) |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
@@ -660,6 +661,22 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-02 — Frais BD : barème réel, vérifié au centime sur nos ordres
+Le forfait unique de 1,98 €/ordre a été remplacé le matin même par 1,98 € Euronext / 8,50 € « US et étranger ». Le tarif US était juste ; le reste ne l'était pas. Contrôle sur les tarifs publics BD **et** sur le PRU de nos propres positions (le PRU BD inclut tous les frais — la différence avec le montant exécuté les donne exactement) :
+
+| Ordre | Montant | Frais réels | Ancien modèle | Nouveau |
+|---|---|---|---|---|
+| AIR 5 × 196,52 € | 982,60 € | 1,90 € | 1,98 € | **1,90 €** |
+| GLE 12 × 75,55 € | 906,60 € | 5,53 € | 1,98 € | **5,53 €** |
+| BAC 12 × 61,43 $ | 647,76 € | 9,03 € | 8,50 € | **9,02 €** |
+
+- **La TTF française manquait — et c'est le plus gros poste sur une valeur française.** 0,4 % du montant (0,3 % avant le 01/04/2025), **à l'achat uniquement**, sociétés au siège en France capitalisant plus de 1 Md€. Sur GLE elle coûte **3,63 €, soit presque le double du courtage**. Ni la place ni le suffixe ne la déterminent : Airbus cote à Paris mais son siège est néerlandais (exonérée — nos 1,90 € de frais réels le prouvent), Genfit est française mais sous le milliard (exonérée aussi). Classement par `country` + `marketCap` yfinance, cache disque 30 j ; donnée manquante = **considéré assujetti** (surestimer les frais fait renoncer à un trade marginal, les sous-estimer fait entrer dans un trade qui ne se rembourse pas)
+- **Le courtage Euronext est par tranches**, pas forfaitaire : 0,99 € < 500 € · 1,90 € < 1 000 € · 2,90 € < 2 000 € · 3,80 € < 4 400 € · 0,09 % au-delà. Les frais enregistrés dans l'historique le confirment un par un (AL2SI 1 130 € → 2,90 € · GNFT 851 € → 1,90 € · LBIRD 1 174 € → 2,90 €)
+- **La commission de change (0,08 % par opération) manquait** : c'est elle qui complète les 8,50 € de courtage US pour retomber sur les 9,03 € réellement payés sur BAC
+- **Les places non-US étaient tarifées comme les US** (8,50 €) alors que Londres et Xetra coûtent **0,15 % avec un minimum de 15 €**, Madrid/Suisse/Lisbonne 0,20 % min 18 €, et les autres marchés (dont Milan) **0,48 % min 41,90 €** — soit 5× le tarif annoncé. Latent aujourd'hui (l'univers de scan est Euronext + US), faux dès qu'on l'élargit
+- **Conséquence directe sur le plancher de scan** : `min_viable_cash()` passe de 198 € partout à **130 € sur Euronext** (100 € hors TTF) et **930 € aux US**. Le forfait de 1,98 € avait fait sauter 5 scans Euronext entre le 17 et le 29/07 à 154 € de cash — alors que 154 € suffisait. À l'inverse, aucun achat US ne peut passer le seuil 5× sous `POSITION_BUDGET_MAX=800 €` : le scan US le dit maintenant explicitement (voir « Frais Bourse Direct — barème réel »)
+- `config.order_fees()` / `roundtrip_fee()` / `min_viable_amount()` prennent le **montant** de l'ordre, plus seulement le ticker ; scan, gain réduit, achat autonome et backtest y sont branchés, et le détail des frais est affiché (`courtage 3,80€ + TTF 3,63€`)
+
 ### 2026-07-31 — Analyses IA automatiques sautées quand aucun achat n'est possible
 - **Le scan US planifié (16h) ne regardait que le cash, jamais les emplacements libres.** Constaté le 31/07 : 3 positions autonomes sur 3 places, cash 495 € — le scan a quand même lancé **8 validations IA** (~4 min), dont une opportunité (`GOOGL`) que le moteur ne pouvait pas acheter et qui est restée en attente. Le log dit tout : `[Auto] Max positions atteint (3 + 0 / 3)` puis, ligne suivante, `[scan] validation 1/8`
 - **Nouveau garde-fou commun : `autonomous_engine.entry_capacity_block()`** — blocage *structurel* d'une entrée autonome (plus d'emplacement libre, ou budget/cash sous le plancher de viabilité). **Aucun appel réseau, aucun état transitoire** : ni session BD (elle se reconnecte) ni cours. Il répond `None` si le mode autonome est désactivé — c'est alors à l'utilisateur de décider quoi faire d'une opportunité, et rien n'est sauté
@@ -884,7 +901,7 @@ L'IA reste dans la boucle comme **contrôle qualitatif symétrique** (news inval
 
 ### Backtest (`backtest.py`)
 
-`venv/bin/python3 backtest.py` rejoue le moteur quantitatif sur l'univers de scan (2023 → aujourd'hui, hypothèses pessimistes : SL prioritaire sur TP dans la même bougie, gaps exécutés à l'open, frais BD réels par place — 1.98€/ordre Euronext, 8.50€ US/étranger). Enseignements de la campagne du 14/07/2026 :
+`venv/bin/python3 backtest.py` rejoue le moteur quantitatif sur l'univers de scan (2023 → aujourd'hui, hypothèses pessimistes : SL prioritaire sur TP dans la même bougie, gaps exécutés à l'open, barème BD réel — tranches Euronext, forfait US, TTF française à l'achat, commission de change). Enseignements de la campagne du 14/07/2026 :
 
 - L'ancienne logique (momentum 1 mois, all-in) perd **-30%** sur la période — la refonte est justifiée.
 - Le moteur 12-1 + MM200 a un edge réel (**+26% brut** sur 3.5 ans) mais les **frais fixes BD consomment tout** sur des positions de ~500€ → il faut **moins de trades, plus gros** (risque 2.5%, coût ≤ 50% du budget, max 2 positions).
@@ -928,8 +945,8 @@ RISK_PER_TRADE_PCT=1.0    # perte au SL en % du budget autonome
 MAX_POSITION_PCT=30       # coût max d'une position en % du budget autonome
 VOL_SCALE_TRIGGER=1.5     # vol 20j > 1.5× vol 1 an → taille réduite de moitié
 
-BROKERAGE_FEE=1.98        # frais BD par ordre — Euronext (aller-retour = 2×)
-BROKERAGE_FEE_US=8.50     # frais BD par ordre — US/étranger (A/R = 17€)
+BROKERAGE_FEE_US=8.50     # courtage BD par ordre US (le barème Euronext est en dur)
+TTF_RATE=0.004            # taxe transactions financières FR, à l'achat (0.4%)
 MIN_NET_GAIN_FEE_RATIO_US=5  # seuil de rentabilité côté étranger
 MIN_NET_GAIN_FEE_RATIO=5  # gain brut au TP requis : au moins N× les frais A/R
 
@@ -943,27 +960,72 @@ DASHBOARD_BIND=127.0.0.1  # 0.0.0.0 pour accès Tailscale/LAN (voir section Dash
 ---
 
 
-### Frais de courtage selon la place
+### Frais Bourse Direct — barème réel
 
-Bourse Direct ne facture pas au même tarif Euronext et l'étranger. Le bot en
-tient compte partout (scan, validation, achat autonome, backtest) :
+Les frais ne sont pas un forfait par ordre : **trois composantes**, dont deux
+que le bot ignorait complètement jusqu'au 02/08/2026.
 
-| Place | Par ordre | Aller-retour | Gain brut exigé (seuil 5×) | Position mini (TP +10 %) |
+**1. Courtage** — par tranches sur Euronext, forfait aux US, pourcentage avec
+minimum ailleurs :
+
+| Place | Courtage par ordre |
+|---|---|
+| Euronext (`.PA`, `.AS`, `.BR`) | 0,99 € < 500 € · 1,90 € < 1 000 € · 2,90 € < 2 000 € · 3,80 € < 4 400 € · puis 0,09 % |
+| US (sans suffixe) | 8,50 € jusqu'à 10 000 €, puis 0,09 % |
+| Londres (`.L`), Xetra (`.DE`) | 0,15 %, **minimum 15 €** |
+| Madrid (`.MC`), Suisse (`.SW`), Lisbonne (`.LS`) | 0,20 %, **minimum 18 €** |
+| Autres marchés (dont Milan `.MI`) | 0,48 %, **minimum 41,90 €** |
+
+**2. TTF française** — 0,4 % du montant, **à l'achat uniquement**, sur les
+sociétés dont le **siège social est en France** et la capitalisation dépasse
+**1 Md€**. Sur une grande valeur française elle coûte *plus cher que le
+courtage* (3,63 € contre 1,90 € sur un ordre de 900 €). Ni la place ni le
+suffixe ne suffisent à trancher : Airbus cote à Paris mais son siège est aux
+Pays-Bas, Genfit est française mais sous le milliard — les deux sont exonérées.
+Le classement vient de `country` + `marketCap` (yfinance), en cache disque 30
+jours (`ttf_cache.json`). **Donnée manquante = considéré assujetti** :
+surestimer les frais fait renoncer à un trade marginal, les sous-estimer fait
+entrer dans un trade qui ne couvre pas ses coûts.
+
+**3. Commission de change** — 0,08 % par opération sur tout ordre libellé en
+devise (US, Londres, Suisse).
+
+#### Vérifié au centime sur nos propres ordres
+
+Le PRU affiché par Bourse Direct inclut tous les frais : la différence avec le
+montant exécuté les donne exactement.
+
+| Ordre | Montant exécuté | Frais réels | Modèle | Détail |
 |---|---|---|---|---|
-| Euronext (`.PA`, `.AS`, `.BR`) | 1,98 € | 3,96 € | 19,80 € | ~200 € |
-| US (sans suffixe) et étranger (`.DE`, `.L`, `.MI`…) | 8,50 € | 17,00 € | 85,00 € | ~850 € |
+| AIR 5 × 196,52 € | 982,60 € | **1,90 €** | 1,90 € | courtage seul (Airbus SE = siège NL, pas de TTF) |
+| GLE 12 × 75,55 € | 906,60 € | **5,53 €** | 5,53 € | 1,90 courtage + 3,63 TTF |
+| BAC 12 × 61,43 $ | 647,76 € | **9,03 €** | 9,02 € | 8,50 courtage US + 0,52 change |
 
-La place est déduite du suffixe du ticker (`config.is_foreign_ticker`).
+Les frais enregistrés dans l'historique confirment les tranches Euronext :
+AL2SI 1 130 € → 2,90 € · GNFT 851 € → 1,90 € · LBIRD 1 174 € → 2,90 €.
 
-⚠️ **Conséquence à connaître** : avec les valeurs par défaut, un trade US exige
-une position d'environ **850 €**, au-dessus de `POSITION_BUDGET_MAX` (800 €) —
-aucun achat US ne peut donc passer. Le scan US le dit explicitement au lieu
-d'échouer en silence. Pour rouvrir le US, au choix :
+#### Position minimale rentable (seuil 5×, TP +10 %)
 
-- monter `POSITION_BUDGET_MAX` à 900 € ou plus (positions US plus grosses) ;
-- ou baisser `MIN_NET_GAIN_FEE_RATIO_US` à 3 (~510 € de position mini), en
+| Place | Position mini |
+|---|---|
+| Euronext, valeur non soumise à la TTF | ~100 € |
+| Euronext, grande valeur française (TTF) | ~130 € |
+| US | ~930 € |
+| Xetra / Londres | ~1 500 € |
+| Milan / autres marchés | ~4 190 € |
+
+Calculé par balayage (`config.min_viable_amount`) et non par formule : le
+barème mêle un forfait par tranches et des composantes proportionnelles.
+
+⚠️ **Conséquence à connaître** : un trade US exige une position d'environ
+**930 €**, au-dessus de `POSITION_BUDGET_MAX` (800 €) — aucun achat US ne peut
+donc passer. Le scan US le dit explicitement au lieu d'échouer en silence. Pour
+rouvrir le US, au choix :
+
+- monter `POSITION_BUDGET_MAX` à 950 € ou plus (positions US plus grosses) ;
+- ou baisser `MIN_NET_GAIN_FEE_RATIO_US` à 3 (~560 € de position mini), en
   acceptant que les frais pèsent plus lourd dans le gain ;
-- ou rester sur Euronext uniquement, où les frais sont 4× moindres.
+- ou rester sur Euronext, où les frais sont 4 à 5× moindres.
 
 ## Lancer en tâche de fond
 

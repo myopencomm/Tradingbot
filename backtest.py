@@ -32,16 +32,21 @@ import yfinance as yf
 
 from analysis import SCAN_UNIVERSE, US_UNIVERSE
 
-FEE = 1.98            # frais BD par ordre, tarif Euronext (défaut)
-# Un ticker US/étranger coûte ~4x plus cher. Simuler tout le monde à 1.98€
-# surestimait la performance de chaque trade US de ~13€ l'aller-retour.
+FEE = 1.90            # frais BD par ordre — forfait d'override manuel
+# Barème RÉEL par défaut (tranches Euronext, forfait US, TTF française à
+# l'achat, commission de change) : simuler tout le monde à un forfait unique
+# surestimait chaque trade US de ~14€ l'aller-retour, et chaque achat de
+# grande valeur française de la TTF (0.4% du montant, soit ~3.60€ sur 900€).
 from config import roundtrip_fee as _roundtrip_fee
 
 
-def _fee_pair(ticker: str, fee: float) -> float:
-    """Frais aller-retour du backtest : tarif réel de la place, sauf si
-    l'appelant force un montant différent de la valeur par défaut."""
-    return 2 * fee if fee != FEE else _roundtrip_fee(ticker)
+def _fee_pair(ticker: str, fee: float, amount: float) -> float:
+    """Frais aller-retour du backtest : barème réel de la place et de la
+    taille, sauf si l'appelant force un forfait différent du défaut.
+
+    `amount` est pris dans la devise de cotation — le backtest ne fait pas de
+    conversion, l'écart est négligeable devant les hypothèses du modèle."""
+    return 2 * fee if fee != FEE else _roundtrip_fee(ticker, amount)
 BUDGET = 2000.0       # budget autonome de référence
 # Trailing : seuil de remontée du SL au PRU. LU DEPUIS LA CONFIG DE PRODUCTION —
 # la valeur était figée à 3.0 ici alors que le bot tourne à +6% depuis le
@@ -135,7 +140,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
             elif days_held >= MAX_HOLD_DAYS:
                 exit_price, why = row["close"], "TIME"
             if exit_price is not None:
-                pnl = (exit_price - p["entry"]) * p["qty"] - _fee_pair(p["ticker"], fee)
+                pnl = (exit_price - p["entry"]) * p["qty"] - _fee_pair(
+                    p["ticker"], fee, p["entry"] * p["qty"])
                 closed.append({"ticker": p["ticker"], "pnl": pnl, "why": why,
                                "entry_date": p["entry_date"], "exit_date": d,
                                "ret_pct": (exit_price / p["entry"] - 1) * 100})
@@ -214,7 +220,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     for p in positions:
         df = ind[p["ticker"]]
         last = float(df["close"].iloc[-1])
-        pnl = (last - p["entry"]) * p["qty"] - _fee_pair(p["ticker"], fee)
+        pnl = (last - p["entry"]) * p["qty"] - _fee_pair(
+            p["ticker"], fee, p["entry"] * p["qty"])
         closed.append({"ticker": p["ticker"], "pnl": pnl, "why": "OPEN",
                        "entry_date": p["entry_date"], "exit_date": df.index[-1],
                        "ret_pct": (last / p["entry"] - 1) * 100})
@@ -385,7 +392,8 @@ def main():
     ]
     print(f"\nSimulation {dates[0].date()} → {dates[-1].date()} "
           f"(budget {BUDGET:.0f}€, frais réels par place : "
-          f"{FEE}€/ordre Euronext, {_roundtrip_fee('NVDA')/2:.2f}€ US)\n" + "=" * 74)
+          f"barème BD réel : ~{_roundtrip_fee('MC.PA', 900)/2:.2f}€/ordre Euronext TTF incluse, "
+          f"{_roundtrip_fee('NVDA', 900)/2:.2f}€ US)\n" + "=" * 74)
     results = {}
     for name, cfg in configs:
         r = simulate(ind, dates, regime_ok, **cfg)

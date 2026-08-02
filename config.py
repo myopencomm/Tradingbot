@@ -119,39 +119,169 @@ SMALL_GAIN_MODE = os.getenv("SMALL_GAIN_MODE", "off").strip().lower() in ("on", 
 POSITION_BUDGET_PCT = float(os.getenv("POSITION_BUDGET_PCT", "50"))
 POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "800"))
 
-# ── Frais de courtage Bourse Direct, PAR ORDRE ────────────────────────────────
-# Euronext (Paris / Amsterdam / Bruxelles) : ~1.98€, confirmé via capture réseau.
-# US et autres places étrangères : nettement plus cher (~8.50€/ordre). Ignorer
-# cet écart faussait tout le calcul de rentabilité : à 4x le tarif Euronext, un
-# aller-retour US coûte 17€ au lieu de 3.96€, et la taille minimale d'une
-# position rentable passe de ~200€ à ~850€.
-# Un aller-retour (achat + vente) = 2 × ce montant.
-BROKERAGE_FEE    = float(os.getenv("BROKERAGE_FEE", "1.98"))
-BROKERAGE_FEE_US = float(os.getenv("BROKERAGE_FEE_US", "8.50"))
+# ── Frais Bourse Direct — BARÈME RÉEL, PAR ORDRE ──────────────────────────────
+# Tarifs publics BD (boursedirect.fr/fr/bourse/tarifs), VÉRIFIÉS au centime près
+# sur nos propres ordres exécutés (le PRU affiché par BD inclut tous les frais) :
+#
+#   AIR  5 × 196.52€ = 982.60€  → PRU BD 984.50€  → 1.90€  = courtage seul
+#                                 (Airbus SE, siège aux Pays-Bas : pas de TTF)
+#   GLE 12 ×  75.55€ = 906.60€  → PRU BD 912.13€  → 5.53€  = 1.90 courtage
+#                                 + 3.63 de TTF (0.4% — Société Générale, France)
+#   BAC 12 ×  61.43$ = 737.16$  → PRU BD 656.79€  → 9.04€  = 8.50 courtage US
+#                                 + 0.52 de commission de change (0.08%)
+#
+# Trois composantes, pas une : le forfait unique de 1.98€ qui servait jusqu'ici
+# ignorait la TTF (plus chère que le courtage sur une grande valeur française)
+# et la commission de change, et surestimait le courtage des petits ordres.
 
-# Suffixes Yahoo des places au tarif Euronext. Tout le reste (pas de suffixe =
-# NYSE/NASDAQ, .DE Xetra, .L Londres, .MI Milan…) est facturé au tarif étranger.
+# Courtage Euronext (Paris / Amsterdam / Bruxelles) : barème par tranches sur le
+# montant de l'ordre. (2 900€ d'ordre → 3.80€, pas 1.98€.)
+EURONEXT_FEE_TIERS = ((500.0, 0.99), (1000.0, 1.90), (2000.0, 2.90), (4400.0, 3.80))
+EURONEXT_FEE_RATE  = 0.0009            # au-delà de 4 400€
+
+# Courtage US (NYSE / NASDAQ) : forfait jusqu'à 10 000€, puis 0.09%.
+BROKERAGE_FEE_US   = float(os.getenv("BROKERAGE_FEE_US", "8.50"))
+US_FEE_THRESHOLD   = 10000.0
+US_FEE_RATE        = 0.0009
+
+# Autres places étrangères : pourcentage AVEC MINIMUM — c'est le minimum qui
+# s'applique à notre taille de position, et il est bien au-dessus du tarif US.
+FOREIGN_FEE_TABLE = {
+    ".L":  (0.0015, 15.00),   # Londres
+    ".DE": (0.0015, 15.00),   # Xetra / Francfort
+    ".MC": (0.0020, 18.00),   # Madrid
+    ".SW": (0.0020, 18.00),   # Suisse
+    ".LS": (0.0020, 18.00),   # Lisbonne
+}
+FOREIGN_FEE_DEFAULT = (0.0048, 41.90)  # « autres marchés » (dont Milan .MI)
+
+# Commission de change : taux BD + 0.08% par opération, sur tout ordre libellé
+# en devise étrangère (US, Londres, Suisse…). Invisible dans le courtage, bien
+# réelle dans le PRU.
+FX_COMMISSION_RATE = 0.0008
+
+# TTF — taxe sur les transactions financières française. 0.4% depuis le
+# 01/04/2025 (0.3% avant), à l'ACHAT uniquement, sur les titres des sociétés
+# dont le SIÈGE SOCIAL est en France et la capitalisation > 1 Md€ au 1er
+# décembre précédent. Ni la place ni le suffixe ne suffisent à trancher :
+# Airbus (AIR.PA) est néerlandaise et exonérée, Genfit (GNFT.PA) est française
+# mais sous le milliard — les deux le confirment sur nos ordres réels.
+TTF_RATE           = float(os.getenv("TTF_RATE", "0.004"))
+TTF_MIN_MARKET_CAP = 1_000_000_000.0
+
+# Devise par suffixe : sert à savoir si la commission de change s'applique.
+# Absent de la table = EUR (Euronext, Xetra, Milan, Madrid, Lisbonne).
+CURRENCY_BY_SUFFIX = {"": "USD", ".L": "GBP", ".SW": "CHF"}
+
+# Suffixes Yahoo des places au tarif Euronext.
 EURONEXT_SUFFIXES = (".PA", ".AS", ".BR")
+
+
+def _suffix(ticker: str) -> str:
+    """Suffixe Yahoo du ticker ('' = US, convention du projet)."""
+    t = (ticker or "").strip().upper()
+    return t[t.rindex("."):] if "." in t else ""
 
 
 def is_foreign_ticker(ticker: str) -> bool:
     """Vrai si le ticker se traite hors Euronext (donc au tarif majoré)."""
-    t = (ticker or "").strip().upper()
-    if not t:
+    if not (ticker or "").strip():
         return False
-    if "." not in t:
-        return True                       # convention projet : US = sans suffixe
-    return not t.endswith(EURONEXT_SUFFIXES)
+    return _suffix(ticker) not in EURONEXT_SUFFIXES
 
 
-def brokerage_fee(ticker: str = "") -> float:
-    """Frais d'UN ordre pour ce ticker. Sans ticker : tarif Euronext."""
-    return BROKERAGE_FEE_US if is_foreign_ticker(ticker) else BROKERAGE_FEE
+def is_foreign_currency(ticker: str) -> bool:
+    """Vrai si l'ordre est libellé en devise → commission de change."""
+    return CURRENCY_BY_SUFFIX.get(_suffix(ticker), "EUR") != "EUR"
 
 
-def roundtrip_fee(ticker: str = "") -> float:
-    """Frais aller-retour (achat + vente) pour ce ticker."""
-    return 2 * brokerage_fee(ticker)
+def brokerage_fee(ticker: str = "", amount_eur: float = 0.0) -> float:
+    """Courtage d'UN ordre, hors taxes et hors change. Sans ticker : Euronext."""
+    amount = max(0.0, float(amount_eur or 0.0))
+    sfx = _suffix(ticker) if (ticker or "").strip() else ".PA"
+
+    if sfx in EURONEXT_SUFFIXES:
+        for ceiling, fee in EURONEXT_FEE_TIERS:
+            if amount <= ceiling:
+                return fee
+        return round(amount * EURONEXT_FEE_RATE, 2)
+
+    if sfx == "":                                   # NYSE / NASDAQ
+        if amount <= US_FEE_THRESHOLD:
+            return BROKERAGE_FEE_US
+        return round(amount * US_FEE_RATE, 2)
+
+    rate, minimum = FOREIGN_FEE_TABLE.get(sfx, FOREIGN_FEE_DEFAULT)
+    return round(max(minimum, amount * rate), 2)
+
+
+def _ttf_liable(ticker: str) -> bool:
+    """Ce titre supporte-t-il la TTF française à l'achat ?
+
+    Critère officiel : siège social en France ET capitalisation > 1 Md€. Les
+    deux données viennent de yfinance (`country`, `marketCap`), mises en cache
+    par `prices`. Import différé — `config` ne doit dépendre de rien.
+
+    Défaut en cas de donnée manquante : TAXÉ pour un titre `.PA`. Surestimer
+    les frais fait renoncer à un trade marginal ; les sous-estimer fait entrer
+    dans un trade qui ne couvre pas ses coûts.
+    """
+    if _suffix(ticker) != ".PA":
+        return False
+    try:
+        import prices
+        return prices.is_french_large_cap(ticker)
+    except Exception:
+        return True
+
+
+def order_fees(ticker: str = "", amount_eur: float = 0.0, side: str = "buy",
+               ttf_liable: bool | None = None) -> float:
+    """Frais TOTAUX d'un ordre en euros : courtage + change + TTF (à l'achat).
+
+    `ttf_liable` force la réponse (backtest, tests) et évite alors tout accès
+    réseau.
+    """
+    amount = max(0.0, float(amount_eur or 0.0))
+    fees = brokerage_fee(ticker, amount)
+    if is_foreign_currency(ticker):
+        fees += amount * FX_COMMISSION_RATE
+    if side == "buy":
+        if ttf_liable is None:
+            ttf_liable = _ttf_liable(ticker)
+        if ttf_liable:
+            fees += amount * TTF_RATE
+    return round(fees, 2)
+
+
+def roundtrip_fee(ticker: str = "", amount_eur: float = 0.0,
+                  ttf_liable: bool | None = None) -> float:
+    """Frais aller-retour (achat + vente) pour une position de `amount_eur`."""
+    return round(order_fees(ticker, amount_eur, "buy", ttf_liable)
+                 + order_fees(ticker, amount_eur, "sell", ttf_liable), 2)
+
+
+def min_viable_amount(ticker: str = "", tp_pct: float | None = None,
+                      ttf_liable: bool | None = None) -> float:
+    """Plus petite position (en €) dont le gain brut au TP vaut au moins
+    `min_gain_fee_ratio` fois les frais aller-retour.
+
+    Résolu par balayage, pas par formule : les frais mêlent un forfait par
+    tranches et des composantes proportionnelles (TTF, change) — il n'y a pas
+    de solution fermée propre. Renvoie 0 si aucune taille ne convient.
+    """
+    tp = (DEFAULT_TP_PCT if tp_pct is None else tp_pct) / 100.0
+    ratio = min_gain_fee_ratio(ticker)
+    # Résolu UNE fois : le balayage fait des milliers de tours, et un ticker que
+    # yfinance ne sait pas classer relancerait la requête à chaque itération.
+    if ttf_liable is None:
+        ttf_liable = _ttf_liable(ticker)
+    amount = 50.0
+    while amount <= 50_000.0:
+        if amount * tp >= ratio * roundtrip_fee(ticker, amount, ttf_liable):
+            return round(amount, 0)
+        amount += 10.0
+    return 0.0
 
 
 # Marge mini : le gain net au TP doit valoir au moins ce multiple des frais A/R,
@@ -160,7 +290,7 @@ MIN_NET_GAIN_FEE_RATIO = float(os.getenv("MIN_NET_GAIN_FEE_RATIO", "5"))
 # Même exigence côté étranger. Laissée identique par défaut : la relâcher
 # reviendrait à accepter des trades US moins rentables sans le décider
 # explicitement. Attention, avec 5x et un TP à 10%, un trade US exige une
-# position d'environ 850€ (voir min_viable_cash()).
+# position d'environ 920€ (voir min_viable_amount()).
 MIN_NET_GAIN_FEE_RATIO_US = float(os.getenv("MIN_NET_GAIN_FEE_RATIO_US",
                                             str(MIN_NET_GAIN_FEE_RATIO)))
 
@@ -168,6 +298,11 @@ MIN_NET_GAIN_FEE_RATIO_US = float(os.getenv("MIN_NET_GAIN_FEE_RATIO_US",
 def min_gain_fee_ratio(ticker: str = "") -> float:
     """Multiple de frais exigé au TP, selon la place de cotation."""
     return MIN_NET_GAIN_FEE_RATIO_US if is_foreign_ticker(ticker) else MIN_NET_GAIN_FEE_RATIO
+
+
+# Compat : ancien forfait unique. Conservé pour un override manuel via .env et
+# pour les rares appels sans montant ; le barème réel passe par brokerage_fee().
+BROKERAGE_FEE = float(os.getenv("BROKERAGE_FEE", "1.90"))
 
 # Mode GAIN RÉDUIT (trades courts 1-5 jours) : quand AUCUNE opportunité à
 # +DEFAULT_TP_PCT% ne passe la validation, les meilleurs candidats quant sont
