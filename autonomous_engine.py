@@ -454,16 +454,19 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     cost_eur = round(qty * entry_eur, 2)
 
     # ── Garde rentabilité : les frais A/R ne doivent pas manger le gain visé ──
-    from config import BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO
-    roundtrip = 2 * BROKERAGE_FEE
+    # Tarif de la place : 3.96€ A/R sur Euronext, 17€ sur US/étranger.
+    from config import roundtrip_fee, min_gain_fee_ratio, is_foreign_ticker
+    roundtrip  = roundtrip_fee(ticker)
+    gain_ratio = min_gain_fee_ratio(ticker)
     gross_tp_eur = qty * (tp - entry) * fx
-    if gross_tp_eur <= 0 or gross_tp_eur < roundtrip * MIN_NET_GAIN_FEE_RATIO:
+    if gross_tp_eur <= 0 or gross_tp_eur < roundtrip * gain_ratio:
+        place = " (tarif étranger)" if is_foreign_ticker(ticker) else ""
         send_fn(
             f"🚫 {ticker} : achat auto annulé — gain visé {gross_tp_eur:.0f}€ trop faible "
-            f"vs frais A/R {roundtrip:.2f}€ (seuil {MIN_NET_GAIN_FEE_RATIO:.0f}×). "
+            f"vs frais A/R {roundtrip:.2f}€{place} (seuil {gain_ratio:.0f}×). "
             f"Position trop petite pour rentabiliser les frais."
         )
-        print(f"[Auto] {ticker} : gain {gross_tp_eur:.0f}€ < {roundtrip*MIN_NET_GAIN_FEE_RATIO:.0f}€ — skip frais")
+        print(f"[Auto] {ticker} : gain {gross_tp_eur:.0f}€ < {roundtrip*gain_ratio:.0f}€ — skip frais")
         return False
     net_tp = gross_tp_eur - roundtrip
 

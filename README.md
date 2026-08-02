@@ -884,7 +884,7 @@ L'IA reste dans la boucle comme **contrôle qualitatif symétrique** (news inval
 
 ### Backtest (`backtest.py`)
 
-`venv/bin/python3 backtest.py` rejoue le moteur quantitatif sur l'univers de scan (2023 → aujourd'hui, hypothèses pessimistes : SL prioritaire sur TP dans la même bougie, gaps exécutés à l'open, frais BD 1.98€/ordre). Enseignements de la campagne du 14/07/2026 :
+`venv/bin/python3 backtest.py` rejoue le moteur quantitatif sur l'univers de scan (2023 → aujourd'hui, hypothèses pessimistes : SL prioritaire sur TP dans la même bougie, gaps exécutés à l'open, frais BD réels par place — 1.98€/ordre Euronext, 8.50€ US/étranger). Enseignements de la campagne du 14/07/2026 :
 
 - L'ancienne logique (momentum 1 mois, all-in) perd **-30%** sur la période — la refonte est justifiée.
 - Le moteur 12-1 + MM200 a un edge réel (**+26% brut** sur 3.5 ans) mais les **frais fixes BD consomment tout** sur des positions de ~500€ → il faut **moins de trades, plus gros** (risque 2.5%, coût ≤ 50% du budget, max 2 positions).
@@ -928,7 +928,9 @@ RISK_PER_TRADE_PCT=1.0    # perte au SL en % du budget autonome
 MAX_POSITION_PCT=30       # coût max d'une position en % du budget autonome
 VOL_SCALE_TRIGGER=1.5     # vol 20j > 1.5× vol 1 an → taille réduite de moitié
 
-BROKERAGE_FEE=1.98        # frais de courtage BD par ordre (aller-retour = 2×)
+BROKERAGE_FEE=1.98        # frais BD par ordre — Euronext (aller-retour = 2×)
+BROKERAGE_FEE_US=8.50     # frais BD par ordre — US/étranger (A/R = 17€)
+MIN_NET_GAIN_FEE_RATIO_US=5  # seuil de rentabilité côté étranger
 MIN_NET_GAIN_FEE_RATIO=5  # gain brut au TP requis : au moins N× les frais A/R
 
 SMALL_GAIN_MODE=off       # trades courts forcés quand rien ne passe (déconseillé)
@@ -939,6 +941,29 @@ DASHBOARD_BIND=127.0.0.1  # 0.0.0.0 pour accès Tailscale/LAN (voir section Dash
 ```
 
 ---
+
+
+### Frais de courtage selon la place
+
+Bourse Direct ne facture pas au même tarif Euronext et l'étranger. Le bot en
+tient compte partout (scan, validation, achat autonome, backtest) :
+
+| Place | Par ordre | Aller-retour | Gain brut exigé (seuil 5×) | Position mini (TP +10 %) |
+|---|---|---|---|---|
+| Euronext (`.PA`, `.AS`, `.BR`) | 1,98 € | 3,96 € | 19,80 € | ~200 € |
+| US (sans suffixe) et étranger (`.DE`, `.L`, `.MI`…) | 8,50 € | 17,00 € | 85,00 € | ~850 € |
+
+La place est déduite du suffixe du ticker (`config.is_foreign_ticker`).
+
+⚠️ **Conséquence à connaître** : avec les valeurs par défaut, un trade US exige
+une position d'environ **850 €**, au-dessus de `POSITION_BUDGET_MAX` (800 €) —
+aucun achat US ne peut donc passer. Le scan US le dit explicitement au lieu
+d'échouer en silence. Pour rouvrir le US, au choix :
+
+- monter `POSITION_BUDGET_MAX` à 900 € ou plus (positions US plus grosses) ;
+- ou baisser `MIN_NET_GAIN_FEE_RATIO_US` à 3 (~510 € de position mini), en
+  acceptant que les frais pèsent plus lourd dans le gain ;
+- ou rester sur Euronext uniquement, où les frais sont 4× moindres.
 
 ## Lancer en tâche de fond
 

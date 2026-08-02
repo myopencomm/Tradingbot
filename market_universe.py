@@ -21,7 +21,8 @@ PIPELINE EN DEUX ÉTAGES (le second est le seul coûteux) :
      centaines de tickers par appel : ~55 ms/ticker mesuré, contre ~1 s en
      appel unitaire) puis filtre de LIQUIDITÉ. Sans ce filtre, l'univers se
      remplit de micro-caps dont le spread coûte plus cher que les frais de
-     courtage (~4€ A/R, seuil de rentabilité 5×).
+     courtage. Attention : cet univers est US, donc au tarif étranger — 17€
+     l'aller-retour (et non 4€ comme sur Euronext), seuil de rentabilité 5×.
 
 Le résultat est mis en cache sur disque : le scan lit le cache, il ne relance
 jamais ce pipeline lui-même.

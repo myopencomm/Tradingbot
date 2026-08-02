@@ -12,6 +12,7 @@ from config import (TRADING_CONTEXT_PATH, MACRO_ANALYSIS_PATH,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT,
                     POSITION_BUDGET_PCT, POSITION_BUDGET_MAX,
                     BROKERAGE_FEE, MIN_NET_GAIN_FEE_RATIO,
+                    roundtrip_fee, min_gain_fee_ratio, is_foreign_ticker,
                     FALLBACK_TP_MIN_PCT, FALLBACK_TP_MAX_PCT,
                     RSI_ENTRY_MIN, RSI_ENTRY_MAX, RSI_HARD_MAX,
                     ATR_SL_MULT, MIN_SL_PCT, MAX_SL_PCT, MIN_RR,
@@ -765,10 +766,13 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
     pour le moteur autonome. Retourne (opportunités, écartés).
     """
     opps, rejected = [], []
-    roundtrip = 2 * BROKERAGE_FEE
 
     for c in candidates[:3]:
         t = c["ticker"]
+        # Frais propres à la place : un aller-retour US coûte 17€, contre
+        # 3.96€ sur Euronext. Une constante unique sous-estimait de 4x le
+        # coût réel de tout candidat étranger.
+        roundtrip = roundtrip_fee(t)
         try:
             # SOURCE DE DÉCISION UNIQUE — même moteur que le scan, mode gain_reduit
             res = validate_candidate(t, mode="gain_reduit", cash=cash, ai=ai, item=c)
@@ -1914,20 +1918,22 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                         )
 
                         # ── Rentabilité nette de frais (courtage A/R, en EUR) ──
-                        roundtrip = 2 * BROKERAGE_FEE
+                        roundtrip = roundtrip_fee(t)
+                        gain_ratio = min_gain_fee_ratio(t)
                         gross_tp  = qty_sugg * (tp_v - current_price) * q_fx
                         net_tp    = gross_tp - roundtrip
                         loss_sl   = qty_sugg * (current_price - sl_v) * q_fx + roundtrip
                         fee_pct   = roundtrip / cost_eur * 100 if cost_eur else 0
+                        place = " 🇺🇸/étranger" if is_foreign_ticker(t) else ""
                         val += (
-                            f"\n💸 Frais A/R ≈ {roundtrip:.2f}€ ({fee_pct:.1f}% de la position)"
+                            f"\n💸 Frais A/R ≈ {roundtrip:.2f}€{place} ({fee_pct:.1f}% de la position)"
                             f"\n   Gain net au TP ≈ +{net_tp:.0f}€ | Perte au SL ≈ -{loss_sl:.0f}€"
                         )
                         # Garde : si les frais mangent une part trop grande du gain
-                        if gross_tp > 0 and gross_tp < roundtrip * MIN_NET_GAIN_FEE_RATIO:
+                        if gross_tp > 0 and gross_tp < roundtrip * gain_ratio:
                             val += (
                                 f"\n⚠️ Frais élevés vs gain visé : position trop petite "
-                                f"pour ce trade (gain {gross_tp:.0f}€ < {MIN_NET_GAIN_FEE_RATIO:.0f}× frais). "
+                                f"pour ce trade (gain {gross_tp:.0f}€ < {gain_ratio:.0f}× frais). "
                                 f"Augmente la taille ou passe ton tour."
                             )
             except Exception:
@@ -2014,12 +2020,16 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
 
 
-def min_viable_cash() -> float:
+def min_viable_cash(us: bool = False) -> float:
     """Cash minimum pour qu'UN achat puisse passer le garde-fou frais : le gain
     brut au TP (+DEFAULT_TP_PCT%) doit valoir ≥ MIN_NET_GAIN_FEE_RATIO × les
     frais aller-retour. En dessous, tout candidat serait vetoé — un scan
-    automatique ne peut alors rien produire (~200€ avec les défauts BD)."""
-    return round(2 * BROKERAGE_FEE * MIN_NET_GAIN_FEE_RATIO / (DEFAULT_TP_PCT / 100), 0)
+    automatique ne peut alors rien produire.
+
+    `us=True` applique le tarif étranger : à 8.50€/ordre le plancher grimpe de
+    ~200€ à ~850€, ce qui change complètement la faisabilité d'un scan US."""
+    ref = "NVDA" if us else "MC.PA"        # tickers témoins des deux tarifs
+    return round(roundtrip_fee(ref) * min_gain_fee_ratio(ref) / (DEFAULT_TP_PCT / 100), 0)
 
 
 # Anti-spam : un seul message « scan sauté » par jour et par scan planifié.
@@ -2051,14 +2061,29 @@ def scan_us_opportunities(send_fn) -> None:
     mode autonome sans emplacement libre ni budget : inutile de brûler 8
     validations IA pour des opportunités que rien ne pourra acheter. Le /scan
     MANUEL n'est jamais concerné (toujours complet, positions incluses)."""
-    floor = min_viable_cash()
+    # Plancher au TARIF US : 8.50€/ordre au lieu de 1.98€ change tout.
+    floor = min_viable_cash(us=True)
     cash = portfolio.get_cash()
+
+    # Cas particulier à dire franchement : si le plancher dépasse le plafond de
+    # taille de position, aucun achat US ne pourra JAMAIS passer, quel que soit
+    # le cash. Mieux vaut l'annoncer que laisser le scan échouer en silence.
+    if floor > POSITION_BUDGET_MAX:
+        msg = (f"frais US {roundtrip_fee('NVDA'):.0f}€ A/R : il faudrait une position de "
+               f"{floor:.0f}€ pour respecter le seuil {min_gain_fee_ratio('NVDA'):.0f}×, "
+               f"or POSITION_BUDGET_MAX={POSITION_BUDGET_MAX:.0f}€. "
+               f"Aucun achat US ne peut passer — augmente POSITION_BUDGET_MAX "
+               f"ou baisse MIN_NET_GAIN_FEE_RATIO_US.")
+        print(f"[scan US] sauté — {msg}")
+        _notify_scan_skipped(send_fn, "Scan US 🇺🇸", msg)
+        return
+
     if cash < floor:
         print(f"[scan US] sauté — cash {cash:.0f}€ < plancher {floor:.0f}€ "
-              f"(aucun achat ne passerait le garde-fou frais)")
+              f"(aucun achat ne passerait le garde-fou frais US)")
         _notify_scan_skipped(send_fn, "Scan US 🇺🇸",
                              f"cash {cash:.0f}€ sous le plancher de {floor:.0f}€ "
-                             f"(aucun achat ne couvrirait ses frais)")
+                             f"(frais US {roundtrip_fee('NVDA'):.0f}€ A/R)")
         return
     try:
         import autonomous_engine as _ae

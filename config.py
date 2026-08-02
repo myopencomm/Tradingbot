@@ -119,12 +119,55 @@ SMALL_GAIN_MODE = os.getenv("SMALL_GAIN_MODE", "off").strip().lower() in ("on", 
 POSITION_BUDGET_PCT = float(os.getenv("POSITION_BUDGET_PCT", "50"))
 POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "800"))
 
-# Frais de courtage Bourse Direct par ordre (confirmé via capture réseau : ~1.98€).
-# Un aller-retour (achat + vente) = 2 × ce montant. Sert au calcul de rentabilité nette.
-BROKERAGE_FEE = float(os.getenv("BROKERAGE_FEE", "1.98"))
+# ── Frais de courtage Bourse Direct, PAR ORDRE ────────────────────────────────
+# Euronext (Paris / Amsterdam / Bruxelles) : ~1.98€, confirmé via capture réseau.
+# US et autres places étrangères : nettement plus cher (~8.50€/ordre). Ignorer
+# cet écart faussait tout le calcul de rentabilité : à 4x le tarif Euronext, un
+# aller-retour US coûte 17€ au lieu de 3.96€, et la taille minimale d'une
+# position rentable passe de ~200€ à ~850€.
+# Un aller-retour (achat + vente) = 2 × ce montant.
+BROKERAGE_FEE    = float(os.getenv("BROKERAGE_FEE", "1.98"))
+BROKERAGE_FEE_US = float(os.getenv("BROKERAGE_FEE_US", "8.50"))
+
+# Suffixes Yahoo des places au tarif Euronext. Tout le reste (pas de suffixe =
+# NYSE/NASDAQ, .DE Xetra, .L Londres, .MI Milan…) est facturé au tarif étranger.
+EURONEXT_SUFFIXES = (".PA", ".AS", ".BR")
+
+
+def is_foreign_ticker(ticker: str) -> bool:
+    """Vrai si le ticker se traite hors Euronext (donc au tarif majoré)."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        return False
+    if "." not in t:
+        return True                       # convention projet : US = sans suffixe
+    return not t.endswith(EURONEXT_SUFFIXES)
+
+
+def brokerage_fee(ticker: str = "") -> float:
+    """Frais d'UN ordre pour ce ticker. Sans ticker : tarif Euronext."""
+    return BROKERAGE_FEE_US if is_foreign_ticker(ticker) else BROKERAGE_FEE
+
+
+def roundtrip_fee(ticker: str = "") -> float:
+    """Frais aller-retour (achat + vente) pour ce ticker."""
+    return 2 * brokerage_fee(ticker)
+
+
 # Marge mini : le gain net au TP doit valoir au moins ce multiple des frais A/R,
 # sinon le trade ne vaut pas le coup (frais qui mangent le gain).
 MIN_NET_GAIN_FEE_RATIO = float(os.getenv("MIN_NET_GAIN_FEE_RATIO", "5"))
+# Même exigence côté étranger. Laissée identique par défaut : la relâcher
+# reviendrait à accepter des trades US moins rentables sans le décider
+# explicitement. Attention, avec 5x et un TP à 10%, un trade US exige une
+# position d'environ 850€ (voir min_viable_cash()).
+MIN_NET_GAIN_FEE_RATIO_US = float(os.getenv("MIN_NET_GAIN_FEE_RATIO_US",
+                                            str(MIN_NET_GAIN_FEE_RATIO)))
+
+
+def min_gain_fee_ratio(ticker: str = "") -> float:
+    """Multiple de frais exigé au TP, selon la place de cotation."""
+    return MIN_NET_GAIN_FEE_RATIO_US if is_foreign_ticker(ticker) else MIN_NET_GAIN_FEE_RATIO
 
 # Mode GAIN RÉDUIT (trades courts 1-5 jours) : quand AUCUNE opportunité à
 # +DEFAULT_TP_PCT% ne passe la validation, les meilleurs candidats quant sont

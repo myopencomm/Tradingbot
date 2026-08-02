@@ -12,7 +12,8 @@ Compare sur l'univers de scan réel :
 
 Hypothèses PESSIMISTES : entrée au lendemain du signal à l'open +0.3%
 (limite marchande), si SL et TP touchés la même bougie → SL d'abord,
-gap sous le SL → exécution à l'open du gap, frais 1.98€ par ordre.
+gap sous le SL → exécution à l'open du gap, frais réels par place
+(1.98€/ordre sur Euronext, 8.50€ sur US/étranger).
 
 Limites (à garder en tête) :
   - Univers = constituants ACTUELS (biais du survivant — favorise TOUTES
@@ -31,7 +32,16 @@ import yfinance as yf
 
 from analysis import SCAN_UNIVERSE, US_UNIVERSE
 
-FEE = 1.98            # frais BD par ordre
+FEE = 1.98            # frais BD par ordre, tarif Euronext (défaut)
+# Un ticker US/étranger coûte ~4x plus cher. Simuler tout le monde à 1.98€
+# surestimait la performance de chaque trade US de ~13€ l'aller-retour.
+from config import roundtrip_fee as _roundtrip_fee
+
+
+def _fee_pair(ticker: str, fee: float) -> float:
+    """Frais aller-retour du backtest : tarif réel de la place, sauf si
+    l'appelant force un montant différent de la valeur par défaut."""
+    return 2 * fee if fee != FEE else _roundtrip_fee(ticker)
 BUDGET = 2000.0       # budget autonome de référence
 # Trailing : seuil de remontée du SL au PRU. LU DEPUIS LA CONFIG DE PRODUCTION —
 # la valeur était figée à 3.0 ici alors que le bot tourne à +6% depuis le
@@ -125,7 +135,7 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
             elif days_held >= MAX_HOLD_DAYS:
                 exit_price, why = row["close"], "TIME"
             if exit_price is not None:
-                pnl = (exit_price - p["entry"]) * p["qty"] - 2 * fee
+                pnl = (exit_price - p["entry"]) * p["qty"] - _fee_pair(p["ticker"], fee)
                 closed.append({"ticker": p["ticker"], "pnl": pnl, "why": why,
                                "entry_date": p["entry_date"], "exit_date": d,
                                "ret_pct": (exit_price / p["entry"] - 1) * 100})
@@ -204,7 +214,7 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     for p in positions:
         df = ind[p["ticker"]]
         last = float(df["close"].iloc[-1])
-        pnl = (last - p["entry"]) * p["qty"] - 2 * fee
+        pnl = (last - p["entry"]) * p["qty"] - _fee_pair(p["ticker"], fee)
         closed.append({"ticker": p["ticker"], "pnl": pnl, "why": "OPEN",
                        "entry_date": p["entry_date"], "exit_date": df.index[-1],
                        "ret_pct": (last / p["entry"] - 1) * 100})
@@ -374,7 +384,8 @@ def main():
               be_trail=False, tp_mult_r=2.5)),
     ]
     print(f"\nSimulation {dates[0].date()} → {dates[-1].date()} "
-          f"(budget {BUDGET:.0f}€, frais {FEE}€/ordre)\n" + "=" * 74)
+          f"(budget {BUDGET:.0f}€, frais réels par place : "
+          f"{FEE}€/ordre Euronext, {_roundtrip_fee('NVDA')/2:.2f}€ US)\n" + "=" * 74)
     results = {}
     for name, cfg in configs:
         r = simulate(ind, dates, regime_ok, **cfg)
