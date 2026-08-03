@@ -410,21 +410,16 @@ def _portfolio_snapshot() -> str:
                 f"PRU {sym}{cfg['entry_price']} | {cfg['qty']}t | P&L {sym}{pnl:+.0f} | "
                 f"SL {sym}{cfg['target_low']} | TP {sym}{cfg['target_high']}{cur_tag}"
             )
-        elif quote.get("status") in ("suspended", "error"):
-            # Sans suffixe de place (.PA, .DE…), c'est plus probablement un
-            # ticker invalide qu'une vraie suspension (ex: LVMH au lieu de MC.PA)
-            if "." not in cfg["ticker"]:
-                lines.append(
-                    f"  {name} ({cfg['ticker']}): ❓ TICKER INTROUVABLE sur Yahoo — "
-                    f"format à vérifier (ex: LVMH → MC.PA) | PRU {cfg['entry_price']}€ | {cfg['qty']}t"
-                )
-            else:
-                lines.append(
-                    f"  {name} ({cfg['ticker']}): ⛔ COURS SUSPENDU — non vendable (liquidation judiciaire ?) | "
-                    f"PRU {cfg['entry_price']}€ | {cfg['qty']}t"
-                )
         else:
-            lines.append(f"  {name}: prix indisponible | PRU {cfg['entry_price']}€ | {cfg['qty']}t")
+            # Le relevé BD tranche : si le courtier valorise le titre, il n'est
+            # pas suspendu — c'est le ticker stocké qui est faux.
+            code, msg = portfolio.quote_problem(cfg, quote)
+            icon = {"ticker": "🚨", "suspended": "⛔"}.get(code, "⚠️")
+            suffix = " (liquidation judiciaire ?)" if code == "suspended" else ""
+            lines.append(
+                f"  {name} ({cfg['ticker']}): {icon} {msg}{suffix} | "
+                f"PRU {cfg['entry_price']} | {cfg['qty']}t"
+            )
 
     if holds:
         lines.append("🔒 HOLD LONG TERME — HORS GESTION (ne JAMAIS proposer de vente, "

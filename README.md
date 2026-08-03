@@ -316,6 +316,7 @@ TradingBot/
 |---|---|
 | `/add TICKER QTY PRU SL TP` | Ajouter une position manuellement |
 | `/remove TICKER` | Supprimer une position |
+| `/reticker POSITION TICKER` | **Corriger le ticker Yahoo** d'une position sans la recréer (garde flag autonome, PRU brut BD, contexte d'entrée). Le nouveau ticker est refusé s'il ne cote pas |
 | `/hold TICKER [off]` | Marquer HOLD long terme : **hors gestion bot** — plus d'alertes SL/TP ni trailing, exclu du P&L trading (`/stats`), jamais proposé à la vente/swap par l'IA. Le sync BD continue de suivre qté/PRU. Sans argument : liste les HOLD |
 | `/sl TICKER PRIX` | Mettre à jour le stop-loss |
 | `/tp TICKER PRIX` | Mettre à jour le take-profit |
@@ -706,6 +707,16 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-03 — Bug : NVDA enregistré en `NVDA.PA`, position invisible du suivi
+- **Symptôme** : `NVDA: COURS SUSPENDU — non vendable` dans le `/status`, sur une position de 1 233 € achetée et exécutée normalement une heure plus tôt
+- **Cause** : `sync_engine` reconstruit le ticker Yahoo depuis le code place (MIC) renvoyé par BD. **`XNGS`** — NASDAQ Global Select, la place que BD renvoie réellement pour NVDA — **manquait dans la table des suffixes**, et le défaut de cette table est « Paris ». D'où `NVDA` + `.PA`. Yahoo ne connaît pas `NVDA.PA` → aucun cours → aucune alerte SL/TP, aucun trailing : **la position n'était plus surveillée du tout**, et le seul signal envoyé était faux
+- **Le vrai défaut est structurel** : il y avait DEUX tables de places, une pour les suffixes et une pour les devises, et elles avaient dérivé — `XNGS` figurait bien dans la table des devises (le PRU en USD a été lu correctement). Elles sont désormais **fusionnées en une seule** (`MIC_MARKETS`), une ligne portant les deux informations : elles ne peuvent plus se contredire. Les compartiments US manquants sont ajoutés (`XNGS`, `XNMS`, `XNCM`, `ARCX`, `XASE`, `BATS`), ainsi que Milan, Madrid, Lisbonne et la Suisse
+- **Plus de repli silencieux sur « .PA »** : une place inconnue est tranchée par la devise cotée par BD (USD ⇒ US ⇒ aucun suffixe) et **tracée dans les logs** pour être ajoutée, plutôt que subie une seconde fois
+- **Le ticker de l'ordre autonome prime désormais** sur la reconstruction : quand le bot a lui-même passé l'ordre, il connaît déjà le bon ticker — validé chez yfinance avant l'achat. Le reconstruire depuis le MIC ne pouvait que faire pire
+- **« COURS SUSPENDU » n'était pas un diagnostic mais une supposition.** Le discriminant existe pourtant déjà dans les données : **si BD cote le titre, il n'est pas suspendu**. `portfolio.quote_problem()` distingue maintenant trois cas — ticker faux (BD cote, Yahoo non) / vraie suspension / Yahoo indisponible — et le message dit ce qui compte vraiment : *« Position NON SUIVIE (ni SL, ni TP) tant que le ticker n'est pas corrigé »*. Appliqué au `/status`, au `/positions` et au snapshot envoyé à l'IA
+- **Nouvelle commande `/reticker POSITION TICKER`** : corrige un ticker sans recréer la position. `/remove` + `/add` aurait perdu le flag autonome, le PRU brut BD, le contexte d'entrée et les compteurs de notification. Le nouveau ticker est **vérifié chez Yahoo avant écriture** — remplacer un ticker faux par un autre laisserait la position tout aussi aveugle
+- Position NVDA réparée (`NVDA.PA` → `NVDA`), suivi SL/TP rétabli
 
 ### 2026-08-03 — Trailing : second palier qui sécurise le gain
 - **Le breakeven ne protégeait que le capital.** Une position montée à +9% sur un TP à +10% pouvait redescendre au PRU et sortir **à zéro, tout le gain rendu** — le SL restait collé au PRU quelle que soit la distance parcourue vers le TP

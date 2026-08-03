@@ -112,10 +112,9 @@ def check_positions(send_fn, us_only: bool = False) -> None:
         sym   = prices.currency_symbol(quote.get("currency", "EUR"))
 
         if price is None:
-            if quote.get("status") in ("suspended", "error"):
-                status_lines.append(f"  ⛔ {name}: COURS SUSPENDU — non vendable")
-            else:
-                status_lines.append(f"  ⚠️ {name}: prix indisponible")
+            code, msg = portfolio.quote_problem(cfg, quote)
+            icon = {"ticker": "🚨", "suspended": "⛔"}.get(code, "⚠️")
+            status_lines.append(f"  {icon} {name}: {msg}")
             continue
 
         change_pct = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100

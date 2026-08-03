@@ -5,24 +5,39 @@ Appelé par /sync. Met à jour cash + détecte les écarts de positions.
 import portfolio
 import bourse_direct_reader as reader
 
-# MIC (place BD) → suffixe yfinance. US (XNAS/XNYS) = pas de suffixe.
-MIC_SUFFIX = {
-    "XPAR": ".PA", "XAMS": ".AS", "XBRU": ".BR",
-    "XLON": ".L",  "XETR": ".DE",
-    "XNAS": "",     "XNYS": "",
+# ── Places BD (MIC) → suffixe yfinance ET devise de cotation ────────────────
+# UNE SEULE table pour les deux. Elles étaient séparées, et elles ont dérivé :
+# `XNGS` (NASDAQ Global Select, la place que BD renvoie réellement pour NVDA)
+# figurait dans la table des devises mais PAS dans celle des suffixes. Le
+# défaut « Paris » a donc transformé NVDA en **NVDA.PA** à la création de la
+# position — ticker inexistant chez Yahoo, donc aucun cours, donc position de
+# 1 233 € invisible du suivi SL/TP et annoncée « COURS SUSPENDU » (03/08/2026).
+# Ajouter une place, c'est désormais ajouter UNE ligne qui porte les deux
+# informations : elles ne peuvent plus se contredire.
+MIC_MARKETS = {
+    # MIC   : (suffixe yfinance, devise)
+    "XPAR":  (".PA", "EUR"),   # Euronext Paris
+    "XAMS":  (".AS", "EUR"),   # Euronext Amsterdam
+    "XBRU":  (".BR", "EUR"),   # Euronext Bruxelles
+    "XLIS":  (".LS", "EUR"),   # Euronext Lisbonne
+    "XETR":  (".DE", "EUR"),   # Xetra
+    "XMIL":  (".MI", "EUR"),   # Borsa Italiana
+    "XMAD":  (".MC", "EUR"),   # Madrid
+    "XLON":  (".L",  "GBP"),   # London Stock Exchange
+    "XSWX":  (".SW", "CHF"),   # SIX Suisse
+    # US — aucun suffixe chez Yahoo, quel que soit le compartiment.
+    "XNYS":  ("",    "USD"),   # NYSE
+    "XNAS":  ("",    "USD"),   # NASDAQ (générique)
+    "XNGS":  ("",    "USD"),   # NASDAQ Global Select  ← celui que BD renvoie
+    "XNMS":  ("",    "USD"),   # NASDAQ Global Market
+    "XNCM":  ("",    "USD"),   # NASDAQ Capital Market
+    "ARCX":  ("",    "USD"),   # NYSE Arca
+    "XASE":  ("",    "USD"),   # NYSE American
+    "BATS":  ("",    "USD"),   # Cboe BZX
 }
 
-
-# Devise de cotation par place. Sert à détecter le piège du PRU : sur l'onglant
-# « Mes positions » BD convertit le PRU des valeurs US en EUR, alors que le bot
-# stocke entry_price/SL/TP dans la devise de cotation (stats.py convertit
-# ensuite via fx_to_eur). Écraser entry_price avec le PRU en EUR d'une position
-# en USD fausse le P&L latent et le suivi SL/TP.
-MIC_CURRENCY = {
-    "XPAR": "EUR", "XAMS": "EUR", "XBRU": "EUR", "XETR": "EUR",
-    "XNAS": "USD", "XNYS": "USD", "XNGS": "USD", "XNMS": "USD", "ARCX": "USD",
-    "XLON": "GBP",
-}
+MIC_SUFFIX   = {mic: sfx for mic, (sfx, _) in MIC_MARKETS.items()}
+MIC_CURRENCY = {mic: cur for mic, (_, cur) in MIC_MARKETS.items()}
 
 
 def _pru_in_quote_currency(bd_pru, pru_cur: str, pos_cur: str):
@@ -48,11 +63,29 @@ def _pru_in_quote_currency(bd_pru, pru_cur: str, pos_cur: str):
     return round(bd_pru / fx, 4), f"PRU BD {bd_pru} {pru_cur} converti au taux {round(fx, 4)}"
 
 
-def _yf_ticker(bd_ticker: str, mic: str) -> str:
-    """Reconstruit le ticker yfinance depuis le mnémo BD + la place (MIC)."""
+def _yf_ticker(bd_ticker: str, mic: str, currency: str = "") -> str:
+    """Reconstruit le ticker yfinance depuis le mnémo BD + la place (MIC).
+
+    Une place inconnue ne tombe PLUS silencieusement sur « .PA » : c'est ce
+    défaut qui a produit NVDA.PA. Deux garde-fous avant de deviner :
+      · la devise cotée par BD tranche le cas le plus fréquent (USD ⇒ US ⇒
+        aucun suffixe) même si le MIC n'est pas répertorié ;
+      · toute place non répertoriée est TRACÉE, pour être ajoutée à
+        MIC_MARKETS plutôt que subie une seconde fois.
+    """
     bd_ticker = (bd_ticker or "").upper()
-    suffix = MIC_SUFFIX.get((mic or "").upper(), ".PA")  # défaut Paris
-    return f"{bd_ticker}{suffix}" if bd_ticker else ""
+    if not bd_ticker:
+        return ""
+    mic = (mic or "").upper()
+    if mic in MIC_SUFFIX:
+        return f"{bd_ticker}{MIC_SUFFIX[mic]}"
+
+    cur = (currency or "").upper()
+    guess = "" if cur == "USD" else ".PA"
+    print(f"[sync] place BD inconnue « {mic or '?'} » pour {bd_ticker} "
+          f"(devise {cur or '?'}) → suffixe supposé « {guess or 'aucun (US)'} ». "
+          f"À ajouter dans MIC_MARKETS.")
+    return f"{bd_ticker}{guess}"
 
 
 def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
@@ -232,14 +265,25 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
             # ── Auto-création : la position existe sur BD mais pas dans le bot ──
             prot = order_protect.get(bd_ticker) or order_protect.get(bd_name) or {}
             mic  = prot.get("mic") or pos.get("mic") or ""
-            yf_t = _yf_ticker(bd_ticker, mic)
+            yf_t = _yf_ticker(bd_ticker, mic, pos_cur)
             new_key = bd_ticker or bd_name.replace(" ", "_")[:20]
 
             # Ordre autonome en attente correspondant ? → la position naît
             # avec le flag autonome et ses SL/TP d'origine, et l'engagement
             # "en attente" est consommé.
-            auto_rec = (data.get("auto_pending_orders", {}).get(yf_t.upper())
-                        or data.get("auto_pending_orders", {}).get(bd_ticker))
+            pending  = data.get("auto_pending_orders") or {}
+            auto_key = next((k for k in (yf_t.upper(), (bd_ticker or "").upper())
+                             if k and k in pending), None)
+            auto_rec = pending.get(auto_key) if auto_key else None
+
+            # Le ticker de l'ordre autonome PRIME sur la reconstruction depuis
+            # le MIC : c'est celui que le bot a lui-même choisi, coté par
+            # yfinance et validé AVANT de passer l'ordre. Reconstruire ne peut
+            # que faire pire (cas NVDA → NVDA.PA, 03/08/2026).
+            if auto_key and auto_key != yf_t.upper():
+                print(f"[sync] {bd_ticker} : ticker de l'ordre autonome "
+                      f"« {auto_key} » retenu au lieu de « {yf_t} » (MIC {mic})")
+                yf_t = auto_key
             sl = prot.get("seuil") or (auto_rec or {}).get("sl")
             tp = prot.get("profit") or (auto_rec or {}).get("tp")
 

@@ -154,6 +154,7 @@ BOT_COMMANDS = [
     ("research",   "Analyser une action — /research TICKER"),
     ("add",        "Acheter (deduit le cash) — TICKER QTE PRU SL TP"),
     ("remove",     "Retirer une position — /remove TICKER"),
+    ("reticker",   "Corriger le ticker Yahoo d'une position — /reticker POSITION TICKER"),
     ("hold",       "HOLD long terme, hors gestion bot — /hold TICKER [off]"),
     ("sl",         "Changer le stop-loss — /sl TICKER PRIX"),
     ("tp",         "Changer le take-profit — /tp TICKER PRIX"),
@@ -354,22 +355,25 @@ def cmd_status(args, cid):
                 f"  PRU: {sym}{cfg['entry_price']} | {cfg['qty']} titres\n"
                 f"  SL: {sym}{cfg['target_low']}  TP: {sym}{cfg['target_high']}{cur_tag}"
             )
-        elif q.get("status") in ("suspended", "error"):
-            if "." not in cfg["ticker"]:
+        else:
+            # Le relevé BD tranche : un titre que le courtier valorise n'est pas
+            # suspendu, c'est le ticker stocké qui est faux (cas NVDA.PA).
+            code, msg = portfolio.quote_problem(cfg, q)
+            if code == "ticker":
                 lines.append(
                     f"{name} ({cfg['ticker']})\n"
-                    f"  ❓ TICKER INTROUVABLE sur Yahoo — format a verifier\n"
-                    f"  (ex: LVMH → MC.PA) — corriger : /remove {name} puis /add\n"
+                    f"  🚨 {msg}\n"
+                    f"  Corriger : /reticker {name} <TICKER_YAHOO>\n"
+                    f"  PRU: {cfg['entry_price']} | {cfg['qty']} titres"
+                )
+            elif code == "suspended":
+                lines.append(
+                    f"{name} ({cfg['ticker']})\n"
+                    f"  ⛔ {msg} (liquidation judiciaire ?)\n"
                     f"  PRU: {cfg['entry_price']}€ | {cfg['qty']} titres"
                 )
             else:
-                lines.append(
-                    f"{name} ({cfg['ticker']})\n"
-                    f"  ⛔ COURS SUSPENDU — non vendable (liquidation judiciaire ?)\n"
-                    f"  PRU: {cfg['entry_price']}€ | {cfg['qty']} titres"
-                )
-        else:
-            lines.append(f"{name}: prix indisponible | PRU {cfg['entry_price']}€")
+                lines.append(f"{name}: {msg} | PRU {cfg['entry_price']}€")
 
     lines.append(f"\nP&L total positions gérées (hors HOLD): {total_pnl:+.0f}€")
 
@@ -518,6 +522,47 @@ def cmd_remove(args, cid):
         return
     portfolio.remove_position(name)
     send(f"Position {name} supprimee.", cid)
+
+
+def cmd_reticker(args, cid):
+    """Corrige le ticker Yahoo d'une position SANS la recréer.
+
+    Un ticker faux rend la position invisible du suivi (aucun cours → ni SL, ni
+    TP, ni trailing). La réparer par /remove + /add perdrait tout le reste :
+    flag autonome, PRU brut BD, contexte d'entrée, compteurs de notification.
+    """
+    if len(args) < 2:
+        send("Usage: /reticker POSITION TICKER_YAHOO\n"
+             "Ex: /reticker NVDA NVDA   (corrige NVDA.PA → NVDA)", cid)
+        return
+    positions = portfolio.get_positions()
+    name = _find_position(args[0], positions)
+    if not name:
+        send(f"Position '{args[0]}' introuvable.\nPositions: {list(positions.keys())}", cid)
+        return
+    new_t = args[1].strip().upper()
+    old_t = positions[name].get("ticker")
+    if new_t == (old_t or "").upper():
+        send(f"{name} est déjà sur {new_t} — rien à changer.", cid)
+        return
+
+    # Vérifié AVANT d'écrire : remplacer un ticker faux par un autre ticker faux
+    # laisserait la position tout aussi aveugle, sans que rien ne le signale.
+    q = prices.get_quote(new_t)
+    if not q.get("price"):
+        send(f"❌ {new_t} ne renvoie aucun cours sur Yahoo — ticker refusé.\n"
+             f"{name} reste sur {old_t}.\n"
+             f"Rappel : US sans suffixe (NVDA), Paris .PA, Amsterdam .AS, "
+             f"Bruxelles .BR, Londres .L, Xetra .DE", cid)
+        return
+
+    data = portfolio.load()
+    data["positions"][name]["ticker"] = new_t
+    portfolio.save(data)
+    sym = prices.currency_symbol(q.get("currency", "EUR"))
+    send(f"✅ {name} : ticker corrigé {old_t} → {new_t}\n"
+         f"Cours retrouvé : {sym}{q['price']}\n"
+         f"La position repasse sous surveillance (SL/TP/trailing).", cid)
 
 
 def cmd_hold(args, cid):
@@ -2507,6 +2552,7 @@ COMMANDS = {
     "/cash": cmd_cash,
     "/add": cmd_add,
     "/remove": cmd_remove,
+    "/reticker": cmd_reticker,
     "/hold": cmd_hold,
     "/sl": cmd_sl,
     "/tp": cmd_tp,

@@ -114,6 +114,30 @@ def get_auto_pending_orders() -> dict:
     return load().get("auto_pending_orders", {})
 
 
+def quote_problem(cfg: dict, quote: dict) -> tuple[str, str]:
+    """Pourquoi cette position n'a pas de cours — et à quel point c'est grave.
+
+    Retourne (code, phrase courte). Codes : `ticker` | `suspended` | `unavailable`.
+
+    Le discriminant est le relevé de Bourse Direct mémorisé par le sync : **si
+    BD cote le titre, il n'est pas suspendu**. Yahoo qui ne répond pas sur un
+    titre que le courtier valorise ne veut dire qu'une chose — le ticker stocké
+    est faux. Annoncer « COURS SUSPENDU — non vendable » dans ce cas est une
+    fausse alerte doublée d'un vrai angle mort : la position n'est plus suivie
+    (ni SL, ni TP, ni trailing) alors que rien ne le laisse deviner.
+    Cas fondateur : NVDA enregistré en `NVDA.PA` par le sync, 03/08/2026.
+    """
+    bd_price = cfg.get("bd_price")
+    if bd_price:
+        sym = "$" if (cfg.get("bd_price_currency") or "EUR") == "USD" else "€"
+        return "ticker", (f"TICKER YAHOO INTROUVABLE « {cfg.get('ticker')} » — "
+                          f"BD cote pourtant {sym}{bd_price}. Position NON SUIVIE "
+                          f"(ni SL, ni TP) tant que le ticker n'est pas corrigé.")
+    if cfg.get("worthless") or quote.get("status") == "suspended":
+        return "suspended", "COURS SUSPENDU — non vendable"
+    return "unavailable", "prix indisponible"
+
+
 def add_auto_pending_order(ticker: str, qty: int, entry: float, sl: float, tp: float,
                            order_id: str = None, expires_at: str = None):
     """`order_id` (BD) et `expires_at` permettent l'ANNULATION AUTO d'un ordre
