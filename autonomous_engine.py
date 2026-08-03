@@ -903,6 +903,74 @@ def run_entry_cycle(send_fn) -> None:
 
 # ─── Trailing stop réel sur BD (positions auto ET manuelles) ────────────────
 
+def tp_progress(entry: float, tp: float | None, price: float) -> float | None:
+    """Part du chemin PRU → TP déjà parcourue (0 = au PRU, 1 = au TP)."""
+    if not entry or not tp or tp <= entry:
+        return None
+    return (price - entry) / (tp - entry)
+
+
+def trailing_target(pos: dict, price: float, tp: float | None,
+                    atr_pct: float | None = None) -> tuple[float | None, str, str]:
+    """
+    SL visé pour cette position — SOURCE UNIQUE des deux paliers de trailing,
+    partagée par le trailing réel sur BD et par l'alerte en mode déconnecté.
+
+    Deux paliers, le PLUS HAUT l'emporte :
+
+    1. BREAKEVEN — le cours dépasse le seuil (+6% autonome / +5% manuel) :
+       SL au PRU. Protège le capital, pas le gain.
+    2. SÉCURISATION — le cours a parcouru au moins TRAIL_LOCK_TRIGGER_PCT du
+       chemin PRU→TP : SL AU-DESSUS du PRU, à une fraction du gain déjà acquis.
+       La fraction grandit avec la progression (TRAIL_LOCK_MIN_RATIO au
+       déclenchement → TRAIL_LOCK_MAX_RATIO au contact du TP) : plus le TP est
+       proche, moins il reste de raisons de laisser filer le gain acquis.
+
+    Le SL sécurisé garde toujours une marge sous le cours — le plus large de
+    TRAIL_MIN_BUFFER_PCT et 1×ATR. Sans elle, un stop collé au cours se ferait
+    sortir par le bruit ordinaire juste avant le TP, ce que ce palier cherche
+    précisément à éviter.
+
+    Retourne (sl_visé | None, code_palier, libellé_humain).
+    """
+    from config import (BREAKEVEN_THRESHOLD, TRAIL_LOCK_TRIGGER_PCT,
+                        TRAIL_LOCK_MIN_RATIO, TRAIL_LOCK_MAX_RATIO,
+                        TRAIL_MIN_BUFFER_PCT)
+    entry = pos.get("entry_price") or 0
+    if not entry or not price:
+        return None, "", ""
+
+    target, step, label = None, "", ""
+
+    # Palier 1 — breakeven
+    threshold = BREAKEVEN_PCT if pos.get("autonomous") else BREAKEVEN_THRESHOLD
+    if (price - entry) / entry * 100 >= threshold:
+        target, step, label = entry, "breakeven", "SL au PRU"
+
+    # Palier 2 — sécurisation du gain
+    prog = tp_progress(entry, tp, price)
+    trigger = TRAIL_LOCK_TRIGGER_PCT / 100
+    if prog is not None and prog >= trigger and prog < 1.0:
+        # Fraction verrouillée, interpolée entre le déclenchement et le TP
+        span  = max(1e-9, 1.0 - trigger)
+        ratio = (TRAIL_LOCK_MIN_RATIO
+                 + (TRAIL_LOCK_MAX_RATIO - TRAIL_LOCK_MIN_RATIO)
+                 * (prog - trigger) / span) / 100
+        locked = entry + ratio * (price - entry)
+        # Marge de respiration sous le cours
+        buffer_pct = max(TRAIL_MIN_BUFFER_PCT, atr_pct or 0)
+        locked = min(locked, price * (1 - buffer_pct / 100))
+        if tp:
+            locked = min(locked, tp * 0.999)     # jamais au niveau du TP
+        if locked > (target or 0):
+            gain_pct = (locked / entry - 1) * 100
+            target, step = locked, "lock"
+            label = (f"SL à {gain_pct:+.1f}% du PRU — {ratio * 100:.0f}% du gain "
+                     f"verrouillé ({prog * 100:.0f}% du chemin vers le TP)")
+
+    return (round(target, 4) if target else None), step, label
+
+
 def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     """
     Remonte le SL au PRU (breakeven) DIRECTEMENT SUR BD pour toute position —
@@ -917,7 +985,8 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     de la raison d'un non-déclenchement. En cycle automatique le silence est
     voulu — ici l'utilisateur a demandé, il doit obtenir une réponse.
     """
-    from config import BREAKEVEN_THRESHOLD, BREAKEVEN_TOLERANCE_PCT
+    from config import (BREAKEVEN_THRESHOLD, BREAKEVEN_TOLERANCE_PCT,
+                        TRAIL_LOCK_TRIGGER_PCT, TRAIL_MIN_STEP_PCT)
 
     if not (bot_mode.is_playwright() and playwright_session.is_connected()):
         if verbose:
@@ -947,20 +1016,30 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
             continue
         change_pct = (price - entry) / entry * 100
         threshold = BREAKEVEN_PCT if pos.get("autonomous") else BREAKEVEN_THRESHOLD
-        if change_pct >= threshold:
-            candidates.append((name, pos, change_pct))
+        # Deux portes d'entrée : le seuil de breakeven, OU la progression vers
+        # le TP (palier de sécurisation). Sur un TP étroit la seconde s'ouvre
+        # AVANT la première — une position à +5% d'un TP à +8% a déjà fait 62%
+        # du chemin et mérite un stop au-dessus du PRU.
+        prog = tp_progress(entry, pos.get("target_high"), price)
+        if change_pct >= threshold or (prog is not None
+                                       and prog * 100 >= TRAIL_LOCK_TRIGGER_PCT):
+            candidates.append((name, pos, change_pct, price))
         else:
             need = entry * (1 + threshold / 100)
+            prog_note = f", {prog * 100:.0f}% du chemin vers le TP" if prog is not None else ""
             skipped.append(
                 f"  ⏳ {name} : {change_pct:+.2f}% — seuil +{threshold:.0f}% "
-                f"non atteint (il faut {need:.2f})"
+                f"non atteint (il faut {need:.2f}{prog_note})"
             )
     if verbose:
         head = [f"🔒 TRAILING — vérification à la demande",
-                f"Seuils : +{BREAKEVEN_THRESHOLD:.0f}% (manuel) / +{BREAKEVEN_PCT:.0f}% (autonome)"]
+                f"Palier 1 BREAKEVEN — SL au PRU dès "
+                f"+{BREAKEVEN_THRESHOLD:.0f}% (manuel) / +{BREAKEVEN_PCT:.0f}% (autonome)",
+                f"Palier 2 SÉCURISATION — SL au-dessus du PRU dès "
+                f"{TRAIL_LOCK_TRIGGER_PCT:.0f}% du chemin parcouru vers le TP"]
         if candidates:
             head.append(f"\n{len(candidates)} position(s) au-dessus du seuil : "
-                        + ", ".join(n for n, _, _ in candidates))
+                        + ", ".join(n for n, _, _, _ in candidates))
         if skipped:
             head.append("\nNon concernées :")
             head.extend(skipped)
@@ -989,7 +1068,7 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
             send_fn("⚠️ Carnet d'ordres vide ou illisible — aucune action.")
         return
 
-    for name, pos, change_pct in candidates:
+    for name, pos, change_pct, price in candidates:
         entry  = pos["entry_price"]
         sl_ord = reader.find_stop_loss_order(rows, pos["ticker"], entry)
         tp_ord = reader.find_take_profit_order(rows, pos["ticker"], entry)
@@ -1012,23 +1091,46 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                 continue
 
         cur_sl = sl_ord["limit"] if sl_ord else None
-        # Le SL ne peut que MONTER, avec une TOLÉRANCE : BD arrondit au pas de
-        # cotation, donc un SL à 196.84 pour un PRU de 196.90 est déjà au
-        # breakeven à 0.03% près. Annuler/reposer pour ces centimes exposerait
-        # la position à une fenêtre SANS protection pour un gain nul.
-        if cur_sl is not None and cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100):
-            if verbose:
-                send_fn(f"  ↳ {name} : SL déjà au PRU ({cur_sl} vs PRU {entry}, "
-                        f"tolérance {BREAKEVEN_TOLERANCE_PCT}%) — rien à faire ✅")
-            continue
 
+        # Le TP est nécessaire AVANT le calcul de la cible : c'est lui qui situe
+        # la position sur le chemin PRU→TP, donc quel palier s'applique.
         tp = (tp_ord or {}).get("limit") or pos.get("target_high")
         if not tp:
             if verbose:
                 send_fn(f"  ↳ {name} : Take Profit introuvable — abstention "
                         f"(reposer un Expert sans lui créerait un doublon)")
             continue
-        new_sl = round(entry, 4)
+
+        atr_pct = (prices.get_technicals(pos["ticker"]) or {}).get("atr_pct")
+        target, step, step_label = trailing_target(pos, price, tp, atr_pct)
+        if not target:
+            if verbose:
+                send_fn(f"  ↳ {name} : aucun palier atteint — rien à faire")
+            continue
+
+        # Le SL ne peut que MONTER, et seulement si ça vaut le risque. CHAQUE
+        # remontée annule les 2 ordres BD et en repose un — fenêtre pendant
+        # laquelle la position est à nu (incident UNA 28/07/2026). Deux garde-fous :
+        #   · tolérance BD au breakeven : un SL à 196.84 pour un PRU de 196.90 est
+        #     déjà au PRU à 0.03% près, annuler/reposer pour ces centimes ne
+        #     rapporte rien ;
+        #   · pas minimal ailleurs : ratcheter de 0.2% n'en vaut pas la peine.
+        if cur_sl is not None:
+            at_breakeven = cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100)
+            if step == "breakeven" and at_breakeven:
+                if verbose:
+                    send_fn(f"  ↳ {name} : SL déjà au PRU ({cur_sl} vs PRU {entry}, "
+                            f"tolérance {BREAKEVEN_TOLERANCE_PCT}%) — rien à faire ✅")
+                continue
+            min_step = entry * TRAIL_MIN_STEP_PCT / 100
+            if target <= cur_sl + min_step:
+                if verbose:
+                    send_fn(f"  ↳ {name} : cible {target} trop proche du SL actuel "
+                            f"({cur_sl}) — moins de {TRAIL_MIN_STEP_PCT}% de gain, "
+                            f"le risque d'annuler/reposer n'en vaut pas la peine")
+                continue
+
+        new_sl = round(target, 4)
         qty    = abs((sl_ord or tp_ord or {}).get("qty") or pos.get("qty") or 0)
         if qty < 1:
             continue
@@ -1115,11 +1217,22 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                     data["positions"][name]["auto_breakeven_notified"] = True
                     portfolio.save(data)
                 tag = "🤖" if pos.get("autonomous") else "🛡️"
-                send_fn(
-                    f"{tag} BREAKEVEN AUTO — {name} à +{change_pct:.1f}%\n"
-                    f"SL remonté au PRU sur BD : {cur_sl}€ → {new_sl}€ (TP {tp_f}€ inchangé)\n"
-                    f"Perte impossible sur cette position désormais."
-                )
+                if step == "lock":
+                    locked_eur = (new_sl - entry) * qty
+                    send_fn(
+                        f"{tag} GAIN SÉCURISÉ — {name} à +{change_pct:.1f}%\n"
+                        f"SL remonté AU-DESSUS du PRU sur BD : "
+                        f"{cur_sl if cur_sl is not None else '—'}€ → {new_sl}€ "
+                        f"(TP {tp_f}€ inchangé)\n"
+                        f"{step_label}\n"
+                        f"Sortie au pire à +{locked_eur:.0f}€ désormais, plus à zéro."
+                    )
+                else:
+                    send_fn(
+                        f"{tag} BREAKEVEN AUTO — {name} à +{change_pct:.1f}%\n"
+                        f"SL remonté au PRU sur BD : {cur_sl}€ → {new_sl}€ (TP {tp_f}€ inchangé)\n"
+                        f"Perte impossible sur cette position désormais."
+                    )
             else:
                 # SL ET TP ont été annulés (vérifié) mais le nouvel Expert
                 # n'est pas confirmé : la position est réellement À NU.
@@ -1148,8 +1261,6 @@ def check_autonomous_positions(send_fn) -> None:
         return
 
     data    = portfolio.load()
-    cfg     = data.get("autonomous_config", {})
-    be_pct  = cfg.get("breakeven_pct", BREAKEVEN_PCT)
     changed = False
 
     for name, pos in auto_pos.items():
@@ -1193,24 +1304,38 @@ def check_autonomous_positions(send_fn) -> None:
                 f"L'Expert BD s'est exécuté. Faire /sync pour confirmer puis /remove {name}."
             )
 
-        # Trailing : SL → PRU à +3%.
-        # Playwright connecté → trailing_stop_cycle() modifie l'ordre SUR BD ;
-        # ici on n'agit qu'en mode déconnecté (alerte + commande manuelle).
-        elif (change_pct >= be_pct
-              and sl < entry
-              and not pos.get("auto_breakeven_notified")):
+        # Trailing : mêmes DEUX paliers que sur BD (trailing_target, source
+        # unique). Playwright connecté → trailing_stop_cycle() modifie l'ordre
+        # SUR BD ; ici on n'agit qu'en mode déconnecté (alerte + commande).
+        else:
             if bot_mode.is_playwright() and playwright_session.is_connected():
                 continue  # géré sur BD par trailing_stop_cycle
-            data["positions"][name]["target_low"]           = round(entry, 4)
+            from config import TRAIL_MIN_STEP_PCT
+            atr_pct = (prices.get_technicals(pos["ticker"]) or {}).get("atr_pct")
+            target, step, step_label = trailing_target(pos, price, tp, atr_pct)
+            if not target or target <= sl + entry * TRAIL_MIN_STEP_PCT / 100:
+                continue
+            data["positions"][name]["target_low"] = round(target, 4)
             data["positions"][name]["auto_breakeven_notified"] = True
             changed = True
-            send_fn(
-                f"{auto_tag} AUTO BREAKEVEN — {name}\n"
-                f"Position à {change_pct:+.1f}% au-dessus du PRU ({entry}€)\n"
-                f"SL relevé au PRU dans le bot. P&L garanti ≥ 0.\n"
-                f"Passe un nouvel Expert (SL={entry}€, TP={tp}€) via :\n"
-                f"/ordre vendre {pos['ticker']} {qty} expert {entry} {tp}"
-            )
+            if step == "lock":
+                send_fn(
+                    f"{auto_tag} GAIN À SÉCURISER — {name}\n"
+                    f"Position à {change_pct:+.1f}% au-dessus du PRU ({entry}€)\n"
+                    f"{step_label}\n"
+                    f"SL relevé à {target}€ dans le bot — sortie au pire à "
+                    f"+{(target - entry) * qty:.0f}€.\n"
+                    f"Passe un nouvel Expert (SL={target}€, TP={tp}€) via :\n"
+                    f"/ordre vendre {pos['ticker']} {qty} expert {target} {tp}"
+                )
+            else:
+                send_fn(
+                    f"{auto_tag} AUTO BREAKEVEN — {name}\n"
+                    f"Position à {change_pct:+.1f}% au-dessus du PRU ({entry}€)\n"
+                    f"SL relevé au PRU dans le bot. P&L garanti ≥ 0.\n"
+                    f"Passe un nouvel Expert (SL={entry}€, TP={tp}€) via :\n"
+                    f"/ordre vendre {pos['ticker']} {qty} expert {entry} {tp}"
+                )
 
     if changed:
         portfolio.save(data)

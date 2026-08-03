@@ -337,6 +337,28 @@ BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "5"))
 # seulement une fois le trade réellement installé.
 AUTO_BREAKEVEN_PCT = float(os.getenv("AUTO_BREAKEVEN_PCT", "6"))
 
+# ── Palier 2 du trailing : SÉCURISATION DU GAIN ─────────────────────────────
+# Le breakeven ne protège que le capital : une position montée à +9% sur un TP
+# à +10% pouvait redescendre au PRU et sortir à zéro, tout le gain rendu. Ce
+# palier remonte le SL AU-DESSUS du PRU à mesure que le cours avance vers le TP.
+#
+# Déclenchement : part du chemin PRU→TP déjà parcourue.
+TRAIL_LOCK_TRIGGER_PCT = float(os.getenv("TRAIL_LOCK_TRIGGER_PCT", "60"))
+# Fraction du gain acquis verrouillée sous le cours. Elle GRANDIT avec la
+# progression : au déclenchement on laisse respirer, au contact du TP on
+# sécurise l'essentiel.
+TRAIL_LOCK_MIN_RATIO = float(os.getenv("TRAIL_LOCK_MIN_RATIO", "50"))
+TRAIL_LOCK_MAX_RATIO = float(os.getenv("TRAIL_LOCK_MAX_RATIO", "80"))
+# Marge minimale entre le SL sécurisé et le cours : au moins ce %, et jamais
+# moins d'1×ATR. Un stop collé au cours se fait sortir par le bruit ordinaire
+# avant que le TP soit atteint — le SL initial est lui posé à 2×ATR.
+TRAIL_MIN_BUFFER_PCT = float(os.getenv("TRAIL_MIN_BUFFER_PCT", "2"))
+# Amélioration minimale du SL (en % du PRU) pour justifier une action. CHAQUE
+# remontée annule les 2 ordres BD et en repose un : cette fenêtre a déjà laissé
+# une position à nu (UNA, 28/07/2026). Ratcheter pour 0.2% n'en vaut pas le
+# risque — 0 rendrait le trailing bavard ET dangereux.
+TRAIL_MIN_STEP_PCT = float(os.getenv("TRAIL_MIN_STEP_PCT", "1"))
+
 # Scheduler (Paris time, 24h format)
 CHECK_TIMES = ["09:00", "12:00", "15:00", "17:00"]
 ANALYSIS_TIME = "09:05"

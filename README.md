@@ -224,7 +224,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Séance US prolongée** | Wall Street tournant jusqu'à 22h Paris, le bot prolonge la surveillance des positions US (checks 18h / 20h / 21h40, alertes seules) et lance un **scan US** à 16h — plus seulement au briefing de 9h05 (`US_EXTENDED_HOURS`) |
 | **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
 | **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
-| **Trailing stop automatique** | À +5% (manuel) / +6% (autonome, `AUTO_BREAKEVEN_PCT`), l'ordre Expert est **remplacé sur BD** avec le SL au PRU (P&L ≥ 0 garanti) |
+| **Trailing en 2 paliers** | **1.** À +5% (manuel) / +6% (autonome), le SL monte au PRU — perte impossible. **2.** Passé 60% du chemin vers le TP, le SL monte **au-dessus du PRU** et verrouille une part croissante du gain (50% → 80% au contact du TP). L'ordre Expert est remplacé sur BD à chaque palier |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
 | **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +6% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
@@ -562,6 +562,51 @@ Bot : "🤖 AUTO BREAKEVEN — ASML
 
 ---
 
+## Trailing stop — deux paliers
+
+Le trailing ne fait pas que protéger le capital : il sécurise aussi le gain
+déjà acquis à mesure que le cours approche du TP.
+
+**Palier 1 — BREAKEVEN.** Le cours dépasse +5% (manuel) / +6% (`AUTO_BREAKEVEN_PCT`,
+autonome) → le SL monte **au PRU**. La position ne peut plus perdre.
+
+**Palier 2 — SÉCURISATION DU GAIN.** Le cours a parcouru au moins
+`TRAIL_LOCK_TRIGGER_PCT` (60%) du chemin PRU→TP → le SL monte **au-dessus du
+PRU**, à une fraction du gain acquis. Cette fraction **grandit avec la
+progression** : `TRAIL_LOCK_MIN_RATIO` (50%) au déclenchement,
+`TRAIL_LOCK_MAX_RATIO` (80%) au contact du TP. Plus le TP est proche, moins il
+reste de raisons de laisser filer ce qui est déjà gagné.
+
+Le palier le plus haut l'emporte. Sur un TP étroit, le palier 2 se déclenche
+**avant** le palier 1 : une position à +3% d'un TP à +5% a déjà fait 60% du
+chemin et mérite un stop au-dessus du PRU, alors que le breakeven à +6% ne
+serait jamais atteint.
+
+Exemple — PRU 100 €, TP 110 €, ATR 1,5% :
+
+| Cours | Gain | Chemin vers le TP | Palier | SL posé | Marge sous le cours |
+|---|---|---|---|---|---|
+| 104 € | +4% | 40% | — | — | — |
+| 106 € | +6% | 60% | sécurisation | 103,00 € (**+3,0%**) | 2,8% |
+| 108 € | +8% | 80% | sécurisation | 105,20 € (**+5,2%**) | 2,6% |
+| 109,5 € | +9,5% | 95% | sécurisation | 107,24 € (**+7,2%**) | 2,1% |
+
+Deux garde-fous, tous deux appris d'incidents réels :
+
+- **Marge de respiration** — le SL sécurisé reste toujours à au moins
+  `TRAIL_MIN_BUFFER_PCT` (2%) **ou 1×ATR** sous le cours, le plus large des
+  deux. Un stop collé au cours se ferait sortir par le bruit ordinaire juste
+  avant le TP — exactement ce que ce palier cherche à éviter. Sur un titre à
+  ATR 5%, la marge s'élargit automatiquement.
+- **Pas minimal** — chaque remontée **annule les 2 ordres BD et en repose un**,
+  fenêtre pendant laquelle la position est à nu (incident UNA du 28/07/2026).
+  Le SL ne bouge donc que s'il gagne au moins `TRAIL_MIN_STEP_PCT` (1% du PRU) :
+  ratcheter pour 0,2% n'en vaut pas le risque.
+
+`trailing_target()` est la **source unique** des deux paliers — même calcul que
+la session BD soit connectée (l'ordre est remplacé automatiquement) ou non
+(alerte Telegram avec la commande `/ordre` prête à coller).
+
 ## Sync automatique des ordres Bourse Direct
 
 Bourse Direct envoie un email "Finalisation de votre stratégie" dès qu'un ordre expert est exécuté. Le bot peut détecter ces emails via IMAP et clôturer automatiquement les positions concernées.
@@ -661,6 +706,14 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-03 — Trailing : second palier qui sécurise le gain
+- **Le breakeven ne protégeait que le capital.** Une position montée à +9% sur un TP à +10% pouvait redescendre au PRU et sortir **à zéro, tout le gain rendu** — le SL restait collé au PRU quelle que soit la distance parcourue vers le TP
+- **Nouveau palier 2 — SÉCURISATION** : passé `TRAIL_LOCK_TRIGGER_PCT` (60%) du chemin PRU→TP, le SL monte **au-dessus du PRU**, à une fraction du gain acquis qui **grandit avec la progression** (`TRAIL_LOCK_MIN_RATIO` 50% au déclenchement → `TRAIL_LOCK_MAX_RATIO` 80% au contact du TP). Sur un PRU de 100 € et un TP de 110 € : SL à 103 € au cours de 106, à 105,20 € au cours de 108, à 107,24 € au cours de 109,50
+- **Sur un TP étroit le palier 2 passe AVANT le palier 1** : à +3% d'un TP à +5%, 60% du chemin est fait et le stop monte au-dessus du PRU — alors que le breakeven à +6% ne serait jamais atteint sur ce trade. Ces positions n'avaient jusqu'ici **aucun** trailing
+- **Marge de respiration obligatoire** : le SL sécurisé reste à au moins 2% **ou 1×ATR** sous le cours (le plus large). Un stop collé au cours se ferait sortir par le bruit juste avant le TP — sur un titre à ATR 5%, la marge s'élargit d'elle-même
+- **Anti-churn** : chaque remontée annule les 2 ordres BD et en repose un, fenêtre pendant laquelle la position est à nu (incident UNA du 28/07). Le SL ne bouge que s'il gagne au moins 1% du PRU (`TRAIL_MIN_STEP_PCT`)
+- **`trailing_target()` = source unique** des deux paliers, partagée par le trailing réel sur BD et par l'alerte en mode déconnecté — qui, elle, ne connaissait que le breakeven
 
 ### 2026-08-02 — Balayage du reliquat de cash + plafond de position à 1 000 €
 - **`POSITION_BUDGET_MAX` passe de 800 € à 1 000 €.** Effet de bord voulu : le plancher de viabilité US étant à 930 €, le scan US n'est plus bloqué par construction (voir l'entrée frais ci-dessous)
@@ -937,7 +990,12 @@ Limites : constituants actuels (biais du survivant, identique pour toutes les co
 ```env
 DEFAULT_SL_PCT=7          # stop-loss fixe fallback en % sous le PRU
 DEFAULT_TP_PCT=10         # take-profit minimum en % au-dessus du PRU
-BREAKEVEN_THRESHOLD=5     # trailing stop positions manuelles : % au-dessus du PRU
+BREAKEVEN_THRESHOLD=5     # trailing palier 1 (manuel) : % au-dessus du PRU
+TRAIL_LOCK_TRIGGER_PCT=60 # trailing palier 2 : % du chemin PRU→TP avant de sécuriser
+TRAIL_LOCK_MIN_RATIO=50   # % du gain verrouillé au déclenchement
+TRAIL_LOCK_MAX_RATIO=80   # % du gain verrouillé au contact du TP
+TRAIL_MIN_BUFFER_PCT=2    # marge mini sous le cours (ou 1×ATR si plus large)
+TRAIL_MIN_STEP_PCT=1      # gain mini du SL pour justifier annuler/reposer
 POSITION_BUDGET_PCT=50    # % du cash investi par nouvelle position (suggestions /scan)
 POSITION_BUDGET_MAX=1000  # plafond en € par position (à adapter à votre capital)
 CASH_SWEEP_MIN_LEFTOVER=500  # sous ce reliquat, la position est agrandie (0 = off)
