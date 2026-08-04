@@ -739,6 +739,8 @@ def cmd_stats(args, cid):
     if s.get("api_cost_eur"):
         lines.append(f"Couts API IA  : -{s['api_cost_eur']:.2f}€ "
                      f"(dont {s['api_month_eur']:.2f}€ ce mois)")
+        if s.get("api_model"):
+            lines.append(f"Modele servi  : {s['api_model']} (30 derniers jours)")
         lines.append(f"NET apres IA  : {s['net_pnl']:+.0f}€")
     lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     send("\n".join(lines), cid)

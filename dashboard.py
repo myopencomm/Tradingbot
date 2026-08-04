@@ -147,8 +147,24 @@ def build_data() -> dict:
             "sym":    prices.currency_symbol(cur),
         })
 
+    # Coûts API JOUR PAR JOUR : le filtre de période les recalcule côté client
+    # comme il recalcule le P&L — un total figé serait le seul chiffre de la
+    # page à ignorer la période sélectionnée.
+    try:
+        import api_costs
+        api_daily = api_costs.get_costs().get("daily", {})
+        api_meta  = api_costs.get_costs()
+        api_top   = api_meta.get("top_model")
+        api_models = api_meta.get("by_model", {})
+    except Exception:
+        api_daily, api_top, api_models = {}, None, {}
+
     return {
         "trades":    cum,
+        "api_daily": api_daily,
+        "api_top_model": api_top,
+        "api_models":    api_models,
+        "fx_usd":    prices.fx_to_eur("USD"),
         "stats":     s,
         "open":      open_pos,
         "cash":      data.get("cash_available", 0),
@@ -215,6 +231,23 @@ button.on { border-color: #3fd583; color: #3fd583; }
 .badge { font-size: .68em; padding: 2px 7px; border-radius: 6px;
   background: #1f3a5c; color: #8db8ec; vertical-align: middle; }
 .badge.hold { background: #2a2f3a; color: #8b96a5; }
+/* Menu hamburger — sélecteur de période */
+.burger { background: #151923; border: 1px solid #232a37; border-radius: 10px;
+  color: #e6e9ef; font-size: 1.1em; line-height: 1; padding: 9px 12px;
+  cursor: pointer; }
+.burger:hover { border-color: #3fd583; }
+.menu { display: none; position: absolute; right: 0; top: calc(100% + 8px);
+  background: #151923; border: 1px solid #232a37; border-radius: 12px;
+  padding: 6px; min-width: 210px; z-index: 20;
+  box-shadow: 0 12px 32px rgba(0,0,0,.5); }
+.menu.open { display: block; }
+.menu button { display: block; width: 100%; text-align: left; border: none;
+  background: none; padding: 10px 12px; border-radius: 8px; font-size: .9em; }
+.menu button:hover { background: #1c2230; }
+.menu button.on { color: #3fd583; font-weight: 600; }
+.menu .sep { border-top: 1px solid #232a37; margin: 5px 0; }
+.periodwrap { position: relative; }
+.periodtag { color: #8b96a5; font-size: .75em; margin-left: 8px; }
 @media (max-width: 540px) {
   .chartbox { height: 235px; padding: 8px; }
   .card .v { font-size: 1.15em; }
@@ -222,20 +255,36 @@ button.on { border-color: #3fd583; color: #3fd583; }
   th, td { padding: 8px 9px; }
 }
 </style></head><body>
-<header><h1>🤖 TradingBot</h1><span class="muted">@GENERATED@</span></header>
+<header>
+  <h1>🤖 TradingBot <span class="periodtag" id="ptag">Global</span></h1>
+  <div class="periodwrap">
+    <span class="muted">@GENERATED@</span>
+    <button class="burger" id="burger" onclick="toggleMenu(event)" aria-label="Période">☰</button>
+    <div class="menu" id="menu">
+      <button data-p="all"       class="on" onclick="setP('all')">Global</button>
+      <div class="sep"></div>
+      <button data-p="month"     onclick="setP('month')">Ce mois-ci</button>
+      <button data-p="lastmonth" onclick="setP('lastmonth')">Le mois dernier</button>
+      <div class="sep"></div>
+      <button data-p="year"      onclick="setP('year')">Cette année</button>
+      <button data-p="lastyear"  onclick="setP('lastyear')">L'année dernière</button>
+    </div>
+  </div>
+</header>
 
 <div class="cards">
-  <div class="card"><div class="v @PNL_CLS@">@REALIZED@€</div><div class="l">P&L réalisé (@NB@ trades)</div></div>
-  <div class="card"><div class="v @UPNL_CLS@">@UNREALIZED@€</div><div class="l">P&L latent (positions)</div></div>
-  <div class="card"><div class="v @TPNL_CLS@">@TOTAL@€</div><div class="l">P&L total</div></div>
-  <div class="card"><div class="v red">-@API_COST@€</div><div class="l">Coûts API IA (@API_MONTH@€ ce mois)</div></div>
-  <div class="card"><div class="v @NET_CLS@">@NET@€</div><div class="l">P&L net après coûts IA</div></div>
-  <div class="card"><div class="v">@WIN_RATE@%</div><div class="l">Win rate (@WINS@W / @LOSSES@L)</div></div>
-  <div class="card"><div class="v">@PF@</div><div class="l">Profit factor</div></div>
+  <div class="card"><div class="v @PNL_CLS@" id="c_real">@REALIZED@€</div><div class="l" id="l_real">P&L réalisé (@NB@ trades)</div></div>
+  <div class="card"><div class="v @UPNL_CLS@">@UNREALIZED@€</div><div class="l">P&L latent (positions ouvertes — hors période)</div></div>
+  <div class="card"><div class="v @TPNL_CLS@" id="c_tot">@TOTAL@€</div><div class="l">P&L total</div></div>
+  <div class="card"><div class="v red" id="c_api">-@API_COST@€</div><div class="l" id="l_api">Coûts API IA (@API_MONTH@€ ce mois)</div></div>
+  <div class="card"><div class="v @NET_CLS@" id="c_net">@NET@€</div><div class="l">P&L net après coûts IA</div></div>
+  <div class="card"><div class="v" id="c_wr">@WIN_RATE@%</div><div class="l" id="l_wr">Win rate (@WINS@W / @LOSSES@L)</div></div>
+  <div class="card"><div class="v" id="c_pf">@PF@</div><div class="l">Profit factor</div></div>
   <div class="card"><div class="v">@CASH@€</div><div class="l">Cash disponible</div></div>
-  <div class="card"><div class="v @PNL_CLS@">@PER_DAY@€/j</div><div class="l">depuis le @SINCE@ (@SPAN@ jours)</div></div>
-  <div class="card"><div class="v @ROI_CLS@">@AVG_ROI@%</div><div class="l">ROI / cash engagé (moy. @AVG_INV@€/deal)</div></div>
+  <div class="card"><div class="v @PNL_CLS@" id="c_day">@PER_DAY@€/j</div><div class="l" id="l_day">depuis le @SINCE@ (@SPAN@ jours)</div></div>
+  <div class="card"><div class="v @ROI_CLS@" id="c_roi">@AVG_ROI@%</div><div class="l" id="l_roi">ROI / cash engagé (moy. @AVG_INV@€/deal)</div></div>
 </div>
+
 
 <h2>P&L cumulé <span class="muted">— taille du point ◉ = cash engagé</span></h2>
 <div class="chartbox"><canvas id="cum"></canvas></div>
@@ -266,6 +315,112 @@ button.on { border-color: #3fd583; color: #3fd583; }
 <script>
 const D = @DATA_JSON@;
 let filt = 'all';
+let period = 'all';
+
+// ── Filtre de période ───────────────────────────────────────────────────────
+// Tout est recalculé ICI à partir de D.trades : les cartes, les deux
+// graphiques et le tableau. Laisser une seule valeur figée côté serveur la
+// rendrait fausse dès qu'une période est sélectionnée — c'est exactement le
+// genre de chiffre qu'on lit sans le vérifier.
+const PLABEL = { all: 'Global', month: 'Ce mois-ci', lastmonth: 'Le mois dernier',
+                 year: 'Cette année', lastyear: "L'année dernière" };
+
+function periodRange(p) {
+  const now = new Date(), y = now.getFullYear(), m = now.getMonth();
+  // Dates construites À LA MAIN en heure locale. `toISOString()` convertit en
+  // UTC : minuit à Paris (UTC+2) devient 22h la VEILLE, ce qui décalait chaque
+  // borne d'un jour — juillet perdait le 31 et récupérait le 30 juin.
+  const iso = (yy, mm, dd) =>
+    `${yy}-${String(mm + 1).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+  const first = (yy, mm) => {              // 1er du mois, mois normalisé
+    const d = new Date(yy, mm, 1);
+    return iso(d.getFullYear(), d.getMonth(), 1);
+  };
+  if (p === 'month')     return [first(y, m),     first(y, m + 1)];
+  if (p === 'lastmonth') return [first(y, m - 1), first(y, m)];
+  if (p === 'year')      return [iso(y, 0, 1),     iso(y + 1, 0, 1)];
+  if (p === 'lastyear')  return [iso(y - 1, 0, 1), iso(y, 0, 1)];
+  return null;                                  // 'all'
+}
+// Bornes : début inclus, fin EXCLUE — sinon le 1er du mois suivant compterait
+// dans les deux périodes.
+const inPeriod = (dateIso, r) => !r || (dateIso >= r[0] && dateIso < r[1]);
+
+function toggleMenu(e) {
+  e.stopPropagation();
+  document.getElementById('menu').classList.toggle('open');
+}
+document.addEventListener('click', () => document.getElementById('menu').classList.remove('open'));
+
+function setP(p) {
+  period = p;
+  document.getElementById('ptag').textContent = PLABEL[p];
+  document.querySelectorAll('.menu button').forEach(b =>
+    b.classList.toggle('on', b.dataset.p === p));
+  document.getElementById('menu').classList.remove('open');
+  applyPeriod();
+}
+
+function periodTrades() {
+  const r = periodRange(period);
+  return D.trades.filter(t => inPeriod(t.date_iso, r));
+}
+
+function fmt(v, d = 2) { return (v >= 0 ? '+' : '') + v.toFixed(d); }
+function setCls(el, v) { el.classList.remove('green', 'red'); el.classList.add(v >= 0 ? 'green' : 'red'); }
+
+function applyPeriod() {
+  const r  = periodRange(period);
+  const ts = periodTrades();
+  const nb = ts.length;
+  const realized = ts.reduce((a, t) => a + t.pnl, 0);
+  const wins   = ts.filter(t => t.pnl > 0);
+  const losses = ts.filter(t => t.pnl <= 0);
+  const gains  = wins.reduce((a, t) => a + t.pnl, 0);
+  const loss   = Math.abs(losses.reduce((a, t) => a + t.pnl, 0));
+  const invested = ts.reduce((a, t) => a + t.invested, 0);
+
+  // Coûts API de la période (USD → EUR au taux du jour, comme côté serveur)
+  let api = 0;
+  for (const [day, usd] of Object.entries(D.api_daily || {}))
+    if (inPeriod(day, r)) api += usd;
+  api *= (D.fx_usd || 0.92);
+
+  // Le P&L latent est un instantané : il n'appartient à aucune période. On ne
+  // l'ajoute qu'en vue Global, sinon le "total" mélangerait deux horizons.
+  const latent = period === 'all' ? D.stats.unrealized_pnl : 0;
+  const total  = realized + latent;
+
+  const el = id => document.getElementById(id);
+  el('c_real').textContent = fmt(realized) + '€';           setCls(el('c_real'), realized);
+  el('l_real').textContent = `P&L réalisé (${nb} trade${nb > 1 ? 's' : ''})`;
+  el('c_tot').textContent  = fmt(total) + '€';              setCls(el('c_tot'), total);
+  el('c_api').textContent  = '-' + api.toFixed(2) + '€';
+  el('l_api').textContent  = 'Coûts API IA' + (period === 'all' ? '' : ' — ' + PLABEL[period])
+                           + (D.api_top_model ? ' · ' + D.api_top_model : '');
+  el('c_net').textContent  = fmt(total - api) + '€';        setCls(el('c_net'), total - api);
+  el('c_wr').textContent   = (nb ? (wins.length / nb * 100).toFixed(0) : 0) + '%';
+  el('l_wr').textContent   = `Win rate (${wins.length}W / ${losses.length}L)`;
+  el('c_pf').textContent   = loss > 0 ? (gains / loss).toFixed(2) : (gains > 0 ? '∞' : '—');
+  el('c_roi').textContent  = (invested ? fmt(realized / invested * 100) : '+0.00') + '%';
+  setCls(el('c_roi'), realized);
+  el('l_roi').textContent  = `ROI / cash engagé (moy. ${nb ? Math.round(invested / nb) : 0}€/deal)`;
+
+  // €/jour : sur la durée RÉELLEMENT couverte par la période, bornée à
+  // aujourd'hui — diviser une période future par sa durée nominale gonflerait
+  // artificiellement le rythme.
+  let days = D.span_days, since = D.since;
+  if (r) {
+    const start = new Date(r[0]), end = new Date(Math.min(new Date(r[1]), Date.now()));
+    days = Math.max(1, Math.round((end - start) / 86400000));
+    since = start.toLocaleDateString('fr-FR');
+  }
+  el('c_day').textContent = fmt(realized / days) + '€/j';   setCls(el('c_day'), realized);
+  el('l_day').textContent = `depuis le ${since} (${days} jours)`;
+
+  renderT();
+  redrawCharts();
+}
 function setF(f) {
   filt = f;
   for (const [id, v] of [['fAll','all'],['fWin','win'],['fLoss','loss']])
@@ -276,7 +431,7 @@ function renderT() {
   const q = document.getElementById('q').value.toLowerCase();
   const tb = document.querySelector('#tt tbody');
   tb.innerHTML = '';
-  for (const t of [...D.trades].reverse()) {
+  for (const t of [...periodTrades()].reverse()) {
     if (filt !== 'all' && t.result !== filt) continue;
     if (q && !(t.name + t.ticker + t.date).toLowerCase().includes(q)) continue;
     const c = t.pnl >= 0 ? 'green' : 'red';
@@ -288,7 +443,6 @@ function renderT() {
       <td class="${c}">${t.roi >= 0 ? '+' : ''}${t.roi}%</td><td>${t.cum}€</td></tr>`;
   }
 }
-renderT();
 
 const timeScale = {
   type: 'time',
@@ -296,41 +450,56 @@ const timeScale = {
           displayFormats: { day: 'dd/MM', week: 'dd/MM', month: 'MM/yyyy' } },
   ticks: { maxRotation: 0 }
 };
-const tt = { callbacks: { label: c => {
-  const t = D.trades[c.dataIndex];
-  return `${t.name} : ${t.pnl >= 0 ? '+' : ''}${t.pnl}€ sur ${t.invested}€ engagés `
-       + `(ROI ${t.roi >= 0 ? '+' : ''}${t.roi}%) — cumul ${t.cum}€`;
-} } };
-// Taille du point ∝ cash engagé sur le deal (min 4px, max 14px)
-const invs = D.trades.map(t => t.invested);
-const iMin = Math.min(...invs), iMax = Math.max(...invs);
-const radius = i => 4 + (iMax > iMin ? 10 * (invs[i] - iMin) / (iMax - iMin) : 4);
-new Chart(document.getElementById('cum'), {
-  type: 'line',
-  data: { datasets: [{ label: 'P&L cumulé (€)',
-    data: D.trades.map(t => ({ x: t.date_iso, y: t.cum })),
-    borderColor: '#3fd583', backgroundColor: 'rgba(63,213,131,.12)',
-    fill: true, tension: .25,
-    pointRadius: c => radius(c.dataIndex),
-    pointHoverRadius: c => radius(c.dataIndex) + 3,
-    pointBackgroundColor: '#3fd583',
-    pointBorderColor: '#7a9bd4', pointBorderWidth: 2 }] },
-  options: { maintainAspectRatio: false, scales: { x: timeScale },
-             plugins: { legend: { display: false }, tooltip: tt } }
-});
-// Un emplacement par trade (espacement régulier) : lisible même quand
-// plusieurs trades tombent le même jour.
-new Chart(document.getElementById('bars'), {
-  type: 'bar',
-  data: {
-    labels: D.trades.map(t => [t.name,
-      t.date_iso.slice(8,10) + '/' + t.date_iso.slice(5,7), t.invested + '€']),
-    datasets: [{ data: D.trades.map(t => t.pnl),
-      backgroundColor: D.trades.map(t => t.pnl >= 0 ? '#3fd583' : '#ff7070') }]
-  },
-  options: { maintainAspectRatio: false,
-             plugins: { legend: { display: false }, tooltip: tt } }
-});
+
+let cumChart = null, barsChart = null;
+
+function redrawCharts() {
+  const ts = periodTrades();
+  // Cumul RECALCULÉ sur la période : réutiliser t.cum (cumul global) ferait
+  // démarrer la courbe au niveau hérité des trades précédents.
+  let run = 0;
+  const pts = ts.map(t => ({ x: t.date_iso, y: (run += t.pnl), t }));
+
+  const tt = { callbacks: { label: c => {
+    const t = ts[c.dataIndex];
+    return `${t.name} : ${t.pnl >= 0 ? '+' : ''}${t.pnl}€ sur ${t.invested}€ engagés `
+         + `(ROI ${t.roi >= 0 ? '+' : ''}${t.roi}%)`;
+  } } };
+
+  const invs = ts.map(t => t.invested);
+  const iMin = Math.min(...invs), iMax = Math.max(...invs);
+  const radius = i => 4 + (iMax > iMin ? 10 * (invs[i] - iMin) / (iMax - iMin) : 4);
+
+  if (cumChart) cumChart.destroy();
+  cumChart = new Chart(document.getElementById('cum'), {
+    type: 'line',
+    data: { datasets: [{ label: 'P&L cumulé (€)',
+      data: pts.map(p => ({ x: p.x, y: p.y })),
+      borderColor: '#3fd583', backgroundColor: 'rgba(63,213,131,.12)',
+      fill: true, tension: .25,
+      pointRadius: c => radius(c.dataIndex),
+      pointHoverRadius: c => radius(c.dataIndex) + 3,
+      pointBackgroundColor: '#3fd583',
+      pointBorderColor: '#7a9bd4', pointBorderWidth: 2 }] },
+    options: { maintainAspectRatio: false, scales: { x: timeScale },
+               plugins: { legend: { display: false }, tooltip: tt } }
+  });
+
+  if (barsChart) barsChart.destroy();
+  barsChart = new Chart(document.getElementById('bars'), {
+    type: 'bar',
+    data: {
+      labels: ts.map(t => [t.name,
+        t.date_iso.slice(8,10) + '/' + t.date_iso.slice(5,7), t.invested + '€']),
+      datasets: [{ data: ts.map(t => t.pnl),
+        backgroundColor: ts.map(t => t.pnl >= 0 ? '#3fd583' : '#ff7070') }]
+    },
+    options: { maintainAspectRatio: false,
+               plugins: { legend: { display: false }, tooltip: tt } }
+  });
+}
+
+applyPeriod();
 </script></body></html>"""
 
 _MANIFEST = {

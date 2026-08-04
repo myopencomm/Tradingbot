@@ -57,10 +57,20 @@ class AnthropicProvider(AIProvider):
     @staticmethod
     def _track(model: str, msg):
         """Enregistre les tokens réels de l'appel (bilan honnête — /stats,
-        dashboard). Best-effort : jamais bloquant."""
+        dashboard). Best-effort : jamais bloquant.
+
+        On facture le modèle RÉELLEMENT servi (`msg.model`) et non celui
+        demandé : un alias peut résoudre vers autre chose que ce qu'on croit.
+        """
         try:
             import api_costs
-            api_costs.record(model, msg.usage.input_tokens, msg.usage.output_tokens)
+            u = msg.usage
+            api_costs.record(
+                getattr(msg, "model", None) or model,
+                u.input_tokens, u.output_tokens,
+                getattr(u, "cache_creation_input_tokens", 0) or 0,
+                getattr(u, "cache_read_input_tokens", 0) or 0,
+            )
         except Exception:
             pass
 
@@ -244,11 +254,20 @@ class GeminiProvider(AIProvider):
 
     @staticmethod
     def _track(model_name: str, r):
-        """Coûts API (bilan honnête) — usage_metadata Gemini, best-effort."""
+        """Coûts API (bilan honnête) — usage_metadata Gemini, best-effort.
+
+        `gemini-flash-latest` est un ALIAS : le tarif dépend de ce vers quoi il
+        résout, pas de son nom. On facture donc `model_version`, renvoyé par
+        l'API, quand il est disponible.
+        """
         try:
             import api_costs
             u = r.usage_metadata
-            api_costs.record(model_name, u.prompt_token_count, u.candidates_token_count)
+            api_costs.record(
+                getattr(r, "model_version", None) or model_name,
+                u.prompt_token_count, u.candidates_token_count,
+                0, getattr(u, "cached_content_token_count", 0) or 0,
+            )
         except Exception:
             pass
 

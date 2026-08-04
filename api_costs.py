@@ -21,16 +21,33 @@ PARIS = pytz.timezone("Europe/Paris")
 COSTS_PATH = Path(__file__).parent / "api_costs.json"
 _lock = threading.Lock()
 
-# Tarifs $/million de tokens (input, output) — les images vision comptent
-# dans l'input. Correspondance par sous-chaîne du nom de modèle.
-PRICING = {
-    "haiku":  (1.0, 5.0),
-    "sonnet": (3.0, 15.0),
-    "opus":   (15.0, 75.0),
-    "flash":  (0.3, 2.5),    # gemini-*-flash (avant "gemini" : priorité sous-chaîne)
-    "gemini": (1.25, 10.0),  # gemini pro
-}
-_DEFAULT_PRICING = (3.0, 15.0)  # inconnu → tarif Sonnet (prudent)
+# ── Tarifs $/million de tokens (input, output) ────────────────────────────────
+# Vérifiés le 04/08/2026. L'ORDRE COMPTE : le premier motif contenu dans le nom
+# du modèle gagne, donc du plus spécifique au plus général (« flash-lite » avant
+# « flash », sinon un Flash-Lite serait facturé au tarif Flash).
+#
+# Anthropic : tarifs officiels de la doc API.
+#   ⚠️ Opus était codé à 15/75 — c'est l'ancien tarif Opus 3/4. Les Opus actuels
+#   (4.6 → 5) sont à 5/25, soit une SURESTIMATION de 3× si le bot y repasse.
+# Gemini : tarifs publics Google. « flash » nu vaut 1.50/7.50 (Flash courant) et
+#   non 0.30/2.50 — ce dernier est le tarif Flash-LITE. Le bot tournant à 100%
+#   sur `gemini-flash-latest` depuis le 20/07, ce raccourci sous-estimait la
+#   facture d'un facteur 5 en entrée.
+PRICING = (
+    # Anthropic
+    ("haiku",       (1.0,  5.0)),
+    ("sonnet",      (3.0, 15.0)),
+    ("fable",      (10.0, 50.0)),
+    ("mythos",     (10.0, 50.0)),
+    ("opus",        (5.0, 25.0)),
+    # Google — le plus spécifique d'abord
+    ("flash-lite",  (0.3,  2.5)),
+    ("flash",       (1.5,  7.5)),
+    ("gemini",      (1.25, 10.0)),   # Gemini Pro
+)
+# Modèle inconnu → tarif VOLONTAIREMENT haut. Sous-estimer une facture qu'on ne
+# sait pas lire donne un bilan flatteur et faux ; la surestimer se voit.
+_DEFAULT_PRICING = (10.0, 50.0)
 
 SEED = {"seed_usd": 5.66,
         "seed_note": "console Anthropic 01-17/07/2026 (CSV) ; usage mai-juin inconnu, non estimé"}
@@ -43,13 +60,20 @@ def _load() -> dict:
         return {**SEED, "daily": {}}
 
 
-def _price(model: str, input_tokens: int, output_tokens: int) -> float:
+def rates(model: str) -> tuple[float, float]:
+    """Tarif ($/M in, $/M out) du modèle, ou le défaut haut s'il est inconnu."""
     m = (model or "").lower()
-    pin, pout = _DEFAULT_PRICING
-    for key, (i, o) in PRICING.items():
+    for key, r in PRICING:
         if key in m:
-            pin, pout = i, o
-            break
+            return r
+    if m:
+        print(f"[api costs] modèle inconnu « {model} » — facturé au tarif "
+              f"prudent {_DEFAULT_PRICING[0]}/{_DEFAULT_PRICING[1]} $/M")
+    return _DEFAULT_PRICING
+
+
+def _price(model: str, input_tokens: int, output_tokens: int) -> float:
+    pin, pout = rates(model)
     return input_tokens / 1e6 * pin + output_tokens / 1e6 * pout
 
 
@@ -93,12 +117,30 @@ def get_costs() -> dict:
         fx = prices.fx_to_eur("USD") or 0.92
     except Exception:
         fx = 0.92
+    # Répartition par modèle sur les 30 derniers jours : sert à dire QUI a
+    # réellement répondu. Le bot a basculé sur le fallback Gemini le 20/07 et
+    # n'a plus jamais servi un appel Anthropic — invisible jusqu'ici.
+    from datetime import timedelta
+    since = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    by_model: dict[str, dict] = {}
+    for day, d in daily.items():
+        if day < since:
+            continue
+        for name, m in (d.get("models") or {}).items():
+            agg = by_model.setdefault(name, {"cost_usd": 0.0, "calls": 0})
+            agg["cost_usd"] = round(agg["cost_usd"] + m.get("cost_usd", 0.0), 6)
+            agg["calls"] += m.get("calls", 0)
+    top = max(by_model.items(), key=lambda kv: kv[1]["calls"], default=(None, None))
+
     return {
+        "by_model":  by_model,
+        "top_model": top[0],
         "total_usd": round(total_usd, 2),
         "total_eur": round(total_usd * fx, 2),
         "month_usd": round(month_usd, 2),
         "month_eur": round(month_usd * fx, 2),
         "today_usd": round(today_usd, 4),
+        "daily":     {d: v.get("cost_usd", 0.0) for d, v in daily.items()},
         "calls":     sum(d.get("calls", 0) for d in daily.values()),
         "seed_note": data.get("seed_note", ""),
     }

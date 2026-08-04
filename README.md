@@ -224,6 +224,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Séance US prolongée** | Wall Street tournant jusqu'à 22h Paris, le bot prolonge la surveillance des positions US (checks 18h / 20h / 21h40, alertes seules) et lance un **scan US** à 16h — plus seulement au briefing de 9h05 (`US_EXTENDED_HOURS`) |
 | **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
 | **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
+| **Dashboard filtrable par période** | Menu ☰ : Global / ce mois / mois dernier / cette année / année dernière. Cartes, graphiques et tableau recalculés sur la période ; P&L latent et cash restent des instantanés globaux, signalés comme tels |
 | **Trailing en 2 paliers** | **1.** À +5% (manuel) / +6% (autonome), le SL monte au PRU — perte impossible. **2.** Passé 60% du chemin vers le TP, le SL monte **au-dessus du PRU** et verrouille une part croissante du gain (50% → 80% au contact du TP). L'ordre Expert est remplacé sur BD à chaque palier |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
@@ -233,7 +234,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Sizing par le risque** | Perte au SL = 1% du budget autonome, SL ≈ 2×ATR, taille réduite si volatilité élevée, série de pertes, ou corrélation forte avec une position déjà détenue (entrée bloquée au-delà de 0.85) |
 | **Mode gain réduit** (opt-in) | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) — désactivé par défaut (`SMALL_GAIN_MODE=on` pour l'activer) |
 | **Dashboard visuel** | http://localhost:8642 (accès Tailscale possible) + `/dashboard` Telegram : P&L cumulé, cash engagé, ROI, trades filtrables |
-| **Coûts API dans le bilan** | Chaque appel IA enregistre ses tokens réels (`api_costs.json`) ; `/stats` et le dashboard affichent le coût cumulé et le **P&L net après coûts IA** — bilan honnête de l'efficacité du bot |
+| **Coûts API dans le bilan** | Chaque appel IA enregistre ses tokens réels ET **le modèle qui a réellement répondu** (`api_costs.json`) ; `/stats` et le dashboard affichent le coût cumulé, le modèle servi et le **P&L net après coûts IA** — bilan honnête de l'efficacité du bot |
 | **Instructions d'ordres** | Format Bourse Direct step-by-step, prêt à saisir sur mobile ou web |
 | **Import screenshot** | Envoyez vos captures d'écran — le bot lit et importe automatiquement |
 | **Import CSV** | Envoyez l'export Bourse Direct — importe avec SL/TP par défaut |
@@ -659,7 +660,11 @@ Un LLM n'apprend pas par entraînement ici, mais le bot **accumule et réutilise
 
 Un tableau de bord local est servi en permanence par le bot : **http://localhost:8642**
 
-- **Cartes de synthèse** : P&L réalisé / latent / total, win rate, profit factor, cash, performance en €/jour depuis le premier trade, ROI sur cash engagé
+- **Filtre de période (menu ☰)** : **Global**, **Ce mois-ci**, **Le mois dernier**, **Cette année**, **L'année dernière**. Cartes, les deux graphiques et le tableau sont recalculés sur la période choisie — y compris les coûts API, jour par jour.
+  - Le **P&L cumulé est recalculé** sur la période (il repart de 0), pas simplement tronqué
+  - Le **€/jour** se base sur la durée réellement écoulée, bornée à aujourd'hui
+  - **P&L latent et cash restent globaux** : ce sont des instantanés, pas des flux — le libellé le précise, et le « P&L total » ne les ajoute qu'en vue Global
+- **Cartes de synthèse** : P&L réalisé / latent / total, win rate, profit factor, cash, performance en €/jour, ROI sur cash engagé
 - **Courbe du P&L cumulé** sur axe temporel réel — la taille de chaque point est proportionnelle au cash engagé sur le deal
 - **P&L par trade** : une barre par trade avec nom, date, cash engagé et résultat annoté
 - **Tableau des trades filtrable** (texte, WIN/LOSS) avec colonnes Investi et ROI
@@ -707,6 +712,21 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-04 — Dashboard : filtre de période + audit des coûts API
+**Filtre de période** — menu ☰ en haut à droite : **Global / Ce mois-ci / Le mois dernier / Cette année / L'année dernière**. Cartes, courbe du P&L cumulé, P&L par trade et tableau sont **tous recalculés côté client** sur la période choisie — laisser une seule valeur figée côté serveur l'aurait rendue fausse dès la première sélection.
+- **Le cumul est recalculé, pas tronqué** : réutiliser le cumul global ferait démarrer la courbe au niveau hérité des trades précédents. Sur juillet elle part bien de 0
+- **€/jour borné à aujourd'hui** : diviser une période en cours par sa durée nominale gonflerait le rythme
+- **P&L latent et cash restent globaux** — ce sont des instantanés, ils n'appartiennent à aucune période ; le libellé le dit, et le « P&L total » ne les additionne qu'en vue Global
+- **Bug corrigé pendant la mise au point** : les bornes passaient par `toISOString()`, qui convertit en UTC — minuit à Paris devient 22h la veille. Juillet perdait le 31 et récupérait le 30 juin (coûts API affichés 0,08 € au lieu de 0,10 €). Les bornes sont désormais construites en heure locale
+
+**Audit des coûts API — le bot tourne sur le fallback Gemini depuis le 20/07.** En recoupant les tokens enregistrés avec les tarifs, **chaque appel depuis le 20/07/2026 correspond exactement au tarif Gemini** : le crédit Anthropic s'est épuisé le lendemain du démarrage du suivi, et **aucun appel Anthropic n'a été servi depuis**. Toutes les décisions de trading depuis cette date viennent du modèle de secours, pas de Sonnet — et rien, ni dans `/stats` ni dans le dashboard, ne le disait.
+- **Le modèle réellement servi est désormais enregistré** (`msg.model` côté Anthropic, `model_version` côté Gemini) et non l'alias demandé : `gemini-flash-latest` est un alias evergreen, le facturer sur son nom revient à parier sur ce qu'il désigne. Ventilation par modèle conservée jour par jour, affichée dans `/stats` et sur la carte du dashboard
+- **Tarif Gemini Flash corrigé** : la table facturait `flash` à 0,30/2,50 $/M — c'est le tarif Flash-**Lite**. Le Flash courant est à 1,50/7,50 $/M, soit une **sous-estimation d'un facteur 5 en entrée** sur toute la période concernée
+- **Tarif Opus corrigé** : 15/75 $/M était l'ancien tarif Opus 3/4 ; les Opus actuels sont à **5/25 $/M** (surestimation de 3× si le bot y repasse)
+- **Modèle inconnu → tarif haut** (10/50 $/M) et trace dans les logs, au lieu du tarif Sonnet : sous-estimer une facture qu'on ne sait pas lire donne un bilan flatteur et faux
+- **Tokens de cache comptés** (écriture 1,25×, lecture 0,1×) : nuls aujourd'hui, mais les ignorer ferait disparaître l'essentiel de la facture le jour où le prompt caching serait activé
+- **L'historique n'a PAS été réécrit** : la provenance d'avant le 04/08 est inférée, pas mesurée. Réécrire le journal avec une déduction la transformerait en fait. Les totaux antérieurs restent donc sous-estimés — c'est signalé plutôt que corrigé en silence
 
 ### 2026-08-04 — yfinance servait des cours vieux de 2 à 3 séances, sans le dire
 - **Symptôme** : le `/status` de 9h annonçait AIR à 208,00 € et NVDA à 200,75 $ quand Bourse Direct affichait **211,40 €** et **206,64 $**. P&L faux sur les trois positions actives (NVDA donné perdant à -2,13 % alors qu'il était gagnant à +0,92 %)
