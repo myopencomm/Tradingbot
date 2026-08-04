@@ -1075,8 +1075,9 @@ def monthly_breach_review(send_fn) -> None:
         lines = []
         for name, cfg in breach.items():
             quote = prices.get_quote(cfg["ticker"])
-            price = quote.get("price")
-            sym = prices.currency_symbol(quote.get("currency", "EUR"))
+            _b    = portfolio.best_price(cfg, quote)
+            price = _b["price"]
+            sym = prices.currency_symbol(_b["currency"])
             if price:
                 chg = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
                 pnl = (price - cfg["entry_price"]) * cfg["qty"]
@@ -1422,8 +1423,9 @@ def research_ticker(send_fn, ticker: str, question: str = "",
 
         if held:
             quote = prices.get_quote(held["ticker"])
-            price = quote.get("price", "?")
-            sym   = prices.currency_symbol(quote.get("currency", "EUR"))
+            _b    = portfolio.best_price(held, quote)
+            price = _b["price"] or "?"
+            sym   = prices.currency_symbol(_b["currency"])
             chg   = ((price - held["entry_price"]) / held["entry_price"]) * 100 if isinstance(price, float) else 0
             pnl   = (price - held["entry_price"]) * held["qty"] if isinstance(price, float) else 0
             pct_to_tp = ((held["target_high"] - price) / price * 100) if isinstance(price, float) else "?"

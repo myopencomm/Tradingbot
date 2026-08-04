@@ -751,6 +751,16 @@ def run_entry_cycle(send_fn) -> None:
                 price = quote.get("price")
                 if not price:
                     continue
+                # Un cours périmé ne peut PAS servir à passer un ordre : le
+                # contrôle de dérive (±3%) le comparerait à une limite calculée
+                # sur une réalité vieille de plusieurs séances, et l'ordre
+                # partirait à côté du marché. Ici, contrairement au suivi de
+                # position, aucun repli BD n'existe (titre non détenu) — on
+                # attend le prochain cycle.
+                if quote.get("stale"):
+                    print(f"[Auto] {ticker} : cours yfinance périmé "
+                          f"({quote.get('as_of')}) — entrée reportée")
+                    continue
 
                 entry = opp["entry"]
                 sl    = opp["sl"]
@@ -816,6 +826,10 @@ def run_entry_cycle(send_fn) -> None:
                 price2 = quote2.get("price")
                 if not price2:
                     portfolio.clear_pending_opportunity(ticker)
+                    continue
+                if quote2.get("stale"):
+                    print(f"[Auto] {ticker} : cours yfinance périmé "
+                          f"({quote2.get('as_of')}) — entrée reportée")
                     continue
                 drift2 = abs(price2 - entry) / entry
                 if drift2 > 0.03:

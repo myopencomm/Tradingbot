@@ -86,6 +86,11 @@ def build_data() -> dict:
     for name, cfg in data.get("positions", {}).items():
         q     = prices.get_quote(cfg["ticker"])
         price = q.get("price")
+        # Un cours PÉRIMÉ vaut un cours absent : la cascade BD ci-dessous est
+        # alors la bonne source (yfinance saute des séances entières sans le
+        # signaler — 04/08/2026).
+        if q.get("stale"):
+            price = None
         # Titre suspendu / cours indisponible : yfinance ne renvoie pas de
         # devise. Le suffixe de place tranche (pas de suffixe = valeur US).
         cur   = q.get("currency") or ("EUR" if "." in cfg["ticker"] else "USD")

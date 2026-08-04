@@ -326,9 +326,12 @@ def cmd_status(args, cid):
         # HOLD long terme : affichage informatif, hors P&L trading, pas d'alerte
         if cfg.get("hold"):
             q = prices.get_quote(cfg["ticker"])
-            price = q.get("price")
-            sym = prices.currency_symbol(q.get("currency", "EUR"))
+            best = portfolio.best_price(cfg, q)
+            price = best["price"]
+            sym = prices.currency_symbol(best["currency"])
             px = f"{sym}{price}" if price else "cours indispo"
+            if price and best["source"] != "yf":
+                px += " ᴮᴰ"
             lines.append(
                 f"🔒 {name} ({cfg['ticker']}) — HOLD long terme, hors gestion bot\n"
                 f"  {cfg['qty']} titres | PRU {sym}{cfg['entry_price']} | {px}"
@@ -336,7 +339,9 @@ def cmd_status(args, cid):
             continue
 
         q = prices.get_quote(cfg["ticker"])
-        price = q.get("price")
+        # Cours retenu : yfinance s'il est frais, sinon le relevé BD.
+        best = portfolio.best_price(cfg, q)
+        price = best["price"]
         if price:
             chg = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
             pnl = (price - cfg["entry_price"]) * cfg["qty"]
@@ -344,9 +349,11 @@ def cmd_status(args, cid):
             arrow  = "+" if chg >= 0 else ""
             sl_tag = " ⚠️ SL DÉPASSÉ" if price < cfg["target_low"] else ""
             tp_tag = " ⚠️ TP DÉPASSÉ" if price > cfg["entry_price"] * 1.25 else ""
-            sym    = prices.currency_symbol(q.get("currency", "EUR"))
+            sym    = prices.currency_symbol(best["currency"])
             cur_tag = ""
-            if q.get("currency", "EUR") != "EUR" and abs(chg) > 80:
+            if best["source"] != "yf":
+                cur_tag = f"\n  ⚠️ {best['note']}"
+            if best["currency"] != "EUR" and abs(chg) > 80:
                 cur_tag = (f"\n  ❗ Perf aberrante — PRU dans la mauvaise devise ?"
                            f"\n  (/remove {name} puis /add avec PRU/SL/TP en {q['currency']})")
             lines.append(
@@ -1067,9 +1074,9 @@ def cmd_vendu(args, cid):
         exit_price = cfg.get("target_high")
         price_source = "TP Bourse Direct"
         if not exit_price:
-            quote = prices.get_quote(cfg["ticker"])
-            exit_price = quote.get("price")
-            price_source = "cours live"
+            _b = portfolio.best_price(cfg)
+            exit_price = _b["price"]
+            price_source = "cours live" if _b["source"] == "yf" else f"cours {_b['source']}"
         if not exit_price:
             send(f"Prix indisponible pour {cfg['ticker']}. Utilise /vendu {name} PRIX", cid)
             return
@@ -2396,7 +2403,7 @@ def cmd_auto(args, cid):
             lines.append("\nPOSITIONS AUTONOMES")
             for name, pos in auto_pos.items():
                 q  = prices.get_quote(pos["ticker"])
-                px = q.get("price")
+                px = portfolio.best_price(pos, q)["price"]
                 if px:
                     chg = (px - pos["entry_price"]) / pos["entry_price"] * 100
                     pnl = (px - pos["entry_price"]) * pos["qty"]
