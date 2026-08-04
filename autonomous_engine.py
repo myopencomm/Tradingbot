@@ -1010,10 +1010,17 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         if not entry or not pos.get("qty"):
             skipped.append(f"  ⚠️ {name} : PRU ou quantité manquant")
             continue
-        price = prices.get_quote(pos["ticker"]).get("price")
+        # Cours retenu : yfinance s'il est frais, sinon le relevé BD. Un cours
+        # périmé fait rater un palier — le 04/08 AIR était à 211.40 chez BD
+        # (72% du chemin vers le TP, palier 2 mérité) alors que yfinance
+        # servait encore 208.00 (55%, aucun palier).
+        _best = portfolio.best_price(pos)
+        price = _best["price"]
         if not price:
             skipped.append(f"  ⚠️ {name} : cours indisponible")
             continue
+        if _best["source"] != "yf":
+            print(f"[Trailing] {name} : {_best['note']}")
         change_pct = (price - entry) / entry * 100
         threshold = BREAKEVEN_PCT if pos.get("autonomous") else BREAKEVEN_THRESHOLD
         # Deux portes d'entrée : le seuil de breakeven, OU la progression vers
@@ -1265,7 +1272,7 @@ def check_autonomous_positions(send_fn) -> None:
 
     for name, pos in auto_pos.items():
         quote = prices.get_quote(pos["ticker"])
-        price = quote.get("price")
+        price = portfolio.best_price(pos, quote)["price"]
         if not price:
             continue
 

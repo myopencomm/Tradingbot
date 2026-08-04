@@ -108,8 +108,13 @@ def check_positions(send_fn, us_only: bool = False) -> None:
             continue
 
         quote = prices.get_quote(cfg["ticker"])
-        price = quote.get("price")
-        sym   = prices.currency_symbol(quote.get("currency", "EUR"))
+        # Cours retenu : yfinance s'il est frais, sinon le relevé Bourse Direct.
+        # yfinance saute des séances entières sans le dire (04/08/2026) — s'en
+        # remettre à lui aveuglément fait afficher un P&L faux ET raisonner les
+        # alertes SL/TP sur un cours mort.
+        best  = portfolio.best_price(cfg, quote)
+        price = best["price"]
+        sym   = prices.currency_symbol(best["currency"])
 
         if price is None:
             code, msg = portfolio.quote_problem(cfg, quote)
@@ -120,15 +125,19 @@ def check_positions(send_fn, us_only: bool = False) -> None:
         change_pct = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
         pnl        = (price - cfg["entry_price"]) * cfg["qty"]
         icon       = "📈" if change_pct >= 0 else "📉"
+        src_tag    = "" if best["source"] == "yf" else f"\n     ⚠️ {best['note']}"
         status_lines.append(
             f"  {icon} {name}: {sym}{price} ({change_pct:+.2f}%) | P&L: {sym}{pnl:+.0f}"
-            f"\n     SL {sym}{cfg['target_low']} — TP {sym}{cfg['target_high']}"
+            f"\n     SL {sym}{cfg['target_low']} — TP {sym}{cfg['target_high']}{src_tag}"
         )
 
-        # Range intraday des 4 dernières heures pour détecter les franchissements entre checks
+        # Range intraday des 4 dernières heures pour détecter les franchissements
+        # entre checks. Le cours retenu y est INTÉGRÉ : si le range vient d'une
+        # séance périmée, il ignorerait le cours réel — un SL franchi passerait
+        # inaperçu.
         rng    = prices.get_intraday_range(cfg["ticker"], hours=4)
-        high4h = rng.get("high", price)
-        low4h  = rng.get("low",  price)
+        high4h = max(rng.get("high", price) or price, price)
+        low4h  = min(rng.get("low",  price) or price, price)
 
         # Réarme l'alerte TP quand le cours est repassé sous le seuil
         if cfg.get("tp_breach_notified") and high4h < cfg["target_high"]:

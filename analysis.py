@@ -398,13 +398,19 @@ def _portfolio_snapshot() -> str:
     positions = {k: v for k, v in positions.items() if not v.get("hold")}
     for name, cfg in positions.items():
         quote = prices.get_quote(cfg["ticker"])
-        price = quote.get("price")
+        # Cours retenu : yfinance s'il est frais, sinon le relevé Bourse Direct.
+        # Un briefing bâti sur des cours périmés raisonne juste sur des chiffres
+        # faux — et rien dans le prompt ne permet à l'IA de s'en apercevoir.
+        best  = portfolio.best_price(cfg, quote)
+        price = best["price"]
         if price and not math.isnan(price):
             chg  = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
             pnl  = (price - cfg["entry_price"]) * cfg["qty"]
-            sym  = prices.currency_symbol(quote.get("currency", "EUR"))
+            sym  = prices.currency_symbol(best["currency"])
             cur_tag = (" | ⚠️ perf aberrante, PRU probablement dans la mauvaise devise — ignorer ce P&L"
-                       if quote.get("currency", "EUR") != "EUR" and abs(chg) > 80 else "")
+                       if best["currency"] != "EUR" and abs(chg) > 80 else "")
+            if best["source"] != "yf":
+                cur_tag += f" | ⚠️ {best['note']}"
             lines.append(
                 f"  {name} ({cfg['ticker']}): {sym}{price} ({chg:+.2f}%) | "
                 f"PRU {sym}{cfg['entry_price']} | {cfg['qty']}t | P&L {sym}{pnl:+.0f} | "

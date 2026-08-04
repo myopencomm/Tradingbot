@@ -182,6 +182,15 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                 cfg[k] = v
                 moved = True
 
+        # Horodatage du relevé : sans lui, impossible de savoir si le cours BD
+        # mémorisé date de l'heure passée (sync horaire) ou d'une semaine
+        # (session Playwright déconnectée). C'est ce qui décide s'il peut servir
+        # de repli quand yfinance saute une séance.
+        if pos.get("price") is not None:
+            import pytz as _pytz
+            from datetime import datetime as _dt
+            cfg["bd_price_at"] = _dt.now(_pytz.timezone("Europe/Paris")).isoformat(timespec="minutes")
+
         # Titre acté sans valeur : BD valorise la ligne à ~0 alors que le PRU
         # dit ce qu'elle a coûté (GVN : 0.26 € pour 133 € investis). Le drapeau
         # permet au dashboard de chiffrer la perte SANS aucun cours — donc dès

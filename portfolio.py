@@ -114,6 +114,54 @@ def get_auto_pending_orders() -> dict:
     return load().get("auto_pending_orders", {})
 
 
+def best_price(cfg: dict, quote: dict | None = None) -> dict:
+    """Meilleur cours disponible pour une position DÉTENUE, avec sa provenance.
+
+    Retourne {price, currency, source, as_of, note} — `price` à None si aucune
+    source. `source` : 'yf' | 'bd' | 'yf_stale'.
+
+    Ordre : yfinance frais → relevé Bourse Direct → yfinance périmé (faute de
+    mieux). BD passe AVANT un yfinance périmé parce que le sync horaire le
+    rafraîchit et que c'est le cours du courtier chez qui la position est
+    réellement détenue — celui qui déclenchera le SL.
+
+    Existe parce que yfinance a servi, le 04/08/2026, des cours vieux de deux à
+    trois séances en les présentant comme courants : NVDA à 200.75 quand BD
+    cotait 206.64, AIR à 208.00 quand BD cotait 211.40. Le P&L affiché, les
+    alertes SL/TP et le trailing raisonnaient tous sur ces cours morts.
+    """
+    import prices as _prices
+    q = quote if quote is not None else _prices.get_quote(cfg.get("ticker", ""))
+    price, stale = q.get("price"), q.get("stale")
+
+    if price is not None and not stale:
+        return {"price": price, "currency": q.get("currency", "EUR"),
+                "source": "yf", "as_of": q.get("as_of"), "note": ""}
+
+    bd_price = cfg.get("bd_price")
+    # Un relevé BD plus VIEUX que la barre yfinance ne vaut pas mieux (session
+    # Playwright déconnectée depuis plusieurs jours) : dans ce cas on garde
+    # yfinance, périmé mais moins.
+    bd_at = (cfg.get("bd_price_at") or "")[:10]
+    if bd_price and bd_at and q.get("as_of") and bd_at < q["as_of"]:
+        bd_price = None
+    if bd_price:
+        at = cfg.get("bd_price_at")
+        return {"price": bd_price,
+                "currency": cfg.get("bd_price_currency") or q.get("currency", "EUR"),
+                "source": "bd", "as_of": at,
+                "note": (f"cours Bourse Direct{' du ' + at[:16].replace('T', ' ') if at else ''}"
+                         f" — yfinance périmé ({q.get('as_of') or 'aucune donnée'})")}
+
+    if price is not None:
+        return {"price": price, "currency": q.get("currency", "EUR"),
+                "source": "yf_stale", "as_of": q.get("as_of"),
+                "note": f"cours yfinance PÉRIMÉ du {q.get('as_of')} — aucun relevé BD"}
+
+    return {"price": None, "currency": q.get("currency", "EUR"),
+            "source": "", "as_of": None, "note": ""}
+
+
 def quote_problem(cfg: dict, quote: dict) -> tuple[str, str]:
     """Pourquoi cette position n'a pas de cours — et à quel point c'est grave.
 

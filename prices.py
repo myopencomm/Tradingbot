@@ -464,13 +464,36 @@ def get_market_regime() -> dict:
                 "summary": "RÉGIME NEUTRAL (données indisponibles)"}
 
 
+def _sessions_since(day) -> int:
+    """Nombre de jours ouvrés entre `day` et aujourd'hui (Paris). 0 = aujourd'hui."""
+    from datetime import date, timedelta
+    today = datetime.now(_PARIS).date()
+    if not day or day >= today:
+        return 0
+    n, cur = 0, day
+    while cur < today:
+        cur += timedelta(days=1)
+        if cur.weekday() < 5:
+            n += 1
+    return n
+
+
 def get_quote(ticker: str) -> dict:
     """Retourne prix dans la devise native du ticker, avec devise détectée.
 
-    status : 'ok' | 'suspended' | 'error'
+    status : 'ok' | 'stale' | 'suspended' | 'error'
+
+    `as_of` (date de la barre utilisée) et `stale` sont TOUJOURS renseignés.
+    Motif : yfinance renvoie parfois une séance entière en NaN — le 04/08/2026
+    toute la séance du 03/08 manquait pour NVDA, BAC et AIR. L'ancien code
+    supprimait les NaN et servait la dernière barre valide (celle du 31/07)
+    en `status: ok` avec `change_pct: 0.0%`, sans rien signaler. Le bot a donc
+    affiché des cours vieux de deux séances comme s'ils étaient live (NVDA à
+    200.75 alors que BD cotait 206.64), et le trailing ne s'est pas déclenché
+    sur AIR alors que le vrai cours l'avait mérité.
     """
     try:
-        hist = yf.Ticker(ticker).history(period="2d")
+        hist = yf.Ticker(ticker).history(period="5d")
         hist = hist.dropna(subset=["Close"])
         if len(hist) >= 2:
             prev       = float(hist["Close"].iloc[-2])
@@ -484,7 +507,17 @@ def get_quote(ticker: str) -> dict:
             long_hist = yf.Ticker(ticker).history(period="1mo").dropna(subset=["Close"])
             status = "suspended" if long_hist.empty else "no_recent_data"
             return {"ticker": ticker, "price": None, "currency": "EUR",
-                    "change_pct": None, "status": status}
+                    "change_pct": None, "status": status,
+                    "as_of": None, "stale": True}
+
+        try:
+            as_of = hist.index[-1].date()
+        except Exception:
+            as_of = None
+        # 0 = barre du jour, 1 = séance précédente (normal avant l'ouverture ou
+        # après la clôture). Au-delà, une séance a été sautée : donnée périmée.
+        age   = _sessions_since(as_of)
+        stale = age >= 2
 
         currency = _ticker_currency(ticker)
         return {
@@ -493,13 +526,17 @@ def get_quote(ticker: str) -> dict:
             "currency":   currency,
             "prev_close": round(prev, 4),
             "change_pct": round(change_pct, 2),
-            "status":     "ok",
+            "status":     "stale" if stale else "ok",
+            "as_of":      as_of.isoformat() if as_of else None,
+            "stale":      stale,
+            "stale_days": age,
         }
 
     except Exception as e:
         print(f"⚠️ Quote error {ticker}: {e}")
         return {"ticker": ticker, "price": None, "currency": "EUR",
-                "change_pct": None, "status": "error"}
+                "change_pct": None, "status": "error",
+                "as_of": None, "stale": True}
 
 
 def get_chart_image(ticker: str, period: str = "3mo") -> bytes | None:

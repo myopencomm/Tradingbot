@@ -708,6 +708,17 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-04 — yfinance servait des cours vieux de 2 à 3 séances, sans le dire
+- **Symptôme** : le `/status` de 9h annonçait AIR à 208,00 € et NVDA à 200,75 $ quand Bourse Direct affichait **211,40 €** et **206,64 $**. P&L faux sur les trois positions actives (NVDA donné perdant à -2,13 % alors qu'il était gagnant à +0,92 %)
+- **Cause** : yfinance a renvoyé **toute la séance du 03/08 en NaN**. `get_quote` supprimait les lignes vides et servait la dernière barre valide — celle du **31/07** — en `status: ok` avec `change_pct: 0.0 %`. Rien, nulle part, ne signalait que la donnée avait deux séances de retard. Sur AIR.PA le retard atteignait **trois séances**
+- **Conséquence silencieuse la plus grave** : les alertes SL/TP, le trailing et le briefing IA raisonnaient tous sur ces cours morts. Le palier 2 du trailing ne s'est pas déclenché sur AIR alors que le vrai cours (211,40 €) plaçait la position à **72 % du chemin vers le TP** — largement au-dessus du seuil de 60 %. Avec le cours périmé, le bot calculait 55 % et ne faisait rien
+- **`get_quote` date désormais ce qu'il renvoie** : `as_of` (date de la barre), `stale_days` (séances de retard) et `status: "stale"` au-delà d'une séance. Une donnée périmée reste utilisable, mais elle est **annoncée comme telle**
+- **`portfolio.best_price()`** — cascade unique pour toute position détenue : yfinance frais → **relevé Bourse Direct** → yfinance périmé faute de mieux. BD passe avant un yfinance périmé parce que le sync horaire le rafraîchit et que c'est le cours du courtier chez qui la position est réellement détenue — celui qui déclenchera le SL. Un relevé BD plus vieux que la barre yfinance (session Playwright déconnectée depuis des jours) ne le remplace pas
+- **La provenance est affichée quand ce n'est pas yfinance** : `⚠️ cours Bourse Direct — yfinance périmé (2026-07-31)`. Un chiffre de repli qui ne se présente pas comme tel est exactement ce qui a produit ce bug
+- **Le relevé BD est horodaté** (`bd_price_at`) : sans date, impossible de savoir s'il vient du sync de l'heure passée ou d'une semaine sans connexion
+- **Le range intraday intègre le cours retenu** (`max`/`min`) : un range issu d'une séance périmée pouvait ignorer le cours réel et laisser passer un franchissement de SL
+- Branché sur le `/status`, les alertes SL/TP, le trailing (les deux paliers) et le snapshot envoyé à l'IA
+
 ### 2026-08-03 — Bug : NVDA enregistré en `NVDA.PA`, position invisible du suivi
 - **Symptôme** : `NVDA: COURS SUSPENDU — non vendable` dans le `/status`, sur une position de 1 233 € achetée et exécutée normalement une heure plus tôt
 - **Cause** : `sync_engine` reconstruit le ticker Yahoo depuis le code place (MIC) renvoyé par BD. **`XNGS`** — NASDAQ Global Select, la place que BD renvoie réellement pour NVDA — **manquait dans la table des suffixes**, et le défaut de cette table est « Paris ». D'où `NVDA` + `.PA`. Yahoo ne connaît pas `NVDA.PA` → aucun cours → aucune alerte SL/TP, aucun trailing : **la position n'était plus surveillée du tout**, et le seul signal envoyé était faux
