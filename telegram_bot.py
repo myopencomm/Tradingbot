@@ -1965,18 +1965,36 @@ def cmd_capture(args, cid):
         # nouvel onglet que le listener de page unique ne voyait pas.
         ctx = page.context
 
+        # Filtre ÉLARGI : toute requête modifiante vers un domaine BD, quel que
+        # soit le chemin. L'ancien filtre (POST vers /hub/ seulement) supposait
+        # connaître l'endpoint qu'on cherche — or c'est précisément l'inconnue
+        # quand une action du site échoue côté bot (annulation d'une protection
+        # soudée à un ordre d'achat, 05/08/2026).
+        _WRITE = ("POST", "DELETE", "PUT", "PATCH")
+
         def on_request(req):
             try:
-                if "/hub/" in req.url and req.method == "POST":
-                    print(f"[CAPTURE] POST {req.url}")
-                    print(f"[CAPTURE PAYLOAD] {req.post_data}")
+                if "boursedirect" in req.url and req.method in _WRITE:
+                    print(f"[CAPTURE] {req.method} {req.url}")
+                    if req.post_data:
+                        print(f"[CAPTURE PAYLOAD] {req.post_data[:2000]}")
+                    hdrs = {k: v for k, v in (req.headers or {}).items()
+                            if k.lower() in ("content-type", "x-csrf-token",
+                                             "x-requested-with", "authorization")}
+                    if hdrs:
+                        print(f"[CAPTURE HEADERS] {hdrs}")
             except Exception:
                 pass
 
         def on_response(resp):
             try:
-                if "/hub/" in resp.url:
-                    print(f"[CAPTURE RESP] {resp.status} {resp.url}")
+                if "boursedirect" in resp.url and resp.request.method in _WRITE:
+                    print(f"[CAPTURE RESP] {resp.status} {resp.request.method} {resp.url}")
+                    try:
+                        body = resp.text()[:1000]
+                        print(f"[CAPTURE RESP BODY] {body}")
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
