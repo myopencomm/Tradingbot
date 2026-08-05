@@ -408,14 +408,30 @@ def get_portfolio(page, send_fn=None) -> dict | None:
                                 except Exception:
                                     otxt = ""
                                 entries.append({"id": oid.replace("order-", ""), "text": otxt})
+                            tick = parsed.get("bd_ticker", "?")
                             if entries:
                                 parsed["order_id"] = entries[0]["id"]  # rétrocompat
                                 parsed["order_ids"] = [e["id"] for e in entries]
                                 parsed["order_entries"] = entries
-                                if len(entries) > 1:
-                                    tick = parsed.get("bd_ticker", "?")
-                                    for e in entries:
-                                        print(f"[BD Reader id] {tick} {e['id']} | {e['text'][:160]}")
+                                # Tracé SYSTÉMATIQUEMENT (avant : seulement les
+                                # blocs multi-ids). Sans ça, impossible de savoir
+                                # si un bloc à id unique porte une protection
+                                # annulable ou seulement l'achat parent exécuté
+                                # — la question ouverte sur NVDA le 05/08/2026.
+                                for e in entries:
+                                    print(f"[BD Reader id] {tick} {e['id']} | {e['text'][:200]}")
+                            else:
+                                # Aucun élément [id^=order-] : la protection est
+                                # peut-être portée par un noeud à id différent.
+                                # On dump tout ce qui a un id pour le savoir.
+                                try:
+                                    ids = block.evaluate(
+                                        "el => Array.from(el.querySelectorAll('[id]'))"
+                                        ".map(n => n.id).slice(0, 20)")
+                                    print(f"[BD Reader id] {tick} AUCUN order-* ; "
+                                          f"ids présents dans le bloc : {ids}")
+                                except Exception as _de:
+                                    print(f"[BD Reader id] {tick} dump ids impossible : {_de}")
                         except Exception:
                             pass
                         orders.append(parsed)
