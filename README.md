@@ -716,6 +716,21 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-05 (3) — Pourquoi le trailing ne peut pas remonter NVDA : la preuve
+Question posée : « si le sync voit les SL/TP, le trailing doit pouvoir les annuler par le même chemin, non ? » L'intuition était juste — la page portefeuille **expose bien des ids annulables**, contrairement à ce qu'affirmait une note interne. C'est exactement ainsi que le trailing a annulé AIR. Le log des sous-ordres, rendu systématique pour trancher, donne le verdict :
+
+```
+AIR  4b07d823-… | Vente(CPT) 0/5  … Seuil 209.70 € En cours     → annulable
+BAC  00e7bd95-… | Vente(CPT) 0/12 … Seuil 58.93 $ En cours      → annulable
+NVDA d57ffcb4-… | Achat(CPT) Ordre exécuté 7/7 … Seuil 187.40 $ → PARENT
+```
+
+**NVDA n'expose qu'un seul id : celui de l'ordre d'ACHAT exécuté.** Sa protection est rendue dans le même nœud DOM, sans identifiant propre, et BD refuse d'annuler un ordre exécuté (403 légitime). La limite est côté Bourse Direct, pas côté bot.
+
+- **Discriminant encodé** : une protection est *remontable* si l'un de ses sous-ordres porte un texte `Vente` + `En cours` **sans** `Ordre exécuté`. Le sync pose le drapeau `trailable` à chaque passage, et liste les protections non remontables dans son compte rendu
+- **`/trailing` donne le palier visé et le gain qu'il verrouillerait**, avec la commande exacte à passer après annulation manuelle — au lieu de constater l'impasse
+- **Origine du cas** : une position achetée en **Expert d'achat** (entrée + SL + TP atomiques) hérite d'une protection soudée au parent. C'est plus sûr à l'entrée — aucune fenêtre sans protection — mais non remontable ensuite. Les protections posées séparément en **ordre de vente** (trailing, `/ordre vendre`) restent gérables
+
 ### 2026-08-05 (2) — « Absent du carnet » ≠ « sans protection » (fausse alerte NVDA)
 Le sync voyait NVDA protégé (`Achat Take Profit SL 187.40$ | TP 225.00$ · En cours`) pendant que `/trailing` annonçait « toujours aucune protection au carnet ». Fausse alerte, introduite le jour même.
 

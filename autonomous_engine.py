@@ -1125,14 +1125,17 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                 # rien à annuler. C'est une limite réelle, pas un défaut de
                 # lecture, et elle se dit telle quelle.
                 if verbose:
+                    tgt, _st, _lb = trailing_target(pos, price, tp, atr_pct)
+                    gain = f" (verrouillerait +{(tgt - entry) * qty_pos:.0f}€)" if tgt else ""
                     send_fn(
                         f"  ↳ {name} : protégé sur BD (SL {pos.get('target_low')} / "
-                        f"TP {pos.get('target_high')}) mais la protection est portée "
-                        f"par l'ordre d'ACHAT — absente du carnet, donc non "
-                        f"remontable par le bot.\n"
-                        f"     Pour la remonter : annule l'Expert sur BD, puis "
-                        f"/ordre vendre {pos['ticker']} {qty_pos} expert "
-                        f"<nouveau SL> {pos.get('target_high')}"
+                        f"TP {pos.get('target_high')}) mais la protection est SOUDÉE "
+                        f"à l'ordre d'ACHAT exécuté — BD n'expose pas d'id annulable "
+                        f"pour elle, le bot ne peut donc pas la remonter.\n"
+                        f"     Palier visé : {tgt or '—'}{gain}. Pour l'appliquer : "
+                        f"annule l'Expert depuis l'interface BD, puis\n"
+                        f"     /ordre vendre {pos['ticker']} {qty_pos} expert "
+                        f"{tgt or pos.get('target_low')} {pos.get('target_high')}"
                     )
                 continue
             else:

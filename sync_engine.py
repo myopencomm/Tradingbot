@@ -479,18 +479,55 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
         for o in active_orders if o.get("seuil")
     }
     protected_names = {(o.get("name") or "").upper() for o in active_orders if o.get("seuil")}
+
+    # ── Protection REMONTABLE ou soudée à l'ordre d'achat ? ──────────────
+    # Discriminant établi sur les ids réels du 05/08/2026 :
+    #   AIR  4b07d823… « Vente(CPT) … Seuil209.70 En cours »        → annulable
+    #   BAC  00e7bd95… « Vente(CPT) … Seuil58.93  En cours »        → annulable
+    #   NVDA d57ffcb4… « Achat(CPT) Ordre exécuté … Seuil187.40 »   → PARENT
+    # Une protection issue d'un Expert d'ACHAT n'a pas d'id propre : elle est
+    # rendue dans le nœud de l'ordre d'achat exécuté, que BD refuse d'annuler
+    # (403 légitime). Elle protège, mais le bot ne peut pas la remonter.
+    def _cancellable_leg(o) -> str | None:
+        for e in (o.get("order_entries") or []):
+            txt = (e.get("text") or "")
+            if "Vente" in txt and "En cours" in txt and "Ordre exécuté" not in txt:
+                return e.get("id")
+        return None
+
+    trailable_bases, trailable_names = set(), set()
+    for o in active_orders:
+        if o.get("seuil") and _cancellable_leg(o):
+            trailable_bases.add((o.get("bd_ticker") or "").upper().split(".")[0])
+            trailable_names.add((o.get("name") or "").upper())
     naked = []
     for name, cfg in data.get("positions", {}).items():
         if cfg.get("hold") or not cfg.get("qty"):
             continue
         base = _local_base(cfg)
         ok = base in protected_bases or (cfg.get("bd_name") or "").upper() in protected_names
+        trail = base in trailable_bases or (cfg.get("bd_name") or "").upper() in trailable_names
         was = cfg.get("protected")
         if cfg.get("protected") is not ok:
             cfg["protected"] = ok
             meta_changed = True
+        if cfg.get("trailable") is not trail:
+            cfg["trailable"] = trail
+            meta_changed = True
         if not ok:
             naked.append((name, cfg, was is not False))   # was: 1re détection ?
+
+    welded = [(n, c) for n, c in data.get("positions", {}).items()
+              if not c.get("hold") and c.get("qty")
+              and c.get("protected") and c.get("trailable") is False]
+    if welded:
+        lines.append("\n🔒 PROTECTIONS NON REMONTABLES PAR LE BOT")
+        for n, c in welded:
+            lines.append(
+                f"  {n} : SL {c.get('target_low')} actif, mais soudé à l'ordre "
+                f"d'ACHAT exécuté (pas d'id annulable). Le trailing ne peut pas "
+                f"le remonter — annulation depuis l'interface BD requise."
+            )
 
     if naked:
         lines.append("\n🚨 POSITIONS SANS PROTECTION SUR BD")
