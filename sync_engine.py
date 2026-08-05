@@ -336,6 +336,12 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                 _bd_snapshot(data["positions"][new_key], pos)
                 if auto_rec:
                     data["positions"][new_key]["autonomous"] = True
+                    # Ids des jambes SL/TP, récupérés à la création de l'ordre.
+                    # Sans eux la protection d'un Expert d'ACHAT est invisible
+                    # (le carnet legacy l'ignore) et donc non remontable.
+                    if auto_rec.get("protection_ids"):
+                        data["positions"][new_key]["protection_ids"] = \
+                            auto_rec["protection_ids"]
                     # Consomme l'engagement "ordre en attente" (exécuté)
                     for k in (yf_t.upper(), bd_ticker):
                         data.get("auto_pending_orders", {}).pop(k, None)

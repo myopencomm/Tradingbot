@@ -592,6 +592,19 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         if not order_id:
             send_fn(f"⚠️ {ticker} : order_id manquant")
             return False
+        # ── LES IDS DES PROTECTIONS SONT ICI, ET NULLE PART AILLEURS ────────
+        # `children` de la réponse /order/create porte les ids des deux jambes
+        # SL et TP de l'Expert. C'est la SEULE occasion de les obtenir : une
+        # fois l'achat exécuté, ni la page portefeuille (qui n'expose que le
+        # parent) ni le carnet legacy (qui ignore les protections d'achat) ne
+        # les montrent. Ne pas les capturer condamnait la position à garder son
+        # stop d'origine à vie — NVDA, figé du 03 au 05/08/2026.
+        # Capture réseau du 05/08 : l'annulation manuelle poste exactement
+        # {"order_id": "<id enfant>"} sur /order/cancel — le même endpoint que
+        # le bot utilise déjà. Il ne manquait que l'id.
+        children = [c for c in (order_data.get("children") or []) if c]
+        if children:
+            print(f"[Auto] {ticker} : protections enfants {children}")
 
         conf = playwright_session.run(
             lambda page, oid=order_id: bd_orders.confirm_order_auto(page, oid, True),
@@ -617,6 +630,7 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
             ticker, qty, round(entry, 4), round(sl, 4), round(tp, 4),
             order_id=order_id,
             expires_at=portfolio.market_close_expiry(ticker).isoformat(),
+            protection_ids=children,
         )
 
         blurb = _deal_summary(ticker, reason)
@@ -1111,6 +1125,79 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                     f"(un Take Profit à {tp_ord['limit']} est encore actif).\n"
                     f"Tentative de rétablissement automatique du stop au PRU…"
                 )
+            elif pos.get("protection_ids"):
+                # Protection absente du carnet MAIS dont on connaît les ids :
+                # ce sont les `children` renvoyés à la création de l'Expert.
+                # Capture réseau du 05/08/2026 : l'annulation manuelle poste
+                # {"order_id": "<id enfant>"} sur /order/cancel — exactement ce
+                # que sait faire bd_orders.cancel_order. On peut donc remonter
+                # le stop d'une position achetée en Expert, ce qui était
+                # impossible jusqu'ici.
+                target, step, step_label = trailing_target(pos, price, tp, atr_pct)
+                if not target or target <= (pos.get("target_low") or 0) + entry * TRAIL_MIN_STEP_PCT / 100:
+                    if verbose:
+                        send_fn(f"  ↳ {name} : protégé (hors carnet), palier "
+                                f"non atteint — rien à faire")
+                    continue
+                oids = list(pos.get("protection_ids") or [])
+                send_fn(f"🔁 {name} : remontée du stop {pos.get('target_low')} → "
+                        f"{target} (protection d'ordre d'achat, {len(oids)} jambe(s) "
+                        f"à annuler)…")
+                failed = []
+                for oid in oids:
+                    try:
+                        ok = playwright_session.run(
+                            lambda page, o=oid: bd_orders.cancel_order(page, o),
+                            timeout=30)
+                    except Exception as _ce:
+                        print(f"[Trailing] {name} cancel {oid} : {_ce}")
+                        ok = None
+                    if not ok:
+                        failed.append(oid)
+                # BD répond « en cours d'annulation » : c'est ASYNCHRONE. On
+                # laisse le temps à la bascule avant de vérifier, et on ne
+                # repose RIEN tant que la protection est encore là — reposer
+                # sur une annulation non aboutie créerait un doublon de vente.
+                time.sleep(5)
+                still = playwright_session.run(
+                    lambda page: reader.get_portfolio(page, send_fn=None), timeout=90) or {}
+                base_n = pos["ticker"].upper().split(".")[0]
+                gone = not any(
+                    (o.get("bd_ticker") or "").upper().split(".")[0] == base_n
+                    and o.get("seuil") and o.get("statut") == "En cours"
+                    for o in still.get("orders", []))
+                if failed or not gone:
+                    send_fn(
+                        f"⚠️ {name} : annulation NON confirmée "
+                        f"({len(failed)} échec(s)) — aucun nouvel ordre posé.\n"
+                        f"✅ La protection actuelle ({pos.get('target_low')}) reste active."
+                    )
+                    continue
+                od = playwright_session.run(
+                    lambda page, t=pos["ticker"], q=qty_pos, sn=round(target, 4), tp_=tp:
+                        bd_orders.create_expert_order(page, t, q, sn, tp_, "max"),
+                    timeout=30)
+                oid2 = od and (od.get("id") or od.get("order_id"))
+                conf = playwright_session.run(
+                    lambda page, o=oid2: bd_orders.confirm_order_auto(page, o, False),
+                    timeout=30) if oid2 else None
+                if conf:
+                    dd = portfolio.load()
+                    if name in dd.get("positions", {}):
+                        dd["positions"][name]["target_low"] = round(target, 4)
+                        dd["positions"][name]["protection_ids"] = [
+                            c for c in (od.get("children") or []) if c]
+                        dd["positions"][name].pop("pending_sl", None)
+                        portfolio.save(dd)
+                    send_fn(f"🤖 GAIN SÉCURISÉ — {name}\n"
+                            f"Stop remonté sur BD : {pos.get('target_low')} → {target}\n"
+                            f"{step_label}")
+                else:
+                    send_fn(f"🚨 {name} : ancienne protection annulée mais NOUVEL "
+                            f"ORDRE NON CONFIRMÉ — position à nu.\n"
+                            f"/ordre vendre {pos['ticker']} {qty_pos} expert "
+                            f"{target} {tp}")
+                continue
             elif pos.get("protected"):
                 # ABSENT DU CARNET ≠ SANS PROTECTION. Les deux pages BD sont
                 # COMPLÉMENTAIRES, pas redondantes :

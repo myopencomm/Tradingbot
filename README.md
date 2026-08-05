@@ -716,6 +716,24 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-05 (4) — La protection d'un Expert d'achat est annulable : il manquait l'id
+Capture réseau d'une annulation manuelle (`/capture` élargi à toute requête modifiante) :
+
+```
+POST /hub/trading/order/cancel   {"order_id":"0a7d399c-fd78-49b6-8fe9-8b3ba0f6aedd"}
+→ 200  "ordre 0a7d399c… en cours d'annulation"
+```
+
+**C'est exactement l'endpoint que le bot utilisait déjà.** Le blocage n'était pas l'API mais l'identifiant : `0a7d399c` n'est pas `d57ffcb4`, l'id du parent affiché dans la modal et le seul que le lecteur capturait. La conclusion « protection non annulable » était donc fausse — il manquait un id, pas une capacité.
+
+**D'où vient le bon id** : la réponse de `/order/create` d'un Expert renvoie `children` — les ids des deux jambes SL et TP. C'est la **seule** occasion de les obtenir : une fois l'achat exécuté, ni la page portefeuille (qui n'expose que le parent) ni le carnet legacy (qui ignore les protections d'achat) ne les montrent.
+
+- **`children` est désormais capturé et persisté** à la création de l'ordre, transporté par le sync jusqu'à la position (`protection_ids`)
+- **Le trailing sait s'en servir** : plus de jambe au carnet mais des ids connus → il annule chaque jambe via `/order/cancel`, **attend et vérifie** que la protection a disparu (BD répond « en cours d'annulation » — c'est asynchrone), et ne repose qu'ensuite. Annulation non confirmée → aucun ordre posé, l'ancienne protection reste active
+- **Conséquence** : une position achetée en Expert autonome devient remontable comme les autres. Le cas NVDA — stop figé à −8,6 % du PRU pendant que le palier 2 en visait +4,1 % — ne peut plus se reproduire
+
+Les trois positions actuelles n'ont pas d'`protection_ids` (elles précèdent ce correctif) ; NVDA a été réparé en remplaçant sa protection par un ordre de vente, désormais visible au carnet et trailé normalement.
+
 ### 2026-08-05 (3) — Pourquoi le trailing ne peut pas remonter NVDA : la preuve
 Question posée : « si le sync voit les SL/TP, le trailing doit pouvoir les annuler par le même chemin, non ? » L'intuition était juste — la page portefeuille **expose bien des ids annulables**, contrairement à ce qu'affirmait une note interne. C'est exactement ainsi que le trailing a annulé AIR. Le log des sous-ordres, rendu systématique pour trancher, donne le verdict :
 

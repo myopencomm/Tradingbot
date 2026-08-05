@@ -187,7 +187,8 @@ def quote_problem(cfg: dict, quote: dict) -> tuple[str, str]:
 
 
 def add_auto_pending_order(ticker: str, qty: int, entry: float, sl: float, tp: float,
-                           order_id: str = None, expires_at: str = None):
+                           order_id: str = None, expires_at: str = None,
+                           protection_ids: list | None = None):
     """`order_id` (BD) et `expires_at` permettent l'ANNULATION AUTO d'un ordre
     d'entrée resté non exécuté à la clôture : un ordre limite qui traîne ne se
     remplit que quand le momentum s'est retourné contre nous (cas AF.PA 07/2026,
@@ -203,6 +204,10 @@ def add_auto_pending_order(ticker: str, qty: int, entry: float, sl: float, tp: f
         rec["order_id"] = str(order_id)
     if expires_at:
         rec["expires_at"] = expires_at
+    # Ids des jambes SL/TP renvoyés par /order/create : seule source, et seule
+    # façon de pouvoir les annuler plus tard pour remonter le stop.
+    if protection_ids:
+        rec["protection_ids"] = list(protection_ids)
     data.setdefault("auto_pending_orders", {})[ticker.upper()] = rec
     save(data)
 
