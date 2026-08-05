@@ -606,6 +606,8 @@ Deux garde-fous, tous deux appris d'incidents réels :
   Le SL ne bouge donc que s'il gagne au moins `TRAIL_MIN_STEP_PCT` (1% du PRU) :
   ratcheter pour 0,2% n'en vaut pas le risque.
 
+⚠️ **Le trailing ne peut remonter qu'un stop posé en ordre de VENTE** (visible au carnet legacy, avec une référence annulable). Une protection portée par un Expert d'**achat** reste active sur BD mais hors de portée du bot : il n'a rien à annuler, donc rien à replacer. `/trailing` le signale au lieu de la croire absente.
+
 `trailing_target()` est la **source unique** des deux paliers — même calcul que
 la session BD soit connectée (l'ordre est remplacé automatiquement) ou non
 (alerte Telegram avec la commande `/ordre` prête à coller).
@@ -713,6 +715,22 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-05 (2) — « Absent du carnet » ≠ « sans protection » (fausse alerte NVDA)
+Le sync voyait NVDA protégé (`Achat Take Profit SL 187.40$ | TP 225.00$ · En cours`) pendant que `/trailing` annonçait « toujours aucune protection au carnet ». Fausse alerte, introduite le jour même.
+
+**Les deux pages BD sont complémentaires, pas redondantes** — le log du carnet legacy le prouve : il ne contient *que* les deux jambes de vente d'AIR.
+
+| Source | Voit | Identifiant annulable |
+|---|---|---|
+| Page portefeuille (sync) | **toutes** les protections actives, y compris celles portées par un Expert d'**achat** exécuté | ❌ |
+| Carnet legacy (trailing) | uniquement les ordres de **vente** autonomes | ✅ |
+
+NVDA est protégé par son Expert d'achat : il n'apparaît donc pas au carnet. En déduire « position à nu » était faux. Le trailing **corrobore désormais avec le drapeau `protected` du sync** avant toute alerte :
+- absent du carnet **mais** protégé selon le sync → *protection active, hors de portée du bot* (rien à annuler, donc rien à remonter) — dit tel quel, avec la marche à suivre manuelle
+- absent des **deux** sources → la position est vraiment à nu, alerte
+
+⚠️ **Limite réelle, désormais annoncée dans l'en-tête de `/trailing`** : le bot ne peut remonter que les protections posées en **ordre de vente**. Une position achetée en Expert autonome garde ses SL/TP d'origine jusqu'à ce qu'ils soient remplacés à la main sur BD.
 
 ### 2026-08-05 — Le bot affichait des SL/TP qui ne protégeaient rien
 Signalé par l'utilisateur : le `/status` montrait `SL $58.93 — TP $67.53` pour BAC alors que le carnet BD ne contenait **aucun ordre** pour cette valeur. Trois défauts distincts, tous du même genre — présenter une valeur mémorisée comme un fait vérifié.
