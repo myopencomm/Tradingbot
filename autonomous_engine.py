@@ -1057,7 +1057,11 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                 f"Palier 1 BREAKEVEN — SL au PRU dès "
                 f"+{BREAKEVEN_THRESHOLD:.0f}% (manuel) / +{BREAKEVEN_PCT:.0f}% (autonome)",
                 f"Palier 2 SÉCURISATION — SL au-dessus du PRU dès "
-                f"{TRAIL_LOCK_TRIGGER_PCT:.0f}% du chemin parcouru vers le TP"]
+                f"{TRAIL_LOCK_TRIGGER_PCT:.0f}% du chemin parcouru vers le TP",
+                f"\nLe bot ne peut remonter QUE les protections posées en ordre "
+                f"de VENTE (celles qu'il voit au carnet, avec une référence "
+                f"annulable). Une protection portée par un Expert d'ACHAT reste "
+                f"active sur BD mais hors de sa portée."]
         if candidates:
             head.append(f"\n{len(candidates)} position(s) au-dessus du seuil : "
                         + ", ".join(n for n, _, _, _ in candidates))
@@ -1107,21 +1111,46 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                     f"(un Take Profit à {tp_ord['limit']} est encore actif).\n"
                     f"Tentative de rétablissement automatique du stop au PRU…"
                 )
+            elif pos.get("protected"):
+                # ABSENT DU CARNET ≠ SANS PROTECTION. Les deux pages BD sont
+                # COMPLÉMENTAIRES, pas redondantes :
+                #   · page portefeuille (lue par le sync) : montre TOUTES les
+                #     protections actives, y compris celles portées par un
+                #     Expert d'ACHAT exécuté — mais sans identifiant annulable ;
+                #   · carnet legacy (lu ici) : ne liste que les ordres de vente
+                #     AUTONOMES, avec leur ref annulable.
+                # NVDA, protégé par son Expert d'achat (SL 187.40 / TP 225),
+                # n'apparaît donc PAS au carnet — et a été annoncé « à nu » à
+                # tort le 05/08. Le trailing ne peut pas le remonter : il n'a
+                # rien à annuler. C'est une limite réelle, pas un défaut de
+                # lecture, et elle se dit telle quelle.
+                if verbose:
+                    send_fn(
+                        f"  ↳ {name} : protégé sur BD (SL {pos.get('target_low')} / "
+                        f"TP {pos.get('target_high')}) mais la protection est portée "
+                        f"par l'ordre d'ACHAT — absente du carnet, donc non "
+                        f"remontable par le bot.\n"
+                        f"     Pour la remonter : annule l'Expert sur BD, puis "
+                        f"/ordre vendre {pos['ticker']} {qty_pos} expert "
+                        f"<nouveau SL> {pos.get('target_high')}"
+                    )
+                continue
             else:
-                # Ni SL ni TP : la position est À NU. Ce cas était traité comme
-                # un simple « rien à faire » silencieux — c'est ainsi que BAC
-                # est resté sans protection du 31/07 au 05/08 sans un mot.
+                # Ni SL ni TP au carnet ET le dernier sync ne voyait aucune
+                # protection : là, la position est vraiment à nu. Ce cas était
+                # un « rien à faire » silencieux — c'est ainsi que BAC est resté
+                # sans protection du 31/07 au 05/08 sans un mot.
                 _trailing_naked_notified = globals().setdefault("_trailing_naked", set())
                 if name not in _trailing_naked_notified:
                     _trailing_naked_notified.add(name)
                     send_fn(
-                        f"🚨 {name} : AUCUNE PROTECTION AU CARNET BD.\n"
-                        f"Ni stop ni objectif — la position est à nu.\n"
+                        f"🚨 {name} : AUCUNE PROTECTION — ni au carnet, ni vue par "
+                        f"le dernier sync.\n"
                         f"À replacer : /ordre vendre {pos['ticker']} {qty_pos} expert "
                         f"{pos.get('target_low')} {pos.get('target_high')}"
                     )
                 elif verbose:
-                    send_fn(f"  ↳ {name} : toujours aucune protection au carnet")
+                    send_fn(f"  ↳ {name} : toujours aucune protection")
                 continue
 
         cur_sl = sl_ord["limit"] if sl_ord else None
