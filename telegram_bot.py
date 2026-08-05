@@ -356,11 +356,19 @@ def cmd_status(args, cid):
             if best["currency"] != "EUR" and abs(chg) > 80:
                 cur_tag = (f"\n  ❗ Perf aberrante — PRU dans la mauvaise devise ?"
                            f"\n  (/remove {name} puis /add avec PRU/SL/TP en {q['currency']})")
+            pend = cfg.get("pending_sl")
+            pend_tag = ("" if not pend or pend <= (cfg.get("target_low") or 0) else
+                        f"\n  ⏳ SL {pend} calculé mais PAS posé sur BD — "
+                        f"le stop actif reste {cfg.get('target_low')}")
+            prot = ("" if cfg.get("protected") is not False else
+                    "\n  🚨 AUCUN ordre SL/TP actif sur BD — seuils non protecteurs\n"
+                    f"  → /ordre vendre {cfg['ticker']} {cfg['qty']} expert "
+                    f"{cfg.get('target_low')} {cfg.get('target_high')}")
             lines.append(
                 f"{name} ({cfg['ticker']})\n"
                 f"  Prix: {sym}{price} ({arrow}{chg:.2f}%) | P&L: {sym}{pnl:+.0f}{sl_tag}{tp_tag}\n"
                 f"  PRU: {sym}{cfg['entry_price']} | {cfg['qty']} titres\n"
-                f"  SL: {sym}{cfg['target_low']}  TP: {sym}{cfg['target_high']}{cur_tag}"
+                f"  SL: {sym}{cfg['target_low']}  TP: {sym}{cfg['target_high']}{pend_tag}{prot}{cur_tag}"
             )
         else:
             # Le relevé BD tranche : un titre que le courtier valorise n'est pas

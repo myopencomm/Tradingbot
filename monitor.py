@@ -126,9 +126,17 @@ def check_positions(send_fn, us_only: bool = False) -> None:
         pnl        = (price - cfg["entry_price"]) * cfg["qty"]
         icon       = "📈" if change_pct >= 0 else "📉"
         src_tag    = "" if best["source"] == "yf" else f"\n     ⚠️ {best['note']}"
+        # Un SL/TP mémorisé n'est pas un SL/TP actif. Le dernier sync dit si un
+        # ordre les porte réellement sur BD ; sans ça on affiche des seuils qui
+        # ne protègent rien (cas BAC, 05/08/2026).
+        _pend = cfg.get("pending_sl")
+        pend_tag = ("" if not _pend or _pend <= (cfg.get("target_low") or 0) else
+                    f"\n     ⏳ SL {_pend} calculé mais PAS posé sur BD")
+        prot_tag = ("" if cfg.get("protected") is not False else
+                    "\n     🚨 AUCUN ordre SL/TP actif sur BD — ces seuils ne protègent RIEN")
         status_lines.append(
             f"  {icon} {name}: {sym}{price} ({change_pct:+.2f}%) | P&L: {sym}{pnl:+.0f}"
-            f"\n     SL {sym}{cfg['target_low']} — TP {sym}{cfg['target_high']}{src_tag}"
+            f"\n     SL {sym}{cfg['target_low']} — TP {sym}{cfg['target_high']}{pend_tag}{prot_tag}{src_tag}"
         )
 
         # Range intraday des 4 dernières heures pour détecter les franchissements

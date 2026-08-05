@@ -255,36 +255,56 @@ def read_order_book(page, send_fn=None) -> list[dict]:
     return []
 
 
-def find_stop_loss_order(rows: list[dict], ticker: str, entry: float) -> dict | None:
-    """
-    Isole le Stop Loss d'une position parmi les lignes du carnet : c'est la
-    vente dont la limite est SOUS le PRU (le Take Profit est au-dessus).
-    Retourne None si ce n'est pas STRICTEMENT univoque — sur compte réel,
-    annuler la mauvaise ligne laisserait la position sans protection.
-    """
+def _sell_legs(rows: list[dict], ticker: str) -> list[dict]:
+    """Jambes de vente actives d'une position, triées par limite croissante."""
     base = (ticker or "").upper().split(".")[0]
     mine = [o for o in rows
             if (o.get("ticker") or "").upper() == base
             and o.get("limit") is not None
             and (o.get("sens") or "").lower().startswith("vente")]
-    below = [o for o in mine if o["limit"] < entry]
-    return below[0] if len(below) == 1 else None
+    return sorted(mine, key=lambda o: o["limit"])
+
+
+def find_stop_loss_order(rows: list[dict], ticker: str, entry: float) -> dict | None:
+    """
+    Isole le Stop Loss d'une position parmi les lignes du carnet.
+
+    Le discriminant est la position RELATIVE des deux jambes, pas le PRU : sur
+    un Expert SL+TP, la plus BASSE est le stop et la plus haute la cible, où
+    que se trouve le PRU. L'ancienne règle (« la vente sous le PRU ») cassait
+    dès que le trailing remontait le stop AU-DESSUS du PRU — c'est-à-dire à
+    chaque palier de sécurisation : le stop d'AIR à 205.25 pour un PRU de
+    196.90 était classé « take profit », les deux jambes se retrouvaient
+    au-dessus du PRU, plus rien n'était identifiable, et le trailing sautait la
+    position EN SILENCE (constaté le 05/08/2026 — AIR et NVDA figés depuis
+    leur premier palier).
+
+    Retourne None si ce n'est pas STRICTEMENT univoque — sur compte réel,
+    annuler la mauvaise ligne laisserait la position sans protection.
+    """
+    legs = _sell_legs(rows, ticker)
+    if len(legs) == 2:
+        return legs[0]                       # la plus basse = stop
+    if len(legs) == 1:
+        # Jambe unique : le PRU ne tranche plus (le stop peut être au-dessus).
+        # On ne devine pas — l'appelant décidera avec ses seuils mémorisés.
+        return legs[0] if legs[0]["limit"] < entry else None
+    return None
 
 
 def find_take_profit_order(rows: list[dict], ticker: str, entry: float) -> dict | None:
     """
-    Take Profit d'une position : la vente dont la limite est AU-DESSUS du PRU.
+    Take Profit d'une position : la plus HAUTE des deux jambes de vente.
     None si non univoque. Nécessaire au trailing : reposer un ordre Expert
     (SL+TP) sans avoir annulé l'ancien TP créerait un DOUBLON de vente — soit
     deux fois la quantité détenue.
     """
-    base = (ticker or "").upper().split(".")[0]
-    mine = [o for o in rows
-            if (o.get("ticker") or "").upper() == base
-            and o.get("limit") is not None
-            and (o.get("sens") or "").lower().startswith("vente")]
-    above = [o for o in mine if o["limit"] > entry]
-    return above[0] if len(above) == 1 else None
+    legs = _sell_legs(rows, ticker)
+    if len(legs) == 2:
+        return legs[1]                       # la plus haute = cible
+    if len(legs) == 1:
+        return legs[0] if legs[0]["limit"] > entry else None
+    return None
 
 
 def get_portfolio(page, send_fn=None) -> dict | None:

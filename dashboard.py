@@ -143,6 +143,8 @@ def build_data() -> dict:
             # jamais surveillés — les afficher comme des seuils actifs serait
             # mensonger, d'où le ⛔.
             "hold":   bool(cfg.get("hold")),
+            # False = le dernier sync n'a trouvé AUCUN ordre SL/TP actif sur BD.
+            "unprotected": cfg.get("protected") is False,
             "auto":   bool(cfg.get("autonomous")),
             "sym":    prices.currency_symbol(cur),
         })
@@ -231,6 +233,7 @@ button.on { border-color: #3fd583; color: #3fd583; }
 .badge { font-size: .68em; padding: 2px 7px; border-radius: 6px;
   background: #1f3a5c; color: #8db8ec; vertical-align: middle; }
 .badge.hold { background: #2a2f3a; color: #8b96a5; }
+.badge.naked { background: #4a1f22; color: #ff9a9a; }
 /* Menu hamburger — sélecteur de période */
 .burger { background: #151923; border: 1px solid #232a37; border-radius: 10px;
   color: #e6e9ef; font-size: 1.1em; line-height: 1; padding: 9px 12px;
@@ -548,8 +551,17 @@ def render_html() -> str:
         eur_tag = '<span class="muted"> ᴮᴰ</span>' if p["pru_bd"] else ""
         # SL/TP d'une position hors gestion : ⛔ plutôt qu'un seuil que
         # personne ne surveille.
-        sl_tp = ("<td>⛔</td><td>⛔</td>" if p["hold"] else
-                 f"<td>{p['sl']}{sym}</td><td>{p['tp']}{sym}</td>")
+        if p["hold"]:
+            sl_tp = "<td>⛔</td><td>⛔</td>"
+        elif p["unprotected"]:
+            # Seuils mémorisés SANS ordre actif derrière : les afficher comme
+            # des protections serait mentir (cas BAC, 05/08/2026).
+            warn = ('<span class="muted" title="Aucun ordre SL/TP actif sur '
+                    'Bourse Direct — ce seuil ne protège rien"> 🚨</span>')
+            sl_tp = (f"<td>{p['sl']}{sym}{warn}</td>"
+                     f"<td>{p['tp']}{sym}{warn}</td>")
+        else:
+            sl_tp = f"<td>{p['sl']}{sym}</td><td>{p['tp']}{sym}</td>"
         rows.append(
             f"<tr><td>{p['name']}{tag}</td><td class='m-hide'>{p['qty']}</td>"
             f"<td>{p['entry']}{sym}</td><td>{p['entry_eur']}€{eur_tag}</td>"

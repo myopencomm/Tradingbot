@@ -1091,6 +1091,7 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
 
     for name, pos, change_pct, price in candidates:
         entry  = pos["entry_price"]
+        qty_pos = abs(pos.get("qty") or 0)
         sl_ord = reader.find_stop_loss_order(rows, pos["ticker"], entry)
         tp_ord = reader.find_take_profit_order(rows, pos["ticker"], entry)
 
@@ -1107,8 +1108,20 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                     f"Tentative de rétablissement automatique du stop au PRU…"
                 )
             else:
-                if verbose:
-                    send_fn(f"  ↳ {name} : aucun ordre de protection au carnet — non touché")
+                # Ni SL ni TP : la position est À NU. Ce cas était traité comme
+                # un simple « rien à faire » silencieux — c'est ainsi que BAC
+                # est resté sans protection du 31/07 au 05/08 sans un mot.
+                _trailing_naked_notified = globals().setdefault("_trailing_naked", set())
+                if name not in _trailing_naked_notified:
+                    _trailing_naked_notified.add(name)
+                    send_fn(
+                        f"🚨 {name} : AUCUNE PROTECTION AU CARNET BD.\n"
+                        f"Ni stop ni objectif — la position est à nu.\n"
+                        f"À replacer : /ordre vendre {pos['ticker']} {qty_pos} expert "
+                        f"{pos.get('target_low')} {pos.get('target_high')}"
+                    )
+                elif verbose:
+                    send_fn(f"  ↳ {name} : toujours aucune protection au carnet")
                 continue
 
         cur_sl = sl_ord["limit"] if sl_ord else None
@@ -1336,7 +1349,13 @@ def check_autonomous_positions(send_fn) -> None:
             target, step, step_label = trailing_target(pos, price, tp, atr_pct)
             if not target or target <= sl + entry * TRAIL_MIN_STEP_PCT / 100:
                 continue
-            data["positions"][name]["target_low"] = round(target, 4)
+            # ⚠️ On n'écrit PAS target_low ici. Sans session BD, l'ordre n'est
+            # pas replacé : `target_low` doit continuer de dire ce que BD
+            # exécutera VRAIMENT, sinon /status affiche un stop qui n'existe
+            # nulle part (AIR annoncé à 209.68 alors que BD tenait 205.25).
+            # Le SL souhaité part en `pending_sl` jusqu'à ce que l'ordre soit
+            # réellement posé — le prochain sync relira la valeur de BD.
+            data["positions"][name]["pending_sl"] = round(target, 4)
             data["positions"][name]["auto_breakeven_notified"] = True
             changed = True
             if step == "lock":
@@ -1344,7 +1363,8 @@ def check_autonomous_positions(send_fn) -> None:
                     f"{auto_tag} GAIN À SÉCURISER — {name}\n"
                     f"Position à {change_pct:+.1f}% au-dessus du PRU ({entry}€)\n"
                     f"{step_label}\n"
-                    f"SL relevé à {target}€ dans le bot — sortie au pire à "
+                    f"⚠️ SL PAS ENCORE POSÉ SUR BD (session déconnectée) : le "
+                    f"stop actif reste {sl}. À placer pour verrouiller "
                     f"+{(target - entry) * qty:.0f}€.\n"
                     f"Passe un nouvel Expert (SL={target}€, TP={tp}€) via :\n"
                     f"/ordre vendre {pos['ticker']} {qty} expert {target} {tp}"
@@ -1353,7 +1373,8 @@ def check_autonomous_positions(send_fn) -> None:
                 send_fn(
                     f"{auto_tag} AUTO BREAKEVEN — {name}\n"
                     f"Position à {change_pct:+.1f}% au-dessus du PRU ({entry}€)\n"
-                    f"SL relevé au PRU dans le bot. P&L garanti ≥ 0.\n"
+                    f"⚠️ SL PAS ENCORE POSÉ SUR BD (session déconnectée) : le "
+                    f"stop actif reste {sl}. À placer pour garantir P&L ≥ 0.\n"
                     f"Passe un nouvel Expert (SL={entry}€, TP={tp}€) via :\n"
                     f"/ordre vendre {pos['ticker']} {qty} expert {entry} {tp}"
                 )

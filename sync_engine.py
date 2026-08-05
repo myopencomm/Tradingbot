@@ -464,6 +464,46 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                     pos_cfg["target_high"] = profit
                     changed = True
 
+    # ── Contrôle de PROTECTION : quelles positions ont encore un stop ? ───
+    # Le sync mettait à jour les SL/TP depuis les ordres actifs, mais ne
+    # regardait JAMAIS l'inverse : une position gérée SANS aucun ordre de
+    # protection ne déclenchait rien. Le /status continuait d'afficher ses
+    # SL/TP mémorisés comme s'ils étaient actifs, alors qu'ils ne protégeaient
+    # plus rien (cas BAC, 05/08/2026 : l'Expert d'achat portant les
+    # protections a expiré le 31/07 à 22h et les a emportées avec lui).
+    #
+    # Discriminant : un ordre ACTIF portant un seuil (`seuil`) pour ce titre.
+    # C'est exactement le contrôle qu'on fait à l'œil sur le carnet BD.
+    protected_bases = {
+        (o.get("bd_ticker") or "").upper().split(".")[0]
+        for o in active_orders if o.get("seuil")
+    }
+    protected_names = {(o.get("name") or "").upper() for o in active_orders if o.get("seuil")}
+    naked = []
+    for name, cfg in data.get("positions", {}).items():
+        if cfg.get("hold") or not cfg.get("qty"):
+            continue
+        base = _local_base(cfg)
+        ok = base in protected_bases or (cfg.get("bd_name") or "").upper() in protected_names
+        was = cfg.get("protected")
+        if cfg.get("protected") is not ok:
+            cfg["protected"] = ok
+            meta_changed = True
+        if not ok:
+            naked.append((name, cfg, was is not False))   # was: 1re détection ?
+
+    if naked:
+        lines.append("\n🚨 POSITIONS SANS PROTECTION SUR BD")
+        for name, cfg, _first in naked:
+            sym = "$" if (cfg.get("bd_price_currency") or "EUR") == "USD" else "€"
+            lines.append(
+                f"  {name} : AUCUN ordre SL/TP actif au carnet — les seuils "
+                f"affichés ({sym}{cfg.get('target_low')} / {sym}{cfg.get('target_high')}) "
+                f"ne protègent RIEN.\n"
+                f"    → /ordre vendre {cfg['ticker']} {cfg['qty']} expert "
+                f"{cfg.get('target_low')} {cfg.get('target_high')}"
+            )
+
     # ── Réconciliation des ordres autonomes en attente ────────────────────
     # Un enregistrement sans ordre d'achat actif sur BD ni position créée =
     # ordre annulé/expiré → engagement libéré.
@@ -495,12 +535,21 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     else:
         lines.append("\nInvest. programmés : aucun")
 
+    # Une position qui PERD sa protection est un événement de sécurité : le
+    # sync horaire doit rompre son silence, sinon la découverte se fait par
+    # hasard des jours plus tard (BAC, non protégé du 31/07 au 05/08).
+    newly_naked = [n for n, _c, first in naked if first]
+
     # Mode silencieux (check horaire) : message uniquement sur événement
-    # significatif (vente clôturée ou position achetée détectée).
+    # significatif (vente, achat détecté, ou perte de protection).
     if not silent:
         send_fn("✅ Sync BD terminée\n\n" + "\n".join(lines))
     elif sold_keys or added_keys:
         send_fn("🔄 Sync auto BD — exécution détectée\n\n" + "\n".join(lines))
+    elif newly_naked:
+        send_fn("🚨 POSITION SANS PROTECTION détectée par le sync auto\n\n"
+                + "\n".join(l for l in lines
+                             if "SANS PROTECTION" in l or l.startswith("  ") or l.startswith("    ")))
     else:
         print("[sync auto] RAS — portefeuille aligné avec BD")
 

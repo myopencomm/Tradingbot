@@ -226,6 +226,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
 | **Dashboard filtrable par période** | Menu ☰ : Global / ce mois / mois dernier / cette année / année dernière. Cartes, graphiques et tableau recalculés sur la période ; P&L latent et cash restent des instantanés globaux, signalés comme tels |
 | **Trailing en 2 paliers** | **1.** À +5% (manuel) / +6% (autonome), le SL monte au PRU — perte impossible. **2.** Passé 60% du chemin vers le TP, le SL monte **au-dessus du PRU** et verrouille une part croissante du gain (50% → 80% au contact du TP). L'ordre Expert est remplacé sur BD à chaque palier |
+| **Contrôle de protection** | À chaque sync, toute position gérée est comparée au carnet BD. Sans ordre SL/TP actif → alerte (même en sync silencieux), marquage `🚨 non protégé` dans `/status` et le dashboard, commande de replacement fournie. Un stop calculé mais non posé sur BD est affiché comme tel, jamais comme actif |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
 | **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +6% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
@@ -712,6 +713,21 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-05 — Le bot affichait des SL/TP qui ne protégeaient rien
+Signalé par l'utilisateur : le `/status` montrait `SL $58.93 — TP $67.53` pour BAC alors que le carnet BD ne contenait **aucun ordre** pour cette valeur. Trois défauts distincts, tous du même genre — présenter une valeur mémorisée comme un fait vérifié.
+
+**1. Aucun contrôle de protection.** Le sync mettait à jour les SL/TP *depuis* les ordres actifs, mais ne regardait jamais l'inverse : une position gérée **sans aucun ordre de protection** ne déclenchait rien. BAC est resté à nu du **31/07 au 05/08** sans un mot. Cause : l'Expert d'ACHAT qui portait ses protections avait une validité au 31/07 22h ; en expirant il les a emportées. Le sync compare désormais chaque position gérée au carnet, pose un drapeau `protected`, et **rompt le silence du sync horaire** quand une position perd sa protection.
+
+**2. Le trailing ne reconnaissait plus ses propres ordres — et se taisait.** `find_stop_loss_order` identifiait le stop comme « la vente sous le PRU ». Le palier 2 du trailing (livré le 03/08) remonte précisément le stop **au-dessus du PRU** : dès le premier palier, les deux jambes se retrouvent au-dessus, plus rien n'est identifiable, et la position est sautée **en silence**. AIR et NVDA étaient figés depuis leur premier palier.
+- Le discriminant est maintenant la position **relative** des deux jambes — la plus basse est le stop, la plus haute la cible — quel que soit le PRU
+- Le cas « ni SL ni TP au carnet » n'est plus un `continue` muet : il alerte une fois par position, avec la commande de replacement prête
+
+**3. Un SL calculé n'est plus écrit comme un SL actif.** En session BD déconnectée, le trailing écrivait le nouveau stop dans `target_low` et affichait un ordre à passer à la main — donc `/status` annonçait un stop que BD n'avait jamais reçu (AIR affiché à 209.68 quand BD tenait 205.25). Le stop souhaité part désormais dans `pending_sl` ; **`target_low` ne dit que ce que BD exécutera vraiment**, et l'écart est affiché : `⏳ SL 209.68 calculé mais PAS posé sur BD — le stop actif reste 205.25`.
+
+**Affichage** : `/status`, le STATUS planifié et le dashboard marquent une position sans protection (`🚨 AUCUN ordre SL/TP actif sur BD`, badge `non protégé`) au lieu d'imprimer ses seuils comme s'ils étaient actifs.
+
+⚠️ **Aucun ordre n'est replacé automatiquement.** Deux sources BD décrivent les protections différemment (page portefeuille vs carnet legacy) ; poster un Expert de vente sur une lecture erronée créerait un **doublon de vente**. Le bot détecte, alerte et fournit la commande — le placement reste un geste explicite.
 
 ### 2026-08-04 — Dashboard : filtre de période + audit des coûts API
 **Filtre de période** — menu ☰ en haut à droite : **Global / Ce mois-ci / Le mois dernier / Cette année / L'année dernière**. Cartes, courbe du P&L cumulé, P&L par trade et tableau sont **tous recalculés côté client** sur la période choisie — laisser une seule valeur figée côté serveur l'aurait rendue fausse dès la première sélection.
