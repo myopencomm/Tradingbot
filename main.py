@@ -249,6 +249,26 @@ if __name__ == "__main__":
     import dashboard
     dashboard.start_server()
 
+    # Adresse d'accès : recalculée au démarrage et ANNONCÉE si elle a bougé.
+    # Tailscale crée un nœud dupliqué à chaque réinstallation ou mise à jour
+    # (`yok` → `yok-2` → `yok-3`) et l'IP du tailnet suit — un lien noté quelque
+    # part devient faux sans prévenir. Le bot est le seul à savoir où il est
+    # joignable : c'est donc à lui de le dire.
+    try:
+        _urls, _changed = dashboard.refresh_link_file()
+        for _lbl, _u in _urls:
+            print(f"   Dashboard {_lbl} : {_u}")
+        if _changed and _urls:
+            telegram_bot.send(
+                "🔗 ADRESSE DU DASHBOARD MODIFIÉE\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                + "\n".join(f"{l} : {u}" for l, u in _urls)
+                + "\n\n(Tailscale a renommé ou ré-adressé la machine. "
+                  "/dashboard redonne toujours le lien à jour.)"
+            )
+    except Exception as _de:
+        print(f"[dashboard] lien : {_de}")
+
     telegram_bot.start_polling()
 
     nb = len(positions)

@@ -601,6 +601,84 @@ def render_html() -> str:
     return html
 
 
+# ─── Adresse d'accès — résolue à CHAQUE appel ────────────────────────────────
+# Tailscale renomme et ré-adresse la machine à chaque réinstallation ou mise à
+# jour : un nœud dupliqué prend le nom (`yok` → `yok-2`) et l'IP du tailnet
+# change avec lui. Un lien noté quelque part est donc périmé à la première
+# mise à jour. Le seul lien fiable est celui que la machine calcule sur
+# elle-même, au moment où on le demande.
+
+def _tailscale_self() -> dict:
+    """Nom DNS et IP tailnet de CETTE machine, via la CLI Tailscale."""
+    import json as _json
+    import os
+    import shutil
+    import subprocess
+    # Le bot tourne sous launchd, dont le PATH ne contient PAS /usr/local/bin :
+    # `shutil.which` seul échouait et le lien Tailscale disparaissait du
+    # démarrage. On essaie donc les emplacements connus, dans l'ordre.
+    candidates = [
+        shutil.which("tailscale"),
+        "/usr/local/bin/tailscale",
+        "/opt/homebrew/bin/tailscale",
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    ]
+    exe = next((c for c in candidates if c and os.path.exists(c)), None)
+    if not exe:
+        print("[dashboard] binaire tailscale introuvable — lien tailnet omis")
+        return {}
+    try:
+        out = subprocess.run([exe, "status", "--json"], capture_output=True,
+                             text=True, timeout=8)
+        if out.returncode != 0:
+            print(f"[dashboard] tailscale status rc={out.returncode} : "
+                  f"{(out.stderr or '')[:120]}")
+            return {}
+        self_ = (_json.loads(out.stdout) or {}).get("Self") or {}
+        ips = [i for i in (self_.get("TailscaleIPs") or []) if ":" not in i]
+        return {
+            "dns": (self_.get("DNSName") or "").rstrip("."),
+            "ip":  ips[0] if ips else "",
+            "online": bool(self_.get("Online")),
+        }
+    except Exception as e:
+        print(f"[dashboard] Tailscale indisponible : {e}")
+        return {}
+
+
+def access_urls() -> list[tuple[str, str]]:
+    """URLs d'accès valables MAINTENANT, jeton inclus. (libellé, url)."""
+    from config import DASHBOARD_TOKEN, DASHBOARD_BIND
+    q = f"/?token={DASHBOARD_TOKEN}" if DASHBOARD_TOKEN else "/"
+    urls = [("Sur ce Mac", f"http://localhost:{PORT}{q}")]
+    if DASHBOARD_BIND == "127.0.0.1":
+        return urls          # lié en local : rien d'autre n'est joignable
+    ts = _tailscale_self()
+    if ts.get("dns"):
+        urls.insert(0, ("Tailscale (nom)", f"http://{ts['dns']}:{PORT}{q}"))
+    if ts.get("ip"):
+        urls.insert(1 if ts.get("dns") else 0,
+                    ("Tailscale (IP)", f"http://{ts['ip']}:{PORT}{q}"))
+    return urls
+
+
+_LINK_FILE = __import__("pathlib").Path(__file__).resolve().parent / "dashboard-link.local.txt"
+
+
+def refresh_link_file() -> tuple[list[tuple[str, str]], bool]:
+    """Réécrit le fichier de liens. Retourne (urls, a_changé)."""
+    urls = access_urls()
+    body = "\n".join(u for _l, u in urls) + "\n"
+    try:
+        changed = (not _LINK_FILE.exists()) or _LINK_FILE.read_text() != body
+        if changed:
+            _LINK_FILE.write_text(body)
+        return urls, changed
+    except Exception as e:
+        print(f"[dashboard] écriture du fichier de liens : {e}")
+        return urls, False
+
+
 # ─── Icône PWA (générée une fois, en mémoire) ────────────────────────────────
 
 _icon_cache: dict[int, bytes] = {}

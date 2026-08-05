@@ -689,6 +689,8 @@ tailscale serve --https=443 off   # pour désactiver
 
 **Alternative — bind réseau** (tailnet + réseau local) : dans `.env`, ajoutez `DASHBOARD_BIND=0.0.0.0` puis `./bot.sh restart`. Le dashboard devient accessible via l'IP Tailscale du Mac (`http://100.x.y.z:8642`). À réserver à un réseau de confiance.
 
+> 💡 **Ne notez jamais le lien.** Tailscale renomme (`yok` → `yok-2` → `yok-3`) et ré-adresse la machine à chaque réinstallation ou mise à jour. `/dashboard` recalcule l'URL à chaque appel, et le bot vous prévient sur Telegram au démarrage si elle a changé.
+
 ---
 
 ## Personnaliser les conseils IA
@@ -715,6 +717,16 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-05 (5) — Le lien du dashboard se recalcule au lieu d'être recopié
+Tailscale crée un **nœud dupliqué** à chaque réinstallation ou mise à jour : la machine `yok` devient `yok-2`, puis `yok-3`, et **l'IP du tailnet change avec elle**. Tout lien noté quelque part devient donc faux sans prévenir — constaté ce jour : le lien mémorisé pointait encore sur `100.65.97.62` alors que la machine était passée à `100.108.53.48`.
+
+Le bot est le seul à savoir où il est joignable : c'est désormais lui qui le dit.
+- **`dashboard.access_urls()`** interroge `tailscale status --json` et construit les URLs (nom tailnet, IP tailnet, local) **avec le jeton**, à chaque appel — rien n'est mémorisé
+- **`/dashboard` affiche le lien courant** sous le graphique
+- **Au démarrage, le bot compare et prévient sur Telegram si l'adresse a changé** — plus besoin de la demander : elle arrive toute seule quand elle bouge
+- **`dashboard-link.local.txt` est régénéré** à chaque lancement au lieu d'être un fichier écrit à la main
+- **Piège corrigé au passage** : le bot tourne sous launchd, dont le `PATH` ne contient pas `/usr/local/bin`. Un simple `shutil.which("tailscale")` échouait et le lien tailnet disparaissait du démarrage sans un mot ; les emplacements connus sont maintenant essayés dans l'ordre
 
 ### 2026-08-05 (4) — La protection d'un Expert d'achat est annulable : il manquait l'id
 Capture réseau d'une annulation manuelle (`/capture` élargi à toute requête modifiante) :

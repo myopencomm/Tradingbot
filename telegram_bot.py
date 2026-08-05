@@ -1937,6 +1937,14 @@ def cmd_dashboard(args, cid):
             import dashboard
             png = dashboard.render_png()
             txt = dashboard.summary_text()
+            # Lien RECALCULÉ à chaque appel : Tailscale renomme et ré-adresse
+            # la machine à chaque mise à jour, donc tout lien noté est périmé.
+            try:
+                links = dashboard.access_urls()
+                txt += "\n\n🔗 ACCÈS (valable maintenant)\n" + "\n".join(
+                    f"{lbl} : {url}" for lbl, url in links)
+            except Exception as _le:
+                print(f"[dashboard] lien indisponible : {_le}")
             if png:
                 if not send_photo(png, caption=txt, chat_id=cid):
                     send(txt, cid)
