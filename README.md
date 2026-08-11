@@ -284,6 +284,8 @@ TradingBot/
 └── .env                       Vos secrets — ignoré par git ✅
 ```
 
+> 📐 **[`REFACTORING.md`](REFACTORING.md)** — audit complet de la codebase (11/08/2026) et plan de refactoring en 6 phases : sources de vérité uniques, filet de tests, verrou sur l'état. À lire avant toute réorganisation de modules.
+
 **Flux de données :**
 `positions.json` est la source de vérité en mode Classic. En mode Playwright, `bourse_direct_reader.py` synchronise les données réelles de BD dans ce même fichier — les deux modes sont compatibles. Les positions autonomes sont taguées `"autonomous": true` dans ce même fichier.
 
