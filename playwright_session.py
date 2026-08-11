@@ -180,7 +180,7 @@ def _keepalive_loop():
                 print("[Playwright keepalive] session BD expirée — /connect requis")
                 # Notification Telegram si possible
                 try:
-                    from telegram_bot import send
+                    from tg import send      # transport seul : aucun cycle
                     send("⚠️ Session Bourse Direct expirée.\nRelance /connect pour reprendre le mode Playwright.")
                 except Exception:
                     pass

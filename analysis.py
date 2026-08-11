@@ -80,67 +80,58 @@ SCAN_UNIVERSE = [
 
 PARIS = pytz.timezone("Europe/Paris")
 
-
-def _earnings_note(next_earnings: str) -> str:
-    """'2026-08-04' → '2026-08-04 (dans 19 j)'. Donne à l'IA le nombre exact de
-    jours pour appliquer le veto numérique EARNINGS_VETO_DAYS sans improviser.
-    Chaîne brute si parsing impossible ; date passée (donnée obsolète) → brute."""
-    if not next_earnings:
-        return ""
-    try:
-        d = datetime.strptime(str(next_earnings)[:10], "%Y-%m-%d").date()
-        days = (d - datetime.now(PARIS).date()).days
-        return f"{next_earnings} (dans {days} j)" if days >= 0 else str(next_earnings)
-    except Exception:
-        return str(next_earnings)
-
-
-def _lessons_block() -> str:
-    """Bloc de leçons (brique 3) à injecter dans les prompts de validation.
-    Vide tant qu'il n'y a pas assez de trades tagués — jamais bloquant."""
-    try:
-        import lessons
-        b = lessons.build_lessons_block()
-        return f"\n{b}\n" if b else ""
-    except Exception:
-        return ""
+# ─── Contexte des prompts ───────────────────────────────────────────────────
+# Ces briques FABRIQUENT du texte à partir de données locales ; ce module-ci
+# ORCHESTRE les appels IA. Deux métiers, deux fichiers. Les noms restent
+# exposés ici : une quinzaine d'appelants les utilisent.
+import prompt_context
+_earnings_note       = prompt_context._earnings_note
+_lessons_block       = prompt_context._lessons_block
+_entry_ctx           = prompt_context._entry_ctx
+_strip_markdown      = prompt_context._strip_markdown
+_trading_context     = prompt_context._trading_context
+_macro_summary       = prompt_context._macro_summary
+_macro_context       = prompt_context._macro_context
+_portfolio_snapshot  = prompt_context._portfolio_snapshot
+_breach_warning      = prompt_context._breach_warning
+_parse_verdict       = prompt_context._parse_verdict
+_regime_instructions = prompt_context._regime_instructions
 
 
-def _entry_ctx(tech: dict, pctx: dict, thesis: str, source: str,
-               regime: str = "") -> dict:
-    """Assemble le contexte d'entrée mémorisé pour la boucle d'apprentissage
-    (brique 1) : indicateurs au moment de la décision + thèse + régime."""
-    tech = tech or {}
-    pctx = pctx or {}
-    return {
-        "source":      source,
-        "regime":      regime,
-        "rsi":         tech.get("rsi"),
-        "momentum_1m": tech.get("momentum_1m"),
-        "mom_12_1":    tech.get("mom_12_1"),
-        "above_ma200": tech.get("above_ma200"),
-        "atr_pct":     tech.get("atr_pct"),
-        "vol_ratio":   tech.get("vol_ratio"),
-        "perf_1y":     pctx.get("perf_1y"),
-        "from_52w_low": pctx.get("from_52w_low"),
-        "thesis":      (thesis or "").strip()[:200],
-    }
+
+
+
+
+
+
+
+# ─── Points d'ancrage du moteur autonome ────────────────────────────────────
+# `analysis` n'importe PAS `autonomous_engine` : c'est le moteur qui vient
+# s'enregistrer ici, à son propre import. Les deux modules s'importaient
+# mutuellement — chacun contournant par un import différé au fond d'une
+# fonction, ce qui rendait le graphe de dépendances illisible.
+#
+# Hooks non posés (moteur jamais importé) = comportement inchangé : le mode
+# autonome n'est simplement pas là pour réagir.
+_hook_entry_cycle = None      # callable(send_fn) — entrer maintenant
+_hook_order_rejected = None   # callable(ticker, raison) — thèse contredite
+
+
+def register_autonomous(entry_cycle=None, order_rejected=None) -> None:
+    """Appelé par `autonomous_engine` au moment de son import."""
+    global _hook_entry_cycle, _hook_order_rejected
+    if entry_cycle:
+        _hook_entry_cycle = entry_cycle
+    if order_rejected:
+        _hook_order_rejected = order_rejected
 
 
 def _trigger_autonomous(send_fn) -> None:
     """Si le mode autonome est actif + Playwright connecté, entre immédiatement
     sur les opportunités validées à l'instant, sans attendre le check planifié."""
     try:
-        import autonomous_engine, bot_mode, playwright_session as pw_sess
-        if (autonomous_engine.is_enabled()
-                and bot_mode.is_playwright()
-                and pw_sess.is_connected()):
-            import threading
-            threading.Thread(
-                target=autonomous_engine.run_entry_cycle,
-                args=(send_fn,),
-                daemon=True,
-            ).start()
+        if _hook_entry_cycle:
+            _hook_entry_cycle(send_fn)
     except Exception as e:
         print(f"[Auto trigger] {e}")
 
@@ -278,25 +269,8 @@ RÈGLES DE FORMAT STRICTES — message Telegram mobile :
 - Maximum 25 lignes au total — va à l'essentiel
 """
 
-def _strip_markdown(text: str) -> str:
-    """Supprime les symboles Markdown résiduels pour un affichage propre sur Telegram."""
-    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)   # titres #
-    text = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', text)         # gras/italique
-    text = re.sub(r'`{1,3}([^`]*)`{1,3}', r'\1', text)           # code inline/block
-    text = re.sub(r'^-{3,}\s*$', '---', text, flags=re.MULTILINE) # hr
-    text = re.sub(r'^\s*>\s*', '', text, flags=re.MULTILINE)       # blockquotes
-    text = re.sub(r'\n{3,}', '\n\n', text)                         # espaces excessifs
-    return text.strip()
 
 
-def _trading_context() -> str:
-    """Charge le contexte personnel de trading si le fichier existe."""
-    try:
-        if TRADING_CONTEXT_PATH.exists():
-            return TRADING_CONTEXT_PATH.read_text(encoding="utf-8")
-    except Exception:
-        pass
-    return ""
 
 
 def _analyze_chart(ticker: str, ai) -> str:
@@ -329,201 +303,16 @@ _MACRO_SUMMARY_THRESHOLD = 6000   # chars ; en dessous : texte intégral
 _MACRO_CACHE_PATH = MACRO_ANALYSIS_PATH.parent / "macro_summary_cache.json"
 
 
-def _macro_summary(content: str, mtime: float) -> str:
-    """Résumé (~2500 chars) de l'analyse macro, mis en cache par mtime.
-    En cas d'échec IA : texte intégral (comportement d'avant, jamais dégradé)."""
-    import json as _json
-    try:
-        cached = _json.loads(_MACRO_CACHE_PATH.read_text(encoding="utf-8"))
-        if cached.get("mtime") == mtime and cached.get("summary"):
-            return cached["summary"]
-    except Exception:
-        pass
-    try:
-        summary = get_provider().complete_cheap(
-            "Condense cette analyse macro sectorielle en 2500 caractères MAXIMUM, "
-            "texte brut sans markdown. GARDE impérativement : les convictions "
-            "sectorielles avec leur direction (surpondérer/éviter), les niveaux et "
-            "dates clés, les risques majeurs datés, les recommandations concrètes. "
-            "SUPPRIME : narratif, répétitions, contexte historique générique.\n\n"
-            + content,
-            max_tokens=1200,
-        ).strip()
-        if len(summary) < 200:   # réponse anormalement courte → ne pas dégrader
-            return content
-        _MACRO_CACHE_PATH.write_text(
-            _json.dumps({"mtime": mtime, "summary": summary}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        print(f"[macro] résumé regénéré ({len(content)} → {len(summary)} chars)")
-        return summary
-    except Exception as e:
-        print(f"[macro] résumé impossible ({e}) — texte intégral utilisé")
-        return content
 
 
-def _macro_context() -> str:
-    """Charge l'analyse macro sectorielle si macro_analysis.md existe (document
-    daté, mis à jour par l'utilisateur). Les documents longs sont condensés par
-    le modèle cheap (cache sur mtime) avant injection dans les prompts."""
-    try:
-        if MACRO_ANALYSIS_PATH.exists():
-            content = MACRO_ANALYSIS_PATH.read_text(encoding="utf-8")
-            mtime_ts = MACRO_ANALYSIS_PATH.stat().st_mtime
-            mtime = datetime.fromtimestamp(mtime_ts).strftime("%d/%m/%Y")
-            if len(content) > _MACRO_SUMMARY_THRESHOLD:
-                content = _macro_summary(content, mtime_ts)
-            return (
-                f"\n--- ANALYSE MACRO SECTORIELLE (rédigée/mise à jour le {mtime}) ---\n"
-                f"{content}\n"
-                f"--- FIN ANALYSE MACRO (point dans le temps — peut être obsolète) ---\n"
-            )
-    except Exception:
-        pass
-    return ""
 
 
-def _portfolio_snapshot() -> str:
-    data = portfolio.load()
-    cash = data.get("cash_available", 0)
-    positions = data.get("positions", {})
-    today = datetime.now(PARIS).strftime("%d/%m/%Y")
-    lines = [
-        f"SNAPSHOT PORTEFEUILLE — SOURCE DE VÉRITÉ — {today}",
-        f"💰 Cash: {cash}€",
-        "📁 Positions (UNIQUEMENT ces positions sont actives — ignorer tout autre mention) :",
-    ]
-    # Les HOLD long terme sortent du périmètre de gestion : listés à part avec
-    # interdiction explicite pour l'IA de proposer vente, swap ou protection.
-    holds = {k: v for k, v in positions.items() if v.get("hold")}
-    positions = {k: v for k, v in positions.items() if not v.get("hold")}
-    # Cours retenu, P&L, provenance : calculés par position_view — comme
-    # /status, le STATUS planifié, le dashboard et /stats. Un briefing bâti sur
-    # des cours périmés raisonne juste sur des chiffres faux, et rien dans le
-    # prompt ne permet à l'IA de s'en apercevoir.
-    for v in position_view.views(positions):
-        if v["price"] and not math.isnan(v["price"]):
-            sym = v["sym"]
-            cur_tag = (" | ⚠️ perf aberrante, PRU probablement dans la mauvaise devise — ignorer ce P&L"
-                       if v["aberrant"] else "")
-            if v["source"] != "yf":
-                cur_tag += f" | ⚠️ {v['note']}"
-            # ── Ce que l'IA ne voyait PAS avant (11/08/2026) ────────────────
-            # Le snapshot annoncé comme « SOURCE DE VÉRITÉ » présentait les
-            # SL/TP comme des faits, sans jamais dire qu'aucun ordre ne les
-            # portait sur BD. Du 31/07 au 05/08, l'IA a raisonné chaque matin
-            # comme si BAC était protégé alors qu'il était à nu.
-            if v["protected"] is False:
-                cur_tag += (" | 🚨 SL/TP NON PROTECTEURS : aucun ordre actif sur "
-                            "BD ne les porte — la position n'a AUCUN stop réel")
-            if v["pending_sl"]:
-                cur_tag += (f" | ⏳ SL {v['pending_sl']} calculé mais PAS posé "
-                            f"sur BD, le stop actif reste {v['sl']}")
-            lines.append(
-                f"  {v['name']} ({v['ticker']}): {sym}{v['price']} ({v['chg_pct']:+.2f}%) | "
-                f"PRU {sym}{v['entry']} | {v['qty']}t | P&L {sym}{v['pnl']:+.0f} | "
-                f"SL {sym}{v['sl']} | TP {sym}{v['tp']}{cur_tag}"
-            )
-        else:
-            # Le relevé BD tranche : si le courtier valorise le titre, il n'est
-            # pas suspendu — c'est le ticker stocké qui est faux.
-            code, msg = v["problem"]
-            icon = {"ticker": "🚨", "suspended": "⛔"}.get(code, "⚠️")
-            suffix = " (liquidation judiciaire ?)" if code == "suspended" else ""
-            lines.append(
-                f"  {v['name']} ({v['ticker']}): {icon} {msg}{suffix} | "
-                f"PRU {v['entry']} | {v['qty']}t"
-            )
-
-    if holds:
-        lines.append("🔒 HOLD LONG TERME — HORS GESTION (ne JAMAIS proposer de vente, "
-                     "swap, SL/TP ou analyse pour ces titres) :")
-        for name, cfg in holds.items():
-            lines.append(f"  {name} ({cfg['ticker']}): {cfg['qty']}t | "
-                         f"{cfg.get('hold_note', 'hold long terme')}")
-
-    pending = data.get("pending_orders", {})
-    if pending:
-        lines.append("⏳ Ordres en attente (cash réservé) :")
-        for name, cfg in pending.items():
-            quote = prices.get_quote(cfg["ticker"])
-            price = quote.get("price") or "?"
-            drift = ""
-            if isinstance(price, float):
-                d = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
-                drift = f" | cours actuel {price}€ ({d:+.1f}% vs entrée)"
-            lines.append(
-                f"  {name} ({cfg['ticker']}): achat limite {cfg['entry_price']}€ "
-                f"x {cfg['qty']}t — {cfg['reserved_cash']:.0f}€ réservés{drift}"
-            )
-
-    return "\n".join(lines)
 
 
-def _breach_warning(ticker: str, pru: float, sl: float) -> str | None:
-    """Retourne un message d'alerte si le cours actuel a déjà franchi le SL ou dépasse +25%."""
-    quote = prices.get_quote(ticker)
-    price = quote.get("price")
-    if not price or math.isnan(price):
-        return None
-    if price < sl:
-        return f"⚠️ SL déjà dépassé : cours {price}€ < SL {sl}€ → /research {ticker}"
-    if price > pru * 1.25:
-        gain = ((price / pru) - 1) * 100
-        return f"⚠️ TP dépassé (+{gain:.0f}%) : cours {price}€ → vendre ou /research {ticker}"
-    return None
 
 
-def _parse_verdict(val: str) -> tuple[str, str]:
-    """
-    Source UNIQUE de lecture d'un verdict IA (ACHAT / EXCLUS).
-    L'IA peut écrire un en-tête société avant de dire EXCLU : on cherche sur les
-    premières lignes, pas seulement en début de texte. Retourne (verdict, raison).
-    Utilisé par TOUS les chemins de décision — garantit un jugement cohérent.
-    """
-    lines = val.strip().splitlines()
-    head = "\n".join(lines[:5]).upper()
-    if "EXCLU" in head or "ÉVITER" in head or "EVITER" in head:
-        reason = "écarté"
-        for line in lines:
-            u = line.upper()
-            if "EXCLU" in u or "ÉVITER" in u or "EVITER" in u:
-                reason = line.split("—", 1)[1].strip()[:70] if "—" in line else line.strip()[:70]
-                break
-        return "EXCLUS", reason
-    return "ACHAT", ""
 
 
-def _regime_instructions(regime: str, regime_summary: str,
-                         rel: float, index_mom: float) -> str:
-    """Bloc d'instructions spécifique au régime — inchangé, factorisé ici pour
-    être partagé par le scan et le briefing."""
-    if regime == "CORRECTION":
-        return f"""
-RÉGIME : CORRECTION ({regime_summary})
-Ce titre est sélectionné pour sa force relative ({rel:+.1f}% vs indice à {index_mom:+.1f}%).
-
-MISSION CORRECTION — critères ACHAT valides dans ce contexte :
-1. FORCE RELATIVE : l'action résiste ou monte pendant que l'indice baisse → thèse valide.
-2. BÉNÉFICIAIRE MACRO : la cause probable de la correction (BCE hawkish → banques ;
-   tensions géo → défense/énergie ; récession → pharma/utilities/consommation de base ;
-   correction tech → value/industrielles) bénéficie directement à ce secteur.
-3. REBOND TECHNIQUE QUALITÉ : RSI < 35, titre de qualité, tendance LT intacte,
-   catalyseur de rebond identifiable.
-
-Signal EXCLUS si : momentum positif MAIS corrélé à l'indice (force relative nulle),
-ou si secteur cyclique sans thèse macro claire en contexte de correction."""
-    if regime == "NEUTRAL":
-        return f"""
-RÉGIME : NEUTRE ({regime_summary})
-Marché sans tendance d'indice claire. Les titres en momentum 12 mois propre
-au-dessus de leur MM200 restent tradeables, mais EXIGE une force relative
-positive vs l'indice (le filtre quantitatif l'a déjà vérifiée — confirme
-qu'aucune news ne l'explique par un facteur non répétable). Gestion du SL serrée."""
-    return f"""
-RÉGIME : HAUSSIER ({regime_summary})
-Conditions favorables. Scan momentum standard (12 mois hors dernier mois,
-entrée sur repli sain)."""
 
 
 def validate_candidate(ticker: str, *, mode: str = "standard",
@@ -746,8 +535,8 @@ Si ACHAT : format exact (symbole {sym}, le titre cote en {cur}) :
     # cas AF.PA 07/2026).
     if verdict == "EXCLUS":
         try:
-            import autonomous_engine
-            autonomous_engine.cancel_auto_order_if_rejected(ticker, reason or "EXCLUS")
+            if _hook_order_rejected:
+                _hook_order_rejected(ticker, reason or "EXCLUS")
         except Exception as _ce:
             print(f"[validate] cancel auto order {ticker}: {_ce}")
 
@@ -890,7 +679,7 @@ def morning_briefing(send_fn) -> None:
         # n'a rien demandé) — l'analyse portefeuille, elle, reste faite.
         auto_block = None
         try:
-            import autonomous_engine as _ae
+            import sizing as _ae
             auto_block = _ae.entry_capacity_block()
         except Exception as _be:
             print(f"[briefing] capacité autonome indisponible : {_be}")
@@ -1860,7 +1649,7 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                 auto_qty = None
                 auto_reason = ""
                 try:
-                    import autonomous_engine as _ae
+                    import sizing as _ae
                     if portfolio.get_autonomous_config().get("enabled"):
                         _sl_pre = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
                         if _sl_pre:
@@ -1900,7 +1689,7 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                 )
                 blocked = None
                 try:
-                    import autonomous_engine as _ae2
+                    import sizing as _ae2
                     blocked = _ae2.entry_blocked_reason()
                 except Exception:
                     pass
@@ -2047,19 +1836,11 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
 
 
-def min_viable_cash(us: bool = False) -> float:
-    """Cash minimum pour qu'UN achat puisse passer le garde-fou frais : le gain
-    brut au TP (+DEFAULT_TP_PCT%) doit valoir ≥ le seuil de rentabilité × les
-    frais aller-retour. En dessous, tout candidat serait vetoé — un scan
-    automatique ne peut alors rien produire.
 
-    Résolu sur le barème RÉEL (tranches + TTF + change), pas sur un forfait :
-    Euronext ~130€ sur une valeur soumise à la TTF, ~100€ sinon ; US ~930€.
-    L'ancien forfait de 1.98€/ordre donnait 198€ partout — il a fait sauter des
-    scans Euronext alors que le cash suffisait (5 fois entre le 17 et le 29/07,
-    à 154€ de cash pour un plancher réel de 130€)."""
-    ref = "NVDA" if us else "MC.PA"        # tickers témoins des deux tarifs
-    return min_viable_amount(ref)
+
+# Le plancher de cash est de l'arithmétique de FRAIS : il vit dans config.py,
+# avec le barème dont il découle. Le nom reste exposé ici pour ses appelants.
+from config import min_viable_cash
 
 
 # Anti-spam : un seul message « scan sauté » par jour et par scan planifié.
@@ -2118,7 +1899,7 @@ def scan_us_opportunities(send_fn) -> None:
                              f"(frais US {us_roundtrip:.0f}€ A/R)")
         return
     try:
-        import autonomous_engine as _ae
+        import sizing as _ae
         blocked = _ae.entry_capacity_block(min_cash=floor)
     except Exception as _ce:
         print(f"[scan US] capacité autonome indisponible : {_ce}")

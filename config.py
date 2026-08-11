@@ -178,8 +178,9 @@ FX_COMMISSION_RATE = 0.0008
 # décembre précédent. Ni la place ni le suffixe ne suffisent à trancher :
 # Airbus (AIR.PA) est néerlandaise et exonérée, Genfit (GNFT.PA) est française
 # mais sous le milliard — les deux le confirment sur nos ordres réels.
-TTF_RATE           = float(os.getenv("TTF_RATE", "0.004"))
-TTF_MIN_MARKET_CAP = 1_000_000_000.0
+import ttf                              # module feuille : aucun cycle
+TTF_RATE           = ttf.RATE           # source unique
+TTF_MIN_MARKET_CAP = ttf.MIN_MARKET_CAP
 
 # Place, devise et suffixe : source unique dans market.py (module feuille, donc
 # importable ici sans créer de cycle). Les tables locales ont été supprimées —
@@ -232,8 +233,8 @@ def _ttf_liable(ticker: str) -> bool:
     if _suffix(ticker) != ".PA":
         return False
     try:
-        import prices
-        return prices.is_french_large_cap(ticker)
+        import ttf
+        return ttf.is_liable(ticker)
     except Exception:
         return True
 
@@ -366,3 +367,18 @@ US_CHECK_TIMES = [t.strip() for t in os.getenv("US_CHECK_TIMES", "18:00,20:00,21
 # Scan d'opportunités limité aux valeurs US, peu après l'ouverture de Wall
 # Street (laisse la liquidité se poser). Vide pour désactiver ce scan.
 US_SCAN_TIME = os.getenv("US_SCAN_TIME", "16:00").strip()
+
+
+def min_viable_cash(us: bool = False) -> float:
+    """Cash minimum pour qu'UN achat puisse passer le garde-fou frais : le gain
+    brut au TP (+DEFAULT_TP_PCT%) doit valoir ≥ le seuil de rentabilité × les
+    frais aller-retour. En dessous, tout candidat serait vetoé — un scan
+    automatique ne peut alors rien produire.
+
+    Résolu sur le barème RÉEL (tranches + TTF + change), pas sur un forfait :
+    Euronext ~130€ sur une valeur soumise à la TTF, ~100€ sinon ; US ~930€.
+    L'ancien forfait de 1.98€/ordre donnait 198€ partout — il a fait sauter des
+    scans Euronext alors que le cash suffisait (5 fois entre le 17 et le 29/07,
+    à 154€ de cash pour un plancher réel de 130€)."""
+    ref = "NVDA" if us else "MC.PA"        # tickers témoins des deux tarifs
+    return min_viable_amount(ref)

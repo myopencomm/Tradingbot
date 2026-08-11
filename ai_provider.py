@@ -351,8 +351,11 @@ class FallbackProvider(AIProvider):
             return
         FallbackProvider._last_notify = now
         try:
-            import telegram_bot
-            telegram_bot.send(
+            # tg (transport seul), pas telegram_bot : importer les handlers
+            # depuis un provider IA créait un cycle, contourné par cet import
+            # local. Le module feuille supprime le besoin du contournement.
+            import tg
+            tg.send(
                 f"🔀 FALLBACK IA ACTIF\n"
                 f"{failed} en échec ({str(err)[:120]})\n"
                 f"→ bascule sur {used}. Vérifie tes crédits {failed}."

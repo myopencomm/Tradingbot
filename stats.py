@@ -1,26 +1,16 @@
-import json
 from datetime import datetime
 import pytz
+import history
 import portfolio
 import prices
-from config import HISTORY_PATH
 
 PARIS = pytz.timezone("Europe/Paris")
 
 
-def load_history() -> dict:
-    try:
-        if HISTORY_PATH.exists():
-            return json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {"closed_trades": []}
-
-
-def save_history(data: dict):
-    HISTORY_PATH.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+# La persistance de l'historique vit dans history.py (module feuille) :
+# `stats` et `lessons` s'importaient mutuellement pour y accéder.
+load_history = history.load
+save_history = history.save
 
 
 def record_close(name: str, ticker: str, qty: int, entry_price: float,
@@ -71,8 +61,10 @@ def record_close(name: str, ticker: str, qty: int, entry_price: float,
 
 
 def get_stats() -> dict:
-    history = load_history()
-    closed = history["closed_trades"]
+    # `closed` et non `history = load_history()` : ce nom masquait désormais le
+    # module `history` importé en tête, et toute utilisation ultérieure du
+    # module dans cette fonction aurait levé un AttributeError.
+    closed = history.closed_trades()
 
     wins   = [t for t in closed if t["result"] == "win"]
     losses = [t for t in closed if t["result"] == "loss"]

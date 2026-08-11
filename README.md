@@ -258,7 +258,14 @@ TradingBot/
 ├── market.py                Places de marché : suffixe, devise, horaires, MIC BD → ticker Yahoo
 ├── position_view.py         Valorisation d'une position : UN calcul, lu par les 5 rendus
 ├── commands.py              Table unique des commandes : dispatch + menu + /help en derivent
+├── tg.py                    Transport Telegram (feuille) : envoyer, editer, telecharger
+├── ttf.py                   Assujettissement a la TTF francaise + cache (feuille)
+├── history.py               Persistance des trades clotures, ecriture atomique (feuille)
+├── sizing.py                Budget, capacite d'entree, taille de position
+├── trailing.py              Trailing stop : les deux paliers
+├── prompt_context.py        Briques de contexte injectees dans les prompts IA
 ├── docs/tuto/               Guide interactif /tuto (texte, hors code)
+├── tests/                   130 tests de caracterisation — ./bot.sh test
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome
@@ -723,6 +730,45 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-11 (7) — Phase 5 : découpe des gros modules, **plus aucun cycle d'import**
+Six cycles d'import étaient contournés par **164 imports différés** au fond des
+fonctions — chacun retardant la résolution juste assez pour que Python ne
+proteste pas. Le graphe de dépendances en devenait illisible.
+
+**Il n'en reste zéro**, et un test le vérifie à chaque exécution.
+
+Cinq modules feuilles extraits (ils n'importent aucun module métier, donc
+peuvent être appelés de partout) :
+
+| Module | Ce qu'il porte | Cycle cassé |
+|---|---|---|
+| `tg.py` | transport Telegram : envoyer, éditer, télécharger | `ai_provider` ⇄ `telegram_bot`, `playwright_session` ⇄ `telegram_bot` |
+| `ttf.py` | assujettissement à la TTF + son cache | `config` ⇄ `prices` |
+| `history.py` | persistance des trades clôturés (écriture **atomique**) | `lessons` ⇄ `stats` |
+| `sizing.py` | budget, capacité d'entrée, taille de position | `analysis` ⇄ `autonomous_engine` |
+| `trailing.py` | les deux paliers du trailing stop | — |
+| `prompt_context.py` | briques de contexte injectées dans les prompts | — |
+
+Le dernier cycle demandait plus qu'un déplacement : `analysis` et le moteur
+autonome ont **besoin l'un de l'autre**. La dépendance a été inversée — le
+moteur vient **s'enregistrer** auprès d'`analysis` à son import
+(`register_autonomous`), au lieu qu'`analysis` aille le chercher. Sans moteur
+chargé, les points d'ancrage restent vides et le comportement est inchangé.
+
+Autres déplacements vers leur vraie place : `schedule_post_order_sync` de
+`telegram_bot` vers `sync_engine` (c'est un sync, pas une commande), et
+`min_viable_cash` d'`analysis` vers `config` (c'est de l'arithmétique de frais).
+
+`autonomous_engine` : 1 506 → 827 lignes. `telegram_bot` : 2 833 → 2 140.
+130 tests, dont l'acyclicité du graphe et l'étanchéité des modules feuilles.
+
+**Ce qui n'a PAS été fait** : la découpe des handlers Telegram par domaine
+(`telegram_bot` reste à 2 140 lignes) et celle des flux IA de `analysis`
+(2 052). Ces deux modules sont désormais *cohérents* — un fichier de handlers,
+un fichier d'orchestration IA — et les séparer davantage relève du confort de
+lecture, pas de la correction. Le gain ne justifiait pas le risque le même jour
+que six autres changements.
 
 ### 2026-08-11 (6) — Phase 4 : la surface des commandes devient des données
 La même liste vivait à **cinq endroits** : le dispatch `COMMANDS`, le menu

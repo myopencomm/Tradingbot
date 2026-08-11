@@ -141,3 +141,44 @@ class TestConfigDelegue:
         assert config.EURONEXT_SUFFIXES == market.EURONEXT_SUFFIXES
         for t in ("AIR.PA", "ASML.AS", "UCB.BR"):
             assert config.brokerage_fee(t, 900) == 1.90
+
+
+class TestGrapheDeDependances:
+    """Le graphe d'imports doit rester acyclique.
+
+    Six cycles étaient contournés par 164 imports différés au fond des
+    fonctions — chacun retardant la résolution juste assez pour que Python ne
+    proteste pas. Un nouveau cycle ferait resurgir ce contournement, donc ce
+    test le refuse.
+    """
+
+    def _graphe(self):
+        import collections
+        import glob
+        import re
+        from pathlib import Path
+        racine = Path(__file__).resolve().parent.parent
+        modules = {Path(f).stem for f in glob.glob(str(racine / "*.py"))}
+        aretes = collections.defaultdict(set)
+        for f in glob.glob(str(racine / "*.py")):
+            src = Path(f).read_text(encoding="utf-8")
+            for m in re.finditer(r'^\s*(?:import (\w+)|from (\w+) import)', src, re.M):
+                cible = m.group(1) or m.group(2)
+                if cible in modules and cible != Path(f).stem:
+                    aretes[Path(f).stem].add(cible)
+        return aretes
+
+    def test_aucun_cycle_d_import(self):
+        aretes = self._graphe()
+        cycles = {tuple(sorted((a, b))) for a in aretes for b in aretes[a]
+                  if a in aretes.get(b, ())}
+        assert not cycles, f"cycles réapparus : {sorted(cycles)}"
+
+    def test_les_modules_feuilles_le_restent(self):
+        """market, tg, ttf, history ne doivent dépendre d'AUCUN module métier :
+        c'est ce qui leur permet d'être importés de partout."""
+        aretes = self._graphe()
+        for feuille, autorises in (("market", set()), ("tg", {"config"}),
+                                   ("ttf", set()), ("history", {"config"})):
+            assert aretes.get(feuille, set()) <= autorises, \
+                f"{feuille} n'est plus une feuille : {aretes[feuille]}"

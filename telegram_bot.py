@@ -11,6 +11,7 @@ from config import (TELEGRAM_TOKEN, CHAT_ID, AUTHORIZED_CHAT_IDS,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT, BREAKEVEN_THRESHOLD)
 import commands
 import portfolio
+import tg
 import position_view
 import prices
 import analysis
@@ -19,6 +20,7 @@ import stats
 import bot_mode
 import playwright_session
 import bourse_direct_auth
+import sync_engine
 
 # ─── Buffer multi-screenshots ────────────────────────────────────────────────
 # Collecte toutes les photos envoyées dans les N secondes qui suivent la 1ère,
@@ -29,116 +31,19 @@ _photo_buf: dict = {}     # cid -> {"images": [bytes], "timer": Timer}
 _buf_lock = threading.Lock()
 
 
-# ─── Envoi ──────────────────────────────────────────────────────────────────
-
-def send(text: str, chat_id: str = None) -> bool:
-    # Trace compacte de TOUT message sortant : indispensable pour diagnostiquer
-    # a posteriori pourquoi le bot a pris (ou pas) une décision.
-    flat = text.replace("\n", " ⏎ ")
-    print(f"[TG] {flat[:200]}")
-    if not TELEGRAM_TOKEN:
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": chat_id or CHAT_ID, "text": text},
-            timeout=10,
-        )
-        return r.status_code == 200
-    except Exception as e:
-        print(f"Telegram send error: {e}")
-        return False
-
-
-def send_editable(text: str, chat_id: str = None) -> int | None:
-    """Envoie un message et retourne son message_id (pour édition/suppression)."""
-    if not TELEGRAM_TOKEN:
-        return None
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": chat_id or CHAT_ID, "text": text},
-            timeout=10,
-        )
-        if r.status_code == 200:
-            return r.json().get("result", {}).get("message_id")
-    except Exception as e:
-        print(f"Telegram send_editable error: {e}")
-    return None
-
-
-def edit_message(msg_id: int, text: str, chat_id: str = None) -> bool:
-    """Édite un message existant (max 4096 chars, Telegram ignore si identique)."""
-    if not TELEGRAM_TOKEN or not msg_id:
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText",
-            json={"chat_id": chat_id or CHAT_ID, "message_id": msg_id, "text": text},
-            timeout=10,
-        )
-        return r.status_code == 200
-    except Exception as e:
-        print(f"Telegram edit error: {e}")
-    return False
-
-
-def delete_message(msg_id: int, chat_id: str = None) -> bool:
-    """Supprime un message Telegram (typiquement un message de progression)."""
-    if not TELEGRAM_TOKEN or not msg_id:
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteMessage",
-            json={"chat_id": chat_id or CHAT_ID, "message_id": msg_id},
-            timeout=10,
-        )
-        return r.status_code == 200
-    except Exception as e:
-        print(f"Telegram delete error: {e}")
-    return False
-
-
-# ─── Indicateur « écrit… » (trois points) ────────────────────────────────────
-
-class _typing:
-    """Affiche « écrit… » dans Telegram tant que le bloc with est actif.
-
-    Telegram efface l'indicateur après ~5 s ou dès qu'un message est envoyé :
-    on le renvoie donc toutes les 4 s jusqu'à la fin du traitement.
-    """
-    def __init__(self, chat_id: str = None):
-        self.chat_id = chat_id or CHAT_ID
-        self._stop = threading.Event()
-
-    def __enter__(self):
-        if not TELEGRAM_TOKEN:
-            return self
-        def loop():
-            while not self._stop.is_set():
-                try:
-                    requests.post(
-                        f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendChatAction",
-                        json={"chat_id": self.chat_id, "action": "typing"},
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
-                self._stop.wait(4)
-        threading.Thread(target=loop, daemon=True).start()
-        return self
-
-    def __exit__(self, *exc):
-        self._stop.set()
-        return False
-
-
-def _run_long(cid, fn, *args, **kwargs):
-    """Exécute fn dans un thread avec l'indicateur « écrit… » jusqu'à la fin."""
-    def worker():
-        with _typing(cid):
-            fn(*args, **kwargs)
-    threading.Thread(target=worker, daemon=True).start()
+# ─── Transport ──────────────────────────────────────────────────────────────
+# L'envoi, l'édition, la suppression et le téléchargement vivent dans tg.py
+# (module feuille). Les noms restent exposés ici : c'est l'interface qu'une
+# quarantaine de handlers utilise, et la garder évite un renommage massif sans
+# valeur. Ce qui change, c'est que ai_provider et playwright_session importent
+# désormais tg — donc plus de cycle avec ce module-ci.
+send           = tg.send
+send_editable  = tg.send_editable
+edit_message   = tg.edit_message
+delete_message = tg.delete_message
+send_photo     = tg.send_photo
+_typing        = tg.typing
+_run_long      = tg.run_long
 
 
 # ─── Menu de commandes (bouton bas-gauche Telegram) ──────────────────────────
@@ -1371,23 +1276,6 @@ def _check_playwright_ready(cid) -> bool:
     return True
 
 
-def send_photo(image_bytes: bytes, caption: str = "", chat_id: str = None) -> bool:
-    """Envoie une image (PNG) sur Telegram."""
-    if not TELEGRAM_TOKEN:
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto",
-            data={"chat_id": chat_id or CHAT_ID, "caption": caption[:1024]},
-            files={"photo": ("dashboard.png", image_bytes, "image/png")},
-            timeout=30,
-        )
-        return r.status_code == 200
-    except Exception as e:
-        print(f"Telegram send_photo error: {e}")
-        return False
-
-
 def cmd_lessons(args, cid):
     """/lessons — ce que le bot a appris de ses trades passés + garde-fous actifs."""
     try:
@@ -1811,27 +1699,11 @@ def cmd_oui(args, cid):
             # Sync silencieux différé : si l'ordre a été exécuté immédiatement
             # (limite au cours), le portefeuille est à jour tout de suite —
             # message envoyé uniquement si une exécution est détectée.
-            schedule_post_order_sync(cid)
+            sync_engine.schedule_post_order_sync(cid)
         except Exception as e:
             send(f"Erreur envoi : {e}", cid)
 
     _run_long(cid, _do_send)
-
-
-def schedule_post_order_sync(cid=None, delay: float = 8.0):
-    """Planifie un sync BD silencieux `delay` secondes après un passage d'ordre.
-    Détecte les exécutions immédiates (achat limite au cours) sans attendre
-    le sync horaire. Silencieux : notifie uniquement si un événement est détecté."""
-    def _run():
-        try:
-            import sync_engine
-            playwright_session.run(
-                lambda page: sync_engine.sync(page, lambda m: send(m, cid), silent=True),
-                timeout=90,
-            )
-        except Exception as e:
-            print(f"[post-order sync] {e}")
-    threading.Timer(delay, _run).start()
 
 
 def cmd_annuler_bd(args, cid):
@@ -2135,22 +2007,6 @@ def _handle_message(message: dict):
         send(f"Commande inconnue: {cmd}\n/help pour la liste.", cid)
 
 
-def _download_photo(photos: list) -> bytes | None:
-    """Télécharge la meilleure résolution d'une photo Telegram."""
-    try:
-        file_id = photos[-1]["file_id"]
-        path = requests.get(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile",
-            params={"file_id": file_id}, timeout=10,
-        ).json()["result"]["file_path"]
-        return requests.get(
-            f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{path}", timeout=20
-        ).content
-    except Exception as e:
-        print(f"Photo download error: {e}")
-        return None
-
-
 def _flush_photo_batch(cid: str):
     """Appelé par le timer : traite toutes les photos bufférisées."""
     with _buf_lock:
@@ -2168,7 +2024,7 @@ def _handle_photo(photos: list, cid: str):
     Bufférise les photos pendant BUFFER_WAIT secondes après la dernière reçue,
     puis traite tout le batch d'un coup pour reconstituer le portefeuille complet.
     """
-    img = _download_photo(photos)
+    img = tg.download_photo(photos)
     if img is None:
         send("Erreur téléchargement de l'image.", cid)
         return
@@ -2260,24 +2116,21 @@ def _poll():
     offset = None
     print("✅ Telegram polling demarre")
     while True:
-        try:
-            params = {"timeout": 30, "allowed_updates": ["message"]}
-            if offset:
-                params["offset"] = offset
-            data = requests.get(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
-                params=params, timeout=35,
-            ).json()
-            for upd in data.get("result", []):
-                # Avance l'offset AVANT de traiter pour éviter le double-envoi
-                # si le handler crash ou si Telegram redelivre après un timeout.
-                offset = upd["update_id"] + 1
+        updates = tg.get_updates(offset)
+        if updates is None:
+            # Échec de l'appel : offset conservé intentionnellement, on reprend
+            # là où on s'était arrêté.
+            time.sleep(5)
+            continue
+        for upd in updates:
+            # Avance l'offset AVANT de traiter, pour éviter le double-envoi si
+            # le handler crash ou si Telegram redélivre après un timeout.
+            offset = upd["update_id"] + 1
+            try:
                 if "message" in upd:
                     _handle_message(upd["message"])
-        except Exception as e:
-            print(f"Polling error: {e}")
-            time.sleep(5)
-            # offset conservé intentionnellement — on reprend là où on s'était arrêté
+            except Exception as e:
+                print(f"Traitement du message {upd.get('update_id')} : {e}")
 
 
 def start_polling():

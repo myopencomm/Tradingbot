@@ -12,6 +12,7 @@ Un LLM n'apprend pas par entraînement ici. À la place :
 """
 from datetime import datetime, timedelta
 import pytz
+import history
 
 PARIS = pytz.timezone("Europe/Paris")
 
@@ -71,8 +72,7 @@ def build_lessons_block(max_lines: int = 6) -> str:
     Bloc texte compact injecté dans les prompts. Vide si pas assez de données
     (< 3 trades tagués) — on n'invente pas de leçons prématurément.
     """
-    import stats
-    trades = stats.load_history().get("closed_trades", [])
+    trades = history.closed_trades()
     tagged = [t for t in trades if t.get("lessons")]
     if len(tagged) < 3:
         return ""
@@ -101,10 +101,9 @@ def recent_loss(ticker: str, days: int = 10) -> dict | None:
     Ce ticker a-t-il été clôturé en PERTE récemment ? Retourne le trade ou None.
     Évite de re-rentrer immédiatement sur un titre qui vient de coûter.
     """
-    import stats
     base = (ticker or "").upper().split(".")[0]
     cutoff = datetime.now(PARIS).date() - timedelta(days=days)
-    for t in reversed(stats.load_history().get("closed_trades", [])):
+    for t in reversed(history.closed_trades()):
         if t.get("result") != "loss":
             continue
         if (t.get("ticker", "").upper().split(".")[0] != base
@@ -121,9 +120,8 @@ def recent_loss(ticker: str, days: int = 10) -> dict | None:
 
 def loss_streak() -> int:
     """Nombre de pertes consécutives sur les derniers trades clôturés."""
-    import stats
     n = 0
-    for t in reversed(stats.load_history().get("closed_trades", [])):
+    for t in reversed(history.closed_trades()):
         if t.get("result") == "loss":
             n += 1
         else:

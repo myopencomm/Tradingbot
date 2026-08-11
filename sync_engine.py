@@ -639,3 +639,29 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
             print(f"[sync] trigger autonome après vente : {e}")
 
     return True
+
+
+def schedule_post_order_sync(cid=None, delay: float = 8.0):
+    """Planifie un sync BD silencieux `delay` secondes après un passage d'ordre.
+
+    Détecte les exécutions immédiates (achat limite au cours) sans attendre le
+    sync horaire. Silencieux : ne notifie que si un événement est détecté.
+
+    Vivait dans `telegram_bot`, ce qui obligeait le moteur autonome à importer
+    tous les handlers Telegram pour planifier un sync. Sa place est ici : c'est
+    un sync, pas une commande.
+    """
+    import threading
+    import playwright_session
+    import tg
+
+    def _run():
+        try:
+            playwright_session.run(
+                lambda page: sync(page, lambda m: tg.send(m, cid), silent=True),
+                timeout=90,
+            )
+        except Exception as e:
+            print(f"[post-order sync] {e}")
+
+    threading.Timer(delay, _run).start()
