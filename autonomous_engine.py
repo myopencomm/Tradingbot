@@ -1162,7 +1162,11 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                 still = playwright_session.run(
                     lambda page: reader.get_portfolio(page, send_fn=None), timeout=90) or {}
                 base_n = pos["ticker"].upper().split(".")[0]
-                gone = not any(
+                # « Plus d'ordre au portefeuille » ne vaut disparition QUE si
+                # l'onglet ordres a réellement été lu : une lecture ratée rend
+                # la même liste vide, et reposer un ordre là-dessus créerait le
+                # doublon de vente que ce garde-fou existe pour empêcher.
+                gone = still.get("orders_read", False) and not any(
                     (o.get("bd_ticker") or "").upper().split(".")[0] == base_n
                     and o.get("seuil") and o.get("statut") == "En cours"
                     for o in still.get("orders", []))

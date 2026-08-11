@@ -226,7 +226,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
 | **Dashboard filtrable par période** | Menu ☰ : Global / ce mois / mois dernier / cette année / année dernière. Cartes, graphiques et tableau recalculés sur la période ; P&L latent et cash restent des instantanés globaux, signalés comme tels |
 | **Trailing en 2 paliers** | **1.** À +5% (manuel) / +6% (autonome), le SL monte au PRU — perte impossible. **2.** Passé 60% du chemin vers le TP, le SL monte **au-dessus du PRU** et verrouille une part croissante du gain (50% → 80% au contact du TP). L'ordre Expert est remplacé sur BD à chaque palier |
-| **Contrôle de protection** | À chaque sync, toute position gérée est comparée au carnet BD. Sans ordre SL/TP actif → alerte (même en sync silencieux), marquage `🚨 non protégé` dans `/status` et le dashboard, commande de replacement fournie. Un stop calculé mais non posé sur BD est affiché comme tel, jamais comme actif |
+| **Contrôle de protection** | À chaque sync, toute position gérée est comparée au carnet BD. Sans ordre SL/TP actif → alerte (même en sync silencieux), marquage `🚨 non protégé` dans `/status` et le dashboard, commande de replacement fournie. Un stop calculé mais non posé sur BD est affiché comme tel, jamais comme actif. **L'alerte exige deux lectures abouties et concordantes** : un onglet ordres illisible suspend le contrôle au lieu de conclure « aucune protection » (fausse alerte du 11/08/2026) |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA |
 | **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +6% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
@@ -717,6 +717,20 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-11 — Fausse alerte « SANS PROTECTION » : une liste vide n'est pas une preuve
+Le sync auto de 8h a annoncé les **trois** positions à nu (AIR, BAC, NVDA). Un `/sync` lancé dans la foulée les a toutes retrouvées protégées, ordres intacts. Le log tranche : sur ce cycle, **aucune ligne `[order raw]`** — l'onglet « Mes ordres » n'avait rien rendu, alors que le cycle suivant relit les trois ordres à l'identique.
+
+**La cause n'est pas la détection, c'est l'ambiguïté de son entrée.** `orders = []` voulait dire deux choses opposées : « aucun ordre en cours » et « je n'ai pas réussi à lire l'onglet ». Trois chemins produisaient la liste vide **en silence** : onglet non cliqué (timeout 3 s), aucun bloc trouvé (le contenu est rendu en JS, il était lu sans attente), exception en cours de lecture. Le contrôle de protection, qui conclut d'une **absence**, prenait cet échec de lecture pour un carnet vide.
+
+- **`orders_read` distingue les deux cas** (`bourse_direct_reader`) : la liste ne vaut preuve que si des blocs ont été lus, ou si un **état vide est positivement constaté** dans la page. Sinon, échec de lecture annoncé dans le log
+- **Attente du rendu** (`wait_for_selector`, 8 s) avant de lire les blocs — la course qui produisait 0 bloc est fermée
+- **Le sync suspend tout raisonnement fondé sur une absence** quand `orders_read` est faux : pas d'alerte, **pas d'écrasement des drapeaux `protected`/`trailable`**, et pas de libération du budget des ordres autonomes en attente (même piège, autre conséquence : un ordre bien vivant réputé disparu)
+- **Relecture de confirmation avant toute alerte** : une position vue sans protection déclenche une seconde lecture de la page ordres ; une protection vue dans **l'une** des deux lectures compte comme réelle. Il faut deux lectures abouties et concordantes pour crier 🚨
+- **Le trailing ne repose plus d'ordre sur une lecture ratée** : la vérification « l'ancienne protection a bien disparu » exige désormais `orders_read` — sans elle, une lecture vide aurait validé une annulation non aboutie et créé un **doublon de vente**
+- **`/annuler_bd` ne dit plus « aucun ordre trouvé »** quand l'onglet est illisible : il dit qu'il ne sait pas
+
+Le principe, valable au-delà de ce bug : **une conclusion tirée d'une absence exige la preuve que la lecture a eu lieu.**
 
 ### 2026-08-05 (5) — Le lien du dashboard se recalcule au lieu d'être recopié
 Tailscale crée un **nœud dupliqué** à chaque réinstallation ou mise à jour : la machine `yok` devient `yok-2`, puis `yok-3`, et **l'IP du tailnet change avec elle**. Tout lien noté quelque part devient donc faux sans prévenir — constaté ce jour : le lien mémorisé pointait encore sur `100.65.97.62` alors que la machine était passée à `100.108.53.48`.

@@ -41,6 +41,18 @@ BD_ORDER_BOOK_LEGACY_URL = "https://www.boursedirect.fr/priv/new/ordres-en-carne
 # 27/07/2026 a réussi (HTTP 200).
 BD_ORDER_BOOK_URL = "https://www.boursedirect.fr/fr/page/ordres-en-carnet"
 
+# Formulations d'état vide de l'onglet « Mes ordres ». Ne sert QU'À prouver
+# qu'un carnet vide est vide pour de bon : sans l'une de ces phrases, zéro bloc
+# lu = lecture ratée, pas absence d'ordres (cf. `orders_read`).
+EMPTY_ORDERS_MARKERS = (
+    "aucun ordre",
+    "pas d'ordre",
+    "pas d’ordre",
+    "n'avez aucun ordre",
+    "n’avez aucun ordre",
+    "aucun résultat",
+)
+
 
 def find_account_nc(html: str, account: str = "") -> str | None:
     """
@@ -368,18 +380,49 @@ def get_portfolio(page, send_fn=None) -> dict | None:
         # ── Onglet Mes ordres ────────────────────────────────────────────────
         # Sélecteur robuste : le hash CSS change à chaque déploiement BD.
         # On tente d'abord le sélecteur exact, puis un fallback large.
+        #
+        # ⚠️ `orders == []` est AMBIGU : « aucun ordre en cours » et « je n'ai
+        # pas réussi à lire l'onglet » donnaient la même liste vide, en silence.
+        # Le sync en déduisait « aucune protection » et criait 🚨 POSITION SANS
+        # PROTECTION sur les 3 positions à la fois (fausse alerte du 11/08/2026,
+        # 08h : aucune ligne `[order raw]` dans le log de ce cycle, les 3 ordres
+        # réapparaissent intacts au cycle suivant). `orders_read` porte donc
+        # désormais la différence, et seul un état vide POSITIVEMENT constaté
+        # vaut « carnet vide ».
         orders = []
-        if _click_tab(page, "Mes ordres"):
+        orders_read = False
+        if not _click_tab(page, "Mes ordres"):
+            log("Onglet « Mes ordres » introuvable — ordres NON lus "
+                "(protections non vérifiables ce cycle).")
+        else:
             _dismiss_popups(page)
             try:
                 # Sélecteur principal (hash peut changer) puis fallback
                 sel_main = "[class*='ConsolidatedOrders'][class*='content']"
                 sel_back = "[class*='orderContainer'], [class*='order-line'], [class*='OrderRow']"
+                # Le contenu de l'onglet est rendu en JS : sans attente, on
+                # lisait parfois le DOM avant son remplissage (0 bloc).
+                try:
+                    page.wait_for_selector(f"{sel_main}, {sel_back}", timeout=8000)
+                except Exception:
+                    pass
                 blocks = page.locator(sel_main).all()
                 if not blocks:
                     blocks = page.locator(sel_back).all()
                     if blocks:
                         log("Sélecteur ordres : fallback activé")
+
+                if blocks:
+                    orders_read = True
+                else:
+                    body = " ".join(
+                        page.locator("body").inner_text(timeout=3000).lower().split())
+                    if any(m in body for m in EMPTY_ORDERS_MARKERS):
+                        orders_read = True      # carnet réellement vide
+                        trace("Onglet ordres : aucun ordre en cours (état vide confirmé).")
+                    else:
+                        log("Onglet ordres illisible (aucun bloc ET aucun état vide "
+                            "reconnu) — ordres NON lus, protections non vérifiables.")
 
                 for block in blocks:
                     raw_text = block.inner_text(timeout=2000)
@@ -440,6 +483,10 @@ def get_portfolio(page, send_fn=None) -> dict | None:
                         flat = raw_text.replace("\n", " ")[:120]
                         print(f"[BD Reader order skipped] {flat}")
             except Exception as e:
+                # Lecture interrompue en cours de route : ce qu'on a pu lire est
+                # potentiellement PARTIEL → on ne s'en sert pas pour juger des
+                # protections.
+                orders_read = False
                 log(f"Lecture ordres échouée : {e}")
 
         # ── Onglet Mes investissements programmés ────────────────────────────
@@ -463,10 +510,11 @@ def get_portfolio(page, send_fn=None) -> dict | None:
             return None
 
         return {
-            "cash":       cash,
-            "positions":  positions,
-            "orders":     orders,
-            "programmed": programmed,
+            "cash":        cash,
+            "positions":   positions,
+            "orders":      orders,
+            "orders_read": orders_read,   # False ⇒ `orders` n'est PAS une preuve
+            "programmed":  programmed,
         }
 
     except Exception as e:

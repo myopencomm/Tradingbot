@@ -431,10 +431,17 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     # Les ordres BD (Take Profit, Stop Loss) reflètent les vraies protections
     # placées. On aligne target_low (Seuil/SL) et target_high (Profit/TP) dessus.
     orders = bd.get("orders", [])
+    # `orders_read=False` ⇒ l'onglet « Mes ordres » n'a pas pu être lu : la
+    # liste vide ne prouve RIEN (fausse alerte du 11/08/2026). Tout ce qui
+    # déduit quelque chose d'une ABSENCE d'ordre est suspendu dans ce cas.
+    orders_read = bd.get("orders_read", True)
     # Seuls les ordres actifs ("En cours") sont affichés et synchronisés.
     # Les ordres annulés/exécutés sont déjà filtrés par bourse_direct_reader.
     active_orders = [o for o in orders if o.get("statut") == "En cours"]
-    if active_orders:
+    if not orders_read:
+        lines.append("\nORDRES EN COURS SUR BD : onglet illisible ce cycle — "
+                     "liste NON représentative (aucune conclusion tirée).")
+    elif active_orders:
         lines.append("\nORDRES EN COURS SUR BD")
         for o in active_orders:
             typ    = o.get("type", "?")
@@ -480,12 +487,11 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     #
     # Discriminant : un ordre ACTIF portant un seuil (`seuil`) pour ce titre.
     # C'est exactement le contrôle qu'on fait à l'œil sur le carnet BD.
-    protected_bases = {
-        (o.get("bd_ticker") or "").upper().split(".")[0]
-        for o in active_orders if o.get("seuil")
-    }
-    protected_names = {(o.get("name") or "").upper() for o in active_orders if o.get("seuil")}
-
+    #
+    # ⚠️ Ce contrôle repose sur une ABSENCE — il n'est donc valide que si la
+    # lecture des ordres a réellement abouti (`orders_read`), et il se confirme
+    # par une RELECTURE avant toute alerte (voir plus bas).
+    #
     # ── Protection REMONTABLE ou soudée à l'ordre d'achat ? ──────────────
     # Discriminant établi sur les ids réels du 05/08/2026 :
     #   AIR  4b07d823… « Vente(CPT) … Seuil209.70 En cours »        → annulable
@@ -501,27 +507,75 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                 return e.get("id")
         return None
 
-    trailable_bases, trailable_names = set(), set()
-    for o in active_orders:
-        if o.get("seuil") and _cancellable_leg(o):
-            trailable_bases.add((o.get("bd_ticker") or "").upper().split(".")[0])
-            trailable_names.add((o.get("name") or "").upper())
-    naked = []
-    for name, cfg in data.get("positions", {}).items():
-        if cfg.get("hold") or not cfg.get("qty"):
-            continue
+    def _protection_sets(order_list):
+        """(protégés_par_ticker, protégés_par_nom, remontables_ticker, remontables_nom)."""
+        act = [o for o in order_list if o.get("statut") == "En cours"]
+        p_bases = {(o.get("bd_ticker") or "").upper().split(".")[0]
+                   for o in act if o.get("seuil")}
+        p_names = {(o.get("name") or "").upper() for o in act if o.get("seuil")}
+        t_bases, t_names = set(), set()
+        for o in act:
+            if o.get("seuil") and _cancellable_leg(o):
+                t_bases.add((o.get("bd_ticker") or "").upper().split(".")[0])
+                t_names.add((o.get("name") or "").upper())
+        return p_bases, p_names, t_bases, t_names
+
+    protected_bases, protected_names, trailable_bases, trailable_names = \
+        _protection_sets(orders)
+
+    def _is_protected(cfg):
         base = _local_base(cfg)
-        ok = base in protected_bases or (cfg.get("bd_name") or "").upper() in protected_names
-        trail = base in trailable_bases or (cfg.get("bd_name") or "").upper() in trailable_names
-        was = cfg.get("protected")
-        if cfg.get("protected") is not ok:
-            cfg["protected"] = ok
-            meta_changed = True
-        if cfg.get("trailable") is not trail:
-            cfg["trailable"] = trail
-            meta_changed = True
-        if not ok:
-            naked.append((name, cfg, was is not False))   # was: 1re détection ?
+        bdn = (cfg.get("bd_name") or "").upper()
+        return base in protected_bases or (bdn and bdn in protected_names)
+
+    def _is_trailable(cfg):
+        base = _local_base(cfg)
+        bdn = (cfg.get("bd_name") or "").upper()
+        return base in trailable_bases or (bdn and bdn in trailable_names)
+
+    managed = [(n, c) for n, c in data.get("positions", {}).items()
+               if not c.get("hold") and c.get("qty")]
+
+    naked = []
+    if not orders_read:
+        # Onglet ordres non lu : aucune conclusion sur les protections, et
+        # surtout aucun drapeau `protected` écrasé — sinon le trailing lirait
+        # ensuite un « à nu » fabriqué par une lecture ratée.
+        lines.append("\n⚠️ Ordres BD NON LUS ce cycle (onglet illisible) — "
+                     "contrôle des protections SUSPENDU, drapeaux inchangés.")
+    else:
+        # Relecture de confirmation : une page à moitié rendue peut livrer une
+        # partie seulement des ordres. Avant de crier 🚨, on relit une fois —
+        # quelques secondes contre une fausse alerte sur tout le portefeuille.
+        if any(not _is_protected(c) for _n, c in managed):
+            bd2 = reader.get_portfolio(page, send_fn=None)
+            if not (bd2 and bd2.get("orders_read", False)):
+                orders_read = False
+                lines.append("\n⚠️ Position(s) vue(s) sans protection, mais la "
+                             "RELECTURE des ordres a échoué — alerte suspendue "
+                             "(rien de confirmé, drapeaux inchangés).")
+            else:
+                p_b2, p_n2, t_b2, t_n2 = _protection_sets(bd2.get("orders", []))
+                # Union : une protection vue dans l'UNE des deux lectures est
+                # une protection réelle. Seule une absence dans les DEUX compte.
+                protected_bases |= p_b2
+                protected_names |= p_n2
+                trailable_bases |= t_b2
+                trailable_names |= t_n2
+
+    if orders_read:
+        for name, cfg in managed:
+            ok    = _is_protected(cfg)
+            trail = _is_trailable(cfg)
+            was = cfg.get("protected")
+            if cfg.get("protected") is not ok:
+                cfg["protected"] = ok
+                meta_changed = True
+            if cfg.get("trailable") is not trail:
+                cfg["trailable"] = trail
+                meta_changed = True
+            if not ok:
+                naked.append((name, cfg, was is not False))   # was: 1re détection ?
 
     welded = [(n, c) for n, c in data.get("positions", {}).items()
               if not c.get("hold") and c.get("qty")
@@ -550,16 +604,19 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     # ── Réconciliation des ordres autonomes en attente ────────────────────
     # Un enregistrement sans ordre d'achat actif sur BD ni position créée =
     # ordre annulé/expiré → engagement libéré.
-    active_buys = {(o.get("bd_ticker") or "").upper()
-                   for o in bd.get("orders", [])
-                   if o.get("statut") == "En cours" and o.get("sens") == "Achat"}
-    for t in list(data.get("auto_pending_orders", {})):
-        base = t.split(".")[0].upper()
-        has_position = any(_local_base(c) == base for c in data.get("positions", {}).values())
-        if base not in active_buys and not has_position:
-            data["auto_pending_orders"].pop(t, None)
-            changed = True
-            lines.append(f"♻️ Ordre autonome {t} disparu de BD (annulé/expiré) — budget libéré.")
+    # Même dépendance à une ABSENCE que le contrôle de protection : sans lecture
+    # aboutie des ordres, on libérerait le budget d'ordres bien vivants.
+    if orders_read:
+        active_buys = {(o.get("bd_ticker") or "").upper()
+                       for o in bd.get("orders", [])
+                       if o.get("statut") == "En cours" and o.get("sens") == "Achat"}
+        for t in list(data.get("auto_pending_orders", {})):
+            base = t.split(".")[0].upper()
+            has_position = any(_local_base(c) == base for c in data.get("positions", {}).values())
+            if base not in active_buys and not has_position:
+                data["auto_pending_orders"].pop(t, None)
+                changed = True
+                lines.append(f"♻️ Ordre autonome {t} disparu de BD (annulé/expiré) — budget libéré.")
 
     if changed:
         portfolio.save(data)

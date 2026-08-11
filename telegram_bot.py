@@ -2378,7 +2378,13 @@ def cmd_annuler_bd(args, cid):
                     target = o
                     break
             if not target:
-                send(f"Aucun ordre en cours trouve pour {ticker_base}.", cid)
+                if not bd.get("orders_read", True):
+                    # Onglet ordres illisible : « aucun ordre » serait un
+                    # mensonge (même liste vide qu'une lecture ratée).
+                    send(f"Onglet ordres BD illisible — impossible de dire si un "
+                         f"ordre {ticker_base} existe. Reessaie dans 1 min.", cid)
+                else:
+                    send(f"Aucun ordre en cours trouve pour {ticker_base}.", cid)
                 return
             oid = target.get("order_id")
             if not oid:
