@@ -63,26 +63,25 @@ def get_budget_info() -> dict:
 def set_config(enabled: bool, budget_total: float | None = None,
                budget_pct: float | None = None,
                max_positions: int | None = None) -> dict:
-    data = portfolio.load()
-    cfg  = data.get("autonomous_config", {})
-    cfg["enabled"]      = enabled
-    # None = on CONSERVE la valeur existante. Avant, le défaut MAX_POSITIONS
-    # écrasait le réglage à chaque `/auto on` : un nombre de places choisi à
-    # la main était silencieusement perdu au prochain changement de budget.
-    if max_positions is not None:
-        cfg["max_positions"] = int(max_positions)
-    else:
-        cfg.setdefault("max_positions", MAX_POSITIONS)
-    cfg["breakeven_pct"] = BREAKEVEN_PCT
-    if budget_total is not None:
-        cfg["budget_total"] = round(budget_total, 2)
-        cfg.pop("budget_pct", None)
-    if budget_pct is not None:
-        cfg["budget_pct"]  = round(budget_pct, 1)
-        cash = portfolio.get_cash()
-        cfg["budget_total"] = round(cash * budget_pct / 100, 2)
-    data["autonomous_config"] = cfg
-    portfolio.save(data)
+    with portfolio.mutate() as data:
+        cfg = data.get("autonomous_config", {})
+        cfg["enabled"] = enabled
+        # None = on CONSERVE la valeur existante. Avant, le défaut MAX_POSITIONS
+        # écrasait le réglage à chaque `/auto on` : un nombre de places choisi à
+        # la main était silencieusement perdu au prochain changement de budget.
+        if max_positions is not None:
+            cfg["max_positions"] = int(max_positions)
+        else:
+            cfg.setdefault("max_positions", MAX_POSITIONS)
+        cfg["breakeven_pct"] = BREAKEVEN_PCT
+        if budget_total is not None:
+            cfg["budget_total"] = round(budget_total, 2)
+            cfg.pop("budget_pct", None)
+        if budget_pct is not None:
+            cfg["budget_pct"] = round(budget_pct, 1)
+            cfg["budget_total"] = round(
+                data.get("cash_available", 0) * budget_pct / 100, 2)
+        data["autonomous_config"] = cfg
     return cfg
 
 
@@ -1417,14 +1416,25 @@ def check_autonomous_positions(send_fn) -> None:
     if not auto_pos:
         return
 
-    data    = portfolio.load()
-    changed = False
-
+    # Cours et ranges récupérés AVANT de charger l'état : ces appels réseau
+    # duraient plusieurs secondes ENTRE le `load()` et le `save()`, fenêtre
+    # pendant laquelle toute autre écriture (un /sl, le sync horaire) était
+    # ensuite écrasée par le `save()` final.
+    marche = {}
     for name, pos in auto_pos.items():
         quote = prices.get_quote(pos["ticker"])
         price = portfolio.best_price(pos, quote)["price"]
         if not price:
             continue
+        marche[name] = (price, prices.get_intraday_range(pos["ticker"], hours=4) or {})
+
+    data    = portfolio.load()
+    changed = False
+
+    for name, pos in auto_pos.items():
+        if name not in marche:
+            continue
+        price, rng = marche[name]
 
         entry      = pos["entry_price"]
         sl         = pos["target_low"]
@@ -1433,7 +1443,6 @@ def check_autonomous_positions(send_fn) -> None:
         change_pct = (price - entry) / entry * 100
         pnl        = (price - entry) * qty
 
-        rng   = prices.get_intraday_range(pos["ticker"], hours=4) or {}
         low4h  = rng.get("low", price)
         high4h = rng.get("high", price)
 

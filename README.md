@@ -720,6 +720,28 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-11 (3) — Phase 1 : `positions.json` ne peut plus être perdu ni tronqué
+`positions.json` porte **tout** l'état du bot et il était lu-modifié-écrit
+depuis une dizaine de threads (scheduler, polling Telegram, worker Playwright,
+serveur du dashboard, timers) **sans aucun verrou, par écriture en place**.
+
+Mesuré sur 4 threads × 200 incréments : **597 des 800 écritures perdues**, et
+les lecteurs concurrents tombaient sur un JSON tronqué — que `load()` rattrapait
+par un `except` muet en renvoyant… **un portefeuille vide**.
+
+- **Écriture atomique** : fichier temporaire + `os.replace`. Un lecteur voit
+  l'ancien fichier ou le nouveau, jamais un fichier à moitié écrit.
+- **`portfolio.mutate()`** : lecture-modification-écriture sous verrou réentrant
+  en une seule opération, sans sauvegarde si le bloc lève.
+- **Les lectures BD sortent de la fenêtre critique.** Le sync tenait l'état
+  chargé pendant ~30 s (deux chargements de page BD entre le `load()` et le
+  `save()`) : la décision de relire est désormais prise sur la seule lecture BD,
+  **avant** de charger l'état. Même traitement pour le suivi des positions
+  autonomes, dont les appels de cours sont maintenant groupés en amont.
+- **`/add` débite le cash et crée la position dans UNE transaction** — en deux
+  écritures, un lecteur tombant entre les deux voyait le cash déjà déduit et la
+  position pas encore là.
+
 ### 2026-08-11 (2) — Phase 0 : un filet de tests avant tout refactoring
 14 640 lignes qui passent des ordres réels, **zéro test**. Toute factorisation
 était un pari. `tests/` contient désormais **66 tests de caractérisation** :

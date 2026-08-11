@@ -1,20 +1,71 @@
+import contextlib
 import json
 import csv
 import io
+import os
+import threading
 from config import POSITIONS_PATH
+
+# ─── Un seul écrivain à la fois ─────────────────────────────────────────────
+# `positions.json` porte TOUT l'état du bot (cash, positions, SL/TP, ordres
+# autonomes en attente) et il est lu-modifié-écrit depuis une dizaine de
+# threads : scheduler, polling Telegram, worker Playwright, serveur HTTP du
+# dashboard, `threading.Timer` du sync post-ordre.
+#
+# Deux défauts en découlaient, tous deux silencieux :
+#   · MISE À JOUR PERDUE — `sync()` charge l'état, passe ~30 s à lire Bourse
+#     Direct, puis sauvegarde : un `/sl` passé entre-temps était écrasé sans
+#     un mot. Le correctif du 11/08 (relecture de confirmation) allongeait
+#     encore cette fenêtre.
+#   · FICHIER TRONQUÉ — `write_text` écrit en place ; le process tué au
+#     mauvais moment laissait un JSON incomplet, donc un portefeuille vide au
+#     redémarrage (`load()` retombe sur son défaut sans rien dire).
+#
+# `_LOCK` est réentrant : `mutate()` appelle `load()`/`save()`, et plusieurs
+# helpers de ce module s'appellent entre eux.
+_LOCK = threading.RLock()
 
 
 def load() -> dict:
-    try:
-        return json.loads(POSITIONS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {"cash_available": 0, "positions": {}, "pending_orders": {}}
+    with _LOCK:
+        try:
+            return json.loads(POSITIONS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {"cash_available": 0, "positions": {}, "pending_orders": {}}
 
 
 def save(data: dict):
-    POSITIONS_PATH.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    """Écriture ATOMIQUE : fichier temporaire + `os.replace`.
+
+    `os.replace` est atomique sur le même système de fichiers — le lecteur voit
+    l'ancien fichier OU le nouveau, jamais un fichier à moitié écrit.
+    """
+    with _LOCK:
+        tmp = POSITIONS_PATH.with_suffix(POSITIONS_PATH.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+        os.replace(tmp, POSITIONS_PATH)
+
+
+@contextlib.contextmanager
+def mutate():
+    """Lecture-modification-écriture sous verrou, en une seule opération.
+
+        with portfolio.mutate() as data:
+            data["positions"][k]["target_low"] = 209.7
+
+    À utiliser partout où l'on modifie l'état. Le `load()` + `save()` séparés
+    restent disponibles (lecture seule, ou modification bâtie sur une donnée
+    longue à obtenir), mais ils rouvrent la fenêtre de mise à jour perdue :
+    plus la fenêtre est longue, plus il faut préférer ce gestionnaire.
+
+    Aucune sauvegarde si le bloc lève : un état à moitié modifié ne part pas
+    sur le disque.
+    """
+    with _LOCK:
+        data = load()
+        yield data
+        save(data)
 
 
 def get_positions() -> dict:

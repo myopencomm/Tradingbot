@@ -107,6 +107,31 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     if not bd:
         return False
 
+    # ── Relecture de confirmation — décidée et faite AVANT de charger l'état ──
+    # Le sync est le plus long lecteur-modificateur-écrivain de positions.json.
+    # Toute lecture BD faite ENTRE le `load()` et le `save()` allonge d'autant
+    # la fenêtre pendant laquelle un /sl, un /hold ou le trailing peut écrire —
+    # écriture que le `save()` final réverterait sans un mot.
+    #
+    # Le déclencheur ne regarde donc QUE la lecture BD (positions détenues chez
+    # le courtier sans ordre à seuil), plus la liste des HOLD, lue à part et
+    # sans verrou : un drapeau `hold` périmé ne peut causer qu'une relecture
+    # inutile, jamais une conclusion fausse.
+    bd2 = None
+    if bd.get("orders_read", True):
+        hold_bases = {(c.get("ticker") or "").upper().split(".")[0]
+                      for c in portfolio.load().get("positions", {}).values()
+                      if c.get("hold")}
+        protégés = {(o.get("bd_ticker") or "").upper().split(".")[0]
+                    for o in bd.get("orders", [])
+                    if o.get("statut") == "En cours" and o.get("seuil")}
+        suspects = [p for p in bd.get("positions", [])
+                    if (p.get("bd_ticker") or "").upper() not in protégés
+                    and (p.get("bd_ticker") or "").upper() not in hold_bases
+                    and p.get("qty")]
+        if suspects:
+            bd2 = reader.get_portfolio(page, send_fn=None)
+
     data = portfolio.load()
     local = data.get("positions", {})
     lines = []
@@ -543,25 +568,22 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
         # ensuite un « à nu » fabriqué par une lecture ratée.
         lines.append("\n⚠️ Ordres BD NON LUS ce cycle (onglet illisible) — "
                      "contrôle des protections SUSPENDU, drapeaux inchangés.")
-    else:
-        # Relecture de confirmation : une page à moitié rendue peut livrer une
-        # partie seulement des ordres. Avant de crier 🚨, on relit une fois —
-        # quelques secondes contre une fausse alerte sur tout le portefeuille.
-        if any(not _is_protected(c) for _n, c in managed):
-            bd2 = reader.get_portfolio(page, send_fn=None)
-            if not (bd2 and bd2.get("orders_read", False)):
-                orders_read = False
-                lines.append("\n⚠️ Position(s) vue(s) sans protection, mais la "
-                             "RELECTURE des ordres a échoué — alerte suspendue "
-                             "(rien de confirmé, drapeaux inchangés).")
-            else:
-                p_b2, p_n2, t_b2, t_n2 = _protection_sets(bd2.get("orders", []))
-                # Union : une protection vue dans l'UNE des deux lectures est
-                # une protection réelle. Seule une absence dans les DEUX compte.
-                protected_bases |= p_b2
-                protected_names |= p_n2
-                trailable_bases |= t_b2
-                trailable_names |= t_n2
+    elif any(not _is_protected(c) for _n, c in managed):
+        # Une page à moitié rendue peut livrer une partie seulement des ordres.
+        # Avant de crier 🚨, la relecture faite en tête de fonction tranche.
+        if not (bd2 and bd2.get("orders_read", False)):
+            orders_read = False
+            lines.append("\n⚠️ Position(s) vue(s) sans protection, mais la "
+                         "RELECTURE des ordres a échoué ou n'a pas eu lieu — "
+                         "alerte suspendue (rien de confirmé, drapeaux inchangés).")
+        else:
+            p_b2, p_n2, t_b2, t_n2 = _protection_sets(bd2.get("orders", []))
+            # Union : une protection vue dans l'UNE des deux lectures est une
+            # protection réelle. Seule une absence dans les DEUX compte.
+            protected_bases |= p_b2
+            protected_names |= p_n2
+            trailable_bases |= t_b2
+            trailable_names |= t_n2
 
     if orders_read:
         for name, cfg in managed:

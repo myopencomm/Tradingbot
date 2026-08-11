@@ -475,25 +475,32 @@ def cmd_add(args, cid):
         # Si un ordre en attente existait pour cette valeur, l'annuler sans rendre le cash
         # (le cash était déjà réservé = déjà déduit du disponible)
         # Recherche par nom exact OU par ticker (évite les écarts de nommage)
-        data = portfolio.load()
-        pending = data.get("pending_orders", {})
-        pending_key = name if name in pending else next(
-            (k for k, v in pending.items() if v.get("ticker") == ticker), None
-        )
-        had_pending = pending_key is not None
+        # Débit du cash ET création de la position dans UNE SEULE transaction :
+        # en deux écritures séparées, un lecteur tombant entre les deux voyait
+        # le cash déjà déduit et la position pas encore là.
         cost = round(qty * pru, 2)
-        if had_pending:
-            # Cash déjà réservé à la pose de l'ordre — on ajuste juste l'écart
-            # entre le montant réservé et le coût réel d'exécution.
-            reserved = pending[pending_key].get("reserved_cash", 0)
-            pending.pop(pending_key, None)
-            data["cash_available"] = round(data.get("cash_available", 0) + reserved - cost, 2)
-        else:
-            # Achat direct : on déduit le coût du cash disponible
-            data["cash_available"] = round(data.get("cash_available", 0) - cost, 2)
-        portfolio.save(data)
-
-        portfolio.add_position(name, ticker, qty, pru, sl, tp)
+        with portfolio.mutate() as data:
+            pending = data.get("pending_orders", {})
+            pending_key = name if name in pending else next(
+                (k for k, v in pending.items() if v.get("ticker") == ticker), None
+            )
+            had_pending = pending_key is not None
+            if had_pending:
+                # Cash déjà réservé à la pose de l'ordre — on ajuste juste l'écart
+                # entre le montant réservé et le coût réel d'exécution.
+                reserved = pending[pending_key].get("reserved_cash", 0)
+                pending.pop(pending_key, None)
+                data["cash_available"] = round(data.get("cash_available", 0) + reserved - cost, 2)
+            else:
+                # Achat direct : on déduit le coût du cash disponible
+                data["cash_available"] = round(data.get("cash_available", 0) - cost, 2)
+            data.setdefault("positions", {})[name.upper()] = {
+                "ticker":      ticker,
+                "qty":         qty,
+                "entry_price": round(pru, 4),
+                "target_high": round(tp, 4),
+                "target_low":  round(sl, 4),
+            }
         new_cash = portfolio.get_cash()
         note = " (ordre en attente cloture)" if had_pending else ""
         send(
