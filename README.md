@@ -257,6 +257,8 @@ TradingBot/
 ├── config.py                Variables d'env centralisées (lues depuis .env)
 ├── market.py                Places de marché : suffixe, devise, horaires, MIC BD → ticker Yahoo
 ├── position_view.py         Valorisation d'une position : UN calcul, lu par les 5 rendus
+├── commands.py              Table unique des commandes : dispatch + menu + /help en derivent
+├── docs/tuto/               Guide interactif /tuto (texte, hors code)
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome
@@ -721,6 +723,29 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-11 (6) — Phase 4 : la surface des commandes devient des données
+La même liste vivait à **cinq endroits** : le dispatch `COMMANDS`, le menu
+`BOT_COMMANDS`, le texte de `/help`, le guide `/tuto` et les tableaux de ce
+README. Tenir cinq listes à la main n'a pas tenu : au 11/08, **5 commandes
+manquaient au menu et 9 à `/help`** — dont `/dashboard`, `/lessons`,
+`/reticker`, `/fallback` et `/scan_us`, toutes utilisables et documentées
+nulle part.
+
+- **`commands.py`** déclare chaque commande UNE fois (nom, handler, description
+  de menu, section d'aide, arguments, exemples). Le dispatch, le menu Telegram
+  et `/help` en sont **dérivés**.
+- **Un handler mal nommé fait échouer l'import** — donc au démarrage du bot, pas
+  au premier appel de la commande par l'utilisateur.
+- **21 tests anti-dérive** : toute commande routée est au menu et dans l'aide,
+  aucune route hors table, aucune section orpheline, l'aide tient dans la
+  limite Telegram, et **le README ne peut plus oublier une commande**. La
+  dérive devient impossible, plus seulement corrigée.
+- **Les 457 lignes de `/tuto` sortent du code** vers `docs/tuto/*.txt`, lus à
+  l'exécution — la doc s'édite sans toucher au code. Extraction vérifiée
+  **identique au caractère près** (comparaison de hachages page par page).
+
+`telegram_bot.py` passe de 2 833 à 2 287 lignes (−19 %).
 
 ### 2026-08-11 (5) — Phase 3 : `position_view.py`, et l'IA cesse d'être mal informée
 « Combien vaut cette position » était recalculé dans **cinq** endroits :

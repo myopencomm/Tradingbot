@@ -1,0 +1,56 @@
+Installation — Etape 1 : Bot Telegram
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Ouvre Telegram → cherche @BotFather
+2. Envoie /newbot
+3. Choisis un nom puis un username (_bot)
+4. Copie le TOKEN recu : ***REMOVED***
+
+Ton Chat ID (pour limiter le bot a toi seul) :
+→ @userinfobot sur Telegram → envoie /start
+→ Il te repond avec ton Id numerique
+===== PAGE =====
+Installation — Etape 2 : Telecharger
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Dans ton terminal :
+  git clone https://github.com/myopencomm/Tradingbot.git
+  cd Tradingbot
+  python3 -m venv venv
+  venv/bin/pip install -r requirements.txt
+  cp .env.example .env
+  cp positions.example.json positions.json
+
+Python 3.10 minimum requis.
+Sur Mac si python3 --version affiche 3.9 :
+  brew install python
+===== PAGE =====
+Installation — Etape 3 : Configurer .env
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Edite le fichier .env :
+  TELEGRAM_TOKEN=***REMOVED***
+  CHAT_ID=***REMOVED***
+  AI_PROVIDER=groq          ← gratuit
+  GROQ_API_KEY=gsk_...
+
+Providers IA disponibles :
+  groq    → console.groq.com (gratuit)
+  gemini  → aistudio.google.com (gratuit)
+  anthropic / openai / mistral (payants)
+
+Ne partage JAMAIS ton .env — jamais commit.
+===== PAGE =====
+Installation — Etape 4 : Lancer
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./bot.sh start
+
+Le bot tourne en arriere-plan — tu peux
+fermer le terminal. Envoie /start ici
+pour verifier.
+
+Recommande — demarrage auto au boot du Mac/PC
++ relance automatique apres un crash :
+  ./bot.sh autostart
+
+Autres commandes :
+  ./bot.sh status   → tourne ou pas ?
+  ./bot.sh logs     → logs en direct
+  ./bot.sh stop     → arreter

@@ -5,9 +5,11 @@ Toutes les commandes sont disponibles depuis l'app iPhone/web.
 import requests
 import time
 import threading
+from pathlib import Path
 from config import (TELEGRAM_TOKEN, CHAT_ID, AUTHORIZED_CHAT_IDS,
                     GMAIL_USER, GMAIL_APP_PASSWORD,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT, BREAKEVEN_THRESHOLD)
+import commands
 import portfolio
 import position_view
 import prices
@@ -143,44 +145,8 @@ def _run_long(cid, fn, *args, **kwargs):
 # Liste affichée dans le petit menu de l'app Telegram. Ordre = priorité d'usage.
 # Noms sans le slash, minuscules, [a-z0-9_], descriptions courtes.
 
-BOT_COMMANDS = [
-    ("status",     "Voir mon portefeuille"),
-    ("cash",       "Cash dispo  |  /cash 1234 le definir"),
-    ("stats",      "Bilan : win rate, P&L, profit factor"),
-    ("dashboard",  "Graphique P&L + resume visuel"),
-    ("lessons",    "Ce que le bot a appris de ses trades"),
-    ("morning",    "Briefing du jour (macro + positions + opps)"),
-    ("scan",       "Meilleures opportunites avec mon cash"),
-    ("scan_us",    "Scan des valeurs US uniquement (/scan us)"),
-    ("research",   "Analyser une action — /research TICKER"),
-    ("add",        "Acheter (deduit le cash) — TICKER QTE PRU SL TP"),
-    ("remove",     "Retirer une position — /remove TICKER"),
-    ("reticker",   "Corriger le ticker Yahoo d'une position — /reticker POSITION TICKER"),
-    ("hold",       "HOLD long terme, hors gestion bot — /hold TICKER [off]"),
-    ("sl",         "Changer le stop-loss — /sl TICKER PRIX"),
-    ("tp",         "Changer le take-profit — /tp TICKER PRIX"),
-    ("vendu",      "Enregistrer une vente — /vendu NOM [PRIX]"),
-    ("close",      "Vente avec frais — TICKER QTE PRIX [FRAIS]"),
-    ("setup",      "Texte ordres protection SL+TP — TICKER QTE PRU"),
-    ("buy",        "Texte ordre Expert achat+SL+TP — TICKER QTE PRU"),
-    ("order",      "1 ordre simple (texte) — buy|sell TICKER QTE PRIX"),
-    ("attente",    "Ordre en attente, alerte au cours — NOM TICKER QTE PRIX"),
-    ("annuler",    "Annuler un ordre en attente (bot) — /annuler NOM"),
-    ("connect",    "Se connecter a Bourse Direct (code TOTP)"),
-    ("auto",       "Mode autonome — /auto on 500 | off | status"),
-    ("sync",       "Lire portefeuille + ordres reels depuis BD"),
-    ("trailing",   "Verifier le trailing stop (SL au PRU) maintenant"),
-    ("ordre",      "Passer un ordre reel sur BD — acheter|vendre TICKER QTE ..."),
-    ("annuler_bd", "Annuler un ordre en cours sur BD — /annuler_bd TICKER"),
-    ("mode",       "Etat connexion BD"),
-    ("disconnect", "Repasser en mode Classic"),
-    ("syncmail",   "Detecter les ventes via emails BD"),
-    ("import",     "Guide import CSV"),
-    ("fallback",   "IA de secours — /fallback gemini CLE_API"),
-    ("tuto",       "Guide pas a pas"),
-    ("update",     "Version du bot"),
-    ("help",       "Liste complete des commandes"),
-]
+# Le menu Telegram, le dispatch et le texte de /help sont tous derives de
+# la table unique de commands.py (voir son en-tete).
 
 
 def set_bot_commands() -> bool:
@@ -190,7 +156,8 @@ def set_bot_commands() -> bool:
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setMyCommands",
-            json={"commands": [{"command": c, "description": d} for c, d in BOT_COMMANDS]},
+            json={"commands": [{"command": c, "description": d}
+                               for c, d in commands.menu()]},
             timeout=10,
         )
         ok = r.status_code == 200 and r.json().get("ok")
@@ -225,90 +192,13 @@ def cmd_start(args, cid):
 
 
 def cmd_help(args, cid):
-    send(
-        "TradingBot — Aide\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
-        "VOIR MON PORTEFEUILLE\n"
-        "/status — positions + P&L en temps reel\n"
-        "/cash — cash dispo  |  /cash 1234 — le definir\n"
-        "/stats — bilan (win rate, P&L, profit factor)\n"
-        "\n"
-        "GERER MES POSITIONS (dans le bot)\n"
-        "/add TICKER QTE PRU SL TP — acheter (deduit le cash)\n"
-        "/remove TICKER — retirer\n"
-        "/hold TICKER [off] — HOLD long terme, hors gestion bot\n"
-        "/sl TICKER PRIX — changer le stop-loss\n"
-        "/tp TICKER PRIX — changer le take-profit\n"
-        "\n"
-        "ANALYSE IA\n"
-        "/morning — briefing du jour (macro + positions + opps)\n"
-        "/scan — meilleures opportunites avec ton cash\n"
-        "/scan us — valeurs US uniquement (seance 15h35-22h)\n"
-        "/research TICKER [question] — analyse d'une action\n"
-        "  ex: /research EXENS.PA dois-je vendre ?\n"
-        "\n"
-        "VENDRE / CLOTURER\n"
-        "/vendu NOM [PRIX] — enregistre une vente (prix TP si omis)\n"
-        "/close TICKER QTE PRIX [FRAIS] — vente avec frais\n"
-        "\n"
-        "━━━ 2 FACONS DE PASSER UN ORDRE ━━━\n"
-        "\n"
-        "A) MODE CLASSIC — le bot ecrit les instructions,\n"
-        "   TU les saisis toi-meme sur Bourse Direct :\n"
-        "/setup TICKER QTE PRU\n"
-        f"  → texte des 2 ordres protection (SL -{DEFAULT_SL_PCT:.0f}% + TP +{DEFAULT_TP_PCT:.0f}%)\n"
-        "    a poser apres un achat deja fait\n"
-        "/buy TICKER QTE PRU\n"
-        "  → texte d'1 ordre Expert (achat+SL+TP groupes)\n"
-        "/order buy|sell TICKER QTE PRIX — 1 ordre simple\n"
-        "/attente NOM TICKER QTE PRIX [SL TP]\n"
-        "  → reserve le cash, t'alerte quand le cours est atteint\n"
-        "/annuler NOM — annule un ordre en attente (bot)\n"
-        "\n"
-        "B) MODE PLAYWRIGHT — le bot passe l'ordre\n"
-        "   REELLEMENT sur Bourse Direct pour toi :\n"
-        "/connect — se connecter a BD (code TOTP)\n"
-        "/sync — lire portefeuille + ordres reels depuis BD\n"
-        "/trailing — verifier le trailing stop (SL au PRU) maintenant\n"
-        "/ordre acheter TICKER QTE marche [validite]\n"
-        "/ordre acheter TICKER QTE limite PRIX [validite]\n"
-        "/ordre acheter TICKER QTE expert ENTREE SL TP [validite]\n"
-        "/ordre vendre TICKER QTE marche [validite]\n"
-        "/ordre vendre TICKER QTE limite PRIX [validite]\n"
-        "/ordre vendre TICKER QTE expert SL TP [validite]\n"
-        "  validite : seance | max (defaut) | JJ/MM/AAAA\n"
-        "  /oui confirme et envoie  |  /non annule\n"
-        "/annuler_bd TICKER — annule un ordre en cours sur BD\n"
-        "/mode — etat connexion  |  /disconnect — repasser Classic\n"
-        "\n"
-        "MODE AUTONOME (Playwright requis)\n"
-        "/auto on 500   — active avec 500€ de budget\n"
-        "/auto positions 3 — nb max de positions simultanees\n"
-        "/auto on 20%   — active avec 20% du cash\n"
-        "/auto off      — desactive\n"
-        "/auto status   — etat + positions autonomes\n"
-        "  Le bot scanne, entre, gere SL/TP, releve\n"
-        "  le SL au PRU a +3% — tout seul\n"
-        "\n"
-        "DETECTION AUTO DES VENTES\n"
-        "/syncmail — lit les emails BD 'strategie finalisee'\n"
-        "  (utile si tu n'utilises PAS le mode Playwright)\n"
-        "\n"
-        "IMPORT\n"
-        "Envoie une photo de l'app BD → import auto (vision IA)\n"
-        "/import — guide import CSV\n"
-        "\n"
-        "AIDE\n"
-        "/tuto — guide pas a pas  |  /update — version\n"
-        "\n"
-        "GESTION DU BOT (terminal)\n"
-        "./bot.sh start|stop|restart|status|logs\n"
-        "./bot.sh update — maj en 1 commande\n"
-        "./bot.sh autostart — relance auto au boot\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        cid,
-    )
+    """Aide GÉNÉRÉE depuis commands.py — jamais recopiée, donc jamais périmée.
+
+    Les 87 lignes de texte qui vivaient ici avaient déjà dérivé du dispatch :
+    /dashboard, /lessons, /reticker, /fallback et /scan_us existaient et
+    n'étaient documentés nulle part (constaté le 11/08/2026).
+    """
+    send(commands.help_text(DEFAULT_SL_PCT, DEFAULT_TP_PCT), cid)
 
 
 def cmd_status(args, cid):
@@ -1235,462 +1125,57 @@ def cmd_import(args, cid):
     )
 
 
+# ─── Guide interactif ───────────────────────────────────────────────────────
+# Les 457 lignes de prose qui vivaient ici sont dans docs/tuto/*.txt, lues à
+# l'exécution : la doc s'édite sans toucher au code, et telegram_bot perd 19 %
+# de sa taille. Une page = un message Telegram (limite de 4 096 caractères),
+# séparées par la ligne « ===== PAGE ===== ».
+TUTO_DIR  = Path(__file__).resolve().parent / "docs" / "tuto"
+TUTO_PAGE = "===== PAGE ====="
+
+TUTO_SECTIONS = {
+    "install":    "Installation complete depuis zero\n  (Telegram, Python, .env, lancement)",
+    "classic":    "Mode Classic : screenshots, workflow\n  quotidien, ajouter/suivre ses positions",
+    "playwright": "Mode Playwright : connexion BD, ordres\n  Expert achat/vente, validite, mode auto",
+    "avance":     "Fonctions avancees : ordres en attente,\n  trailing stop, Gmail sync, stats",
+    "update":     "Mettre a jour le bot",
+}
+
+
+def _tuto_pages(section: str) -> list[str]:
+    """Pages d'une section, substitutions de configuration appliquées."""
+    fichier = TUTO_DIR / f"{section}.txt"
+    try:
+        texte = fichier.read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"[tuto] {fichier} illisible : {e}")
+        return []
+    texte = (texte.replace("{SL}", f"{DEFAULT_SL_PCT:.0f}")
+                  .replace("{TP}", f"{DEFAULT_TP_PCT:.0f}")
+                  .replace("{BREAKEVEN}", f"{BREAKEVEN_THRESHOLD:.0f}"))
+    return [p.strip("\n") for p in texte.split(TUTO_PAGE) if p.strip()]
+
+
 def cmd_tuto(args, cid):
-    sections = {
-        "install":    _tuto_install,
-        "classic":    _tuto_classic,
-        "playwright": _tuto_playwright,
-        "avance":     _tuto_avance,
-        "update":     _tuto_update,
-    }
-    if args and args[0].lower() in sections:
-        sections[args[0].lower()](cid)
-    else:
-        send(
-            "TradingBot — Guide interactif\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "Choisis ce que tu veux apprendre :\n"
-            "\n"
-            "/tuto install\n"
-            "  Installation complete depuis zero\n"
-            "  (Telegram, Python, .env, lancement)\n"
-            "\n"
-            "/tuto classic\n"
-            "  Mode Classic : screenshots, workflow\n"
-            "  quotidien, ajouter/suivre ses positions\n"
-            "\n"
-            "/tuto playwright\n"
-            "  Mode Playwright : connexion BD, ordres\n"
-            "  Expert achat/vente, validite, mode auto\n"
-            "\n"
-            "/tuto avance\n"
-            "  Fonctions avancees : ordres en attente,\n"
-            "  trailing stop, Gmail sync, stats\n"
-            "\n"
-            "/tuto update\n"
-            "  Mettre a jour le bot",
-            cid,
-        )
+    section = args[0].lower() if args else ""
+    if section in TUTO_SECTIONS:
+        pages = _tuto_pages(section)
+        if not pages:
+            send(f"Guide « {section} » introuvable — reinstalle docs/tuto/.", cid)
+            return
+        for page in pages:
+            send(page, cid)
+            time.sleep(0.4)
+        return
 
+    menu = ["TradingBot — Guide interactif", "━" * 36,
+            "Choisis ce que tu veux apprendre :", ""]
+    for nom, desc in TUTO_SECTIONS.items():
+        menu.append(f"/tuto {nom}")
+        menu.append(f"  {desc}")
+        menu.append("")
+    send("\n".join(menu).rstrip(), cid)
 
-def _tuto_install(cid):
-    send(
-        "Installation — Etape 1 : Bot Telegram\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "1. Ouvre Telegram → cherche @BotFather\n"
-        "2. Envoie /newbot\n"
-        "3. Choisis un nom puis un username (_bot)\n"
-        "4. Copie le TOKEN recu : ***REMOVED***\n"
-        "\n"
-        "Ton Chat ID (pour limiter le bot a toi seul) :\n"
-        "→ @userinfobot sur Telegram → envoie /start\n"
-        "→ Il te repond avec ton Id numerique",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Installation — Etape 2 : Telecharger\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Dans ton terminal :\n"
-        "  git clone https://github.com/myopencomm/Tradingbot.git\n"
-        "  cd Tradingbot\n"
-        "  python3 -m venv venv\n"
-        "  venv/bin/pip install -r requirements.txt\n"
-        "  cp .env.example .env\n"
-        "  cp positions.example.json positions.json\n"
-        "\n"
-        "Python 3.10 minimum requis.\n"
-        "Sur Mac si python3 --version affiche 3.9 :\n"
-        "  brew install python",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Installation — Etape 3 : Configurer .env\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Edite le fichier .env :\n"
-        "  TELEGRAM_TOKEN=***REMOVED***\n"
-        "  CHAT_ID=***REMOVED***\n"
-        "  AI_PROVIDER=groq          ← gratuit\n"
-        "  GROQ_API_KEY=gsk_...\n"
-        "\n"
-        "Providers IA disponibles :\n"
-        "  groq    → console.groq.com (gratuit)\n"
-        "  gemini  → aistudio.google.com (gratuit)\n"
-        "  anthropic / openai / mistral (payants)\n"
-        "\n"
-        "Ne partage JAMAIS ton .env — jamais commit.",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Installation — Etape 4 : Lancer\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "  ./bot.sh start\n"
-        "\n"
-        "Le bot tourne en arriere-plan — tu peux\n"
-        "fermer le terminal. Envoie /start ici\n"
-        "pour verifier.\n"
-        "\n"
-        "Recommande — demarrage auto au boot du Mac/PC\n"
-        "+ relance automatique apres un crash :\n"
-        "  ./bot.sh autostart\n"
-        "\n"
-        "Autres commandes :\n"
-        "  ./bot.sh status   → tourne ou pas ?\n"
-        "  ./bot.sh logs     → logs en direct\n"
-        "  ./bot.sh stop     → arreter",
-        cid,
-    )
-
-
-def _tuto_classic(cid):
-    send(
-        "Mode Classic — Importer ton portefeuille\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "3 facons d'entrer tes positions :\n"
-        "\n"
-        "1. SCREENSHOT (le plus simple)\n"
-        "   Envoie une ou plusieurs photos de l'app\n"
-        "   Bourse Direct → le bot lit tout auto\n"
-        "   Tu peux envoyer plusieurs captures a la\n"
-        "   suite, il les fusionne (attends 12s)\n"
-        "\n"
-        "2. MANUEL\n"
-        "   /add TICKER QTE PRU SL TP\n"
-        "   Ex: /add GNFT.PA 100 8.51 7.66 9.79\n"
-        "\n"
-        "3. CSV\n"
-        "   Exporte depuis BD → envoie le fichier .csv\n"
-        "   /import pour le guide\n"
-        "\n"
-        "Cash disponible : /cash 1500",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Mode Classic — Workflow quotidien\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "AUTOMATIQUE\n"
-        "  9h05  → briefing IA (macro + positions)\n"
-        "  9/12/15/17h → check SL/TP, alertes\n"
-        "  16h → scan US · 18/20/21h40 → check positions US\n"
-        "  Lundi 9h10 → analyse de rotation\n"
-        "\n"
-        "Le scan US de 16h et la recherche de\n"
-        "candidats du briefing sont SAUTES quand\n"
-        "aucun achat n'est possible (cash trop bas,\n"
-        "ou mode auto sans place libre) : pas\n"
-        "d'analyse IA payee pour rien. Un message\n"
-        "par jour explique pourquoi. /scan force\n"
-        "toujours une analyse complete.\n"
-        "\n"
-        "A LA DEMANDE\n"
-        "  /status   → portefeuille + P&L live\n"
-        "  /morning  → briefing maintenant\n"
-        "  /scan     → 3 opportunites avec ton cash\n"
-        "  /scan us  → valeurs US uniquement\n"
-        "  /research TICKER → analyse approfondie\n"
-        "\n"
-        "ORDRES (instructions a saisir sur BD)\n"
-        "  /buy TICKER QTE PRU\n"
-        "    → ordre Expert Take Profit complet\n"
-        "  /setup TICKER QTE PRU\n"
-        "    → SL + TP apres achat deja effectue",
-        cid,
-    )
-
-
-def _tuto_playwright(cid):
-    send(
-        "Mode Playwright — Installation\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Connexion directe a Bourse Direct.\n"
-        "Lit le portefeuille en temps reel et\n"
-        "passe des ordres depuis Telegram.\n"
-        "Les screenshots restent disponibles.\n"
-        "\n"
-        "INSTALLATION (une seule fois)\n"
-        "  venv/bin/pip install playwright\n"
-        "  venv/bin/playwright install chromium\n"
-        "\n"
-        "CONFIGURATION (.env)\n"
-        "  BD_LOGIN=ton_identifiant_bourse_direct\n"
-        "  BD_PASSWORD=ton_mot_de_passe\n"
-        "\n"
-        "Redemarrer le bot apres avoir edite .env.",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Mode Playwright — Connexion\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "/connect\n"
-        "  Lance la connexion a Bourse Direct\n"
-        "  2FA TOTP : le bot te demande le code\n"
-        "  → Ouvre ton app d'authentification\n"
-        "  → Envoie le code a 6 chiffres ici\n"
-        "  → Coche 'Oui' quand demande\n"
-        "\n"
-        "/mode        → etat de la connexion\n"
-        "/sync        → sync portefeuille depuis BD\n"
-        "/disconnect  → revenir en mode Classic\n"
-        "\n"
-        "Le bot demarre toujours en mode Classic.\n"
-        "/connect requis apres chaque redemarrage.",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Mode Playwright — Ordres\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "SYNTAXE (validite optionnelle en dernier)\n"
-        "  /ordre acheter TICKER QTE marche\n"
-        "  /ordre acheter TICKER QTE limite PRIX\n"
-        "  /ordre acheter TICKER QTE expert ENTREE SL TP\n"
-        "  /ordre vendre  TICKER QTE marche\n"
-        "  /ordre vendre  TICKER QTE limite PRIX\n"
-        "  /ordre vendre  TICKER QTE expert SL TP\n"
-        "\n"
-        "VALIDITE (defaut : max)\n"
-        "  seance         → expire fin de seance\n"
-        "  max            → jusqu'a fin d'annee\n"
-        "  JJ/MM/AAAA     → date precise\n"
-        "\n"
-        "EXEMPLES\n"
-        "  /ordre acheter TTE.PA 3 expert 54.2 49.0 61.0\n"
-        "  /ordre acheter MSFT 2 limite 420 seance\n"
-        "  /ordre vendre GNFT.PA 100 expert 7.66 9.80\n"
-        "  /ordre vendre EXENS.PA 17 marche\n"
-        "\n"
-        "CONFIRMATION\n"
-        "  Le bot affiche recap + montant previsionnel\n"
-        "  /oui → envoie au marche (irreversible)\n"
-        "  /non → annule (timeout 120s)\n"
-        "  /annuler_bd TICKER → annuler un ordre BD\n"
-        "\n"
-        "TICKERS : format Yahoo Finance\n"
-        "  Euronext : EXENS.PA  TTE.PA  ASML.AS\n"
-        "  NASDAQ/NYSE : AAPL  MSFT  NVDA\n"
-        "  LSE : BP.L  GSK.L  |  Xetra : SAP.DE",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Mode Playwright — Mode Autonome\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Le bot gere un budget isole en totale\n"
-        "autonomie : scan, entree, suivi, sortie.\n"
-        "\n"
-        "ACTIVER\n"
-        "  /auto on 500     → budget fixe 500€\n"
-        "  /auto on 20%     → 20% du cash dispo\n"
-        "\n"
-        "CE QUE LE BOT FAIT SEUL\n"
-        "  - Scan quant + validation IA a chaque check\n"
-        "  - Passe les ordres Expert (entree+SL+TP)\n"
-        "  - Releve le SL au PRU quand +3% (breakeven)\n"
-        "  - Detecte les sorties SL/TP et te notifie\n"
-        "\n"
-        "BALAYAGE DU RELIQUAT\n"
-        "Si le cash restant apres l'achat tombe\n"
-        "sous 500EUR, la position est AGRANDIE pour\n"
-        "l'absorber : ce fond ne pouvait financer\n"
-        "aucun autre trade.\n"
-        "  /!\\ la perte au SL grandit d'autant —\n"
-        "  elle est annoncee dans le message d'achat.\n"
-        "  CASH_SWEEP_MIN_LEFTOVER=0 pour desactiver.\n"
-        "\n"
-        "  Max 2 positions simultanees | SL/TP garanti\n"
-        "  Playwright doit etre connecte pour entrer\n"
-        "  Les sorties se gerent via Expert BD (auto)\n"
-        "\n"
-        "  /auto status    → etat + positions autonomes\n"
-        "  /auto off       → desactiver\n"
-        "  /auto pause     → suspendre les nouvelles entrees",
-        cid,
-    )
-
-
-def _tuto_avance(cid):
-    send(
-        "Fonctions avancees — Ordres en attente\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Pour placer un ordre limite sur BD et\n"
-        "laisser le bot surveiller son declenchement :\n"
-        "\n"
-        "  /attente NOM TICKER QTE PRIX [SL TP]\n"
-        "  Ex: /attente EXOSENS EXENS.PA 17 63\n"
-        "\n"
-        "→ Reserve le cash automatiquement\n"
-        "→ Alerte si le cours touche ton prix\n"
-        "→ Alerte si le cours s'eloigne trop (+15%)\n"
-        "→ /scan reevalue la viabilite a chaque analyse\n"
-        "\n"
-        "  /annuler NOM → annule et libere le cash",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Fonctions avancees — IA de secours\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Si ton IA principale tombe en panne\n"
-        "(credits epuises...), le bot peut basculer\n"
-        "automatiquement sur une IA de secours :\n"
-        "\n"
-        "  /fallback gemini TA_CLE_API\n"
-        "\n"
-        "→ La cle est testee avant activation\n"
-        "→ Ton message est supprime du chat\n"
-        "  (la cle ne reste pas dans l'historique)\n"
-        "→ Stockee uniquement dans .env local\n"
-        "→ /fallback = etat | /fallback off = stop\n"
-        "\n"
-        "Cle Gemini gratuite : aistudio.google.com",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Fonctions avancees — Trailing stop\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "DEUX PALIERS, le plus haut l'emporte :\n"
-        "\n"
-        "1. BREAKEVEN — a +" + f"{BREAKEVEN_THRESHOLD:.0f}" + "% (manuel) / +6%\n"
-        "   (autonome) : SL au PRU. Plus de perte\n"
-        "   possible sur la position.\n"
-        "\n"
-        "2. SECURISATION DU GAIN — des 60% du\n"
-        "   chemin parcouru du PRU vers le TP :\n"
-        "   SL AU-DESSUS du PRU, sur une part du\n"
-        "   gain deja acquis. Cette part grandit\n"
-        "   quand on approche du TP (50% -> 80%).\n"
-        "   Ex: PRU 100, TP 110, cours 108\n"
-        "       -> SL a 105.20 (+5.2% verrouilles)\n"
-        "   Le SL garde toujours 2% (ou 1xATR) de\n"
-        "   marge sous le cours : un stop colle au\n"
-        "   cours sort sur du bruit avant le TP.\n"
-        "\n"
-        "Dans les deux cas :\n"
-        "\n"
-        "→ Session BD connectee : l'ordre Expert\n"
-        "  est REMPLACE automatiquement sur BD\n"
-        "  (SL remonte au PRU, TP inchange).\n"
-        "  Tu n'as RIEN a faire.\n"
-        "→ Deconnecte : alerte avec la commande\n"
-        "  /ordre vendre prete a l'emploi.\n"
-        "\n"
-        "P&L garanti >= 0 des le palier 1, et\n"
-        "STRICTEMENT POSITIF des le palier 2.\n"
-        "Seules les positions protegees par un\n"
-        "Expert actif sont gerees (les positions\n"
-        "historiques sans ordre ne sont pas touchees).\n"
-        "\n"
-        "QUAND le bot verifie :\n"
-        "→ chaque heure a :35 (9h-22h, jours\n"
-        "  de marche, session BD connectee)\n"
-        "→ et des qu'une position franchit son\n"
-        "  seuil aux checks 9h/12h/15h/17h.\n"
-        "\n"
-        "/trailing → verification IMMEDIATE, avec\n"
-        "le detail de chaque position (le cycle\n"
-        "auto reste silencieux s'il n'a rien a\n"
-        "faire ; /trailing repond toujours).",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Fonctions avancees — HOLD long terme\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "/hold TICKER → sort une position du\n"
-        "perimetre de gestion du bot :\n"
-        "\n"
-        "→ plus d'alertes SL/TP ni trailing\n"
-        "→ exclue du P&L trading (/stats)\n"
-        "→ jamais proposee a la vente/swap par l'IA\n"
-        "→ le sync BD suit toujours qte/PRU\n"
-        "\n"
-        "Pour les lignes de fond de portefeuille\n"
-        "qu'on garde des annees, hors trading.\n"
-        "\n"
-        "  /hold          → liste les HOLD\n"
-        "  /hold TICKER off → remet en gestion",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Fonctions avancees — Dashboard\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "/dashboard → graphique P&L cumule +\n"
-        "resume (win rate, ROI, €/jour) en image.\n"
-        "\n"
-        "Version web complete (tableau filtrable,\n"
-        "positions live, cash engage par deal) :\n"
-        "  http://localhost:8642 sur la machine du bot\n"
-        "\n"
-        "Acces distant via Tailscale :\n"
-        "  tailscale serve --bg 8642\n"
-        "  (ou DASHBOARD_BIND=0.0.0.0 dans .env)",
-        cid,
-    )
-    time.sleep(0.4)
-    send(
-        "Fonctions avancees — Cloture & Gmail\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "CLOTURE DE POSITIONS\n"
-        "  /vendu NOM       → prix TP automatique\n"
-        "  /vendu NOM PRIX  → prix manuel\n"
-        "  /close TICKER QTE PRIX FRAIS → avec frais\n"
-        "\n"
-        "SYNC GMAIL BOURSE DIRECT\n"
-        "Detecte les emails 'Finalisation strategie'\n"
-        "et cloture auto les positions concernees.\n"
-        "\n"
-        "  .env :\n"
-        "    GMAIL_USER=ton@gmail.com\n"
-        "    GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx\n"
-        "  Mot de passe app :\n"
-        "    myaccount.google.com/apppasswords\n"
-        "\n"
-        "  /syncmail → verifie maintenant\n"
-        "  Auto : check aux horaires (9/12/15/17h)\n"
-        "\n"
-        "STATS\n"
-        "  /stats → win rate, P&L, profit factor",
-        cid,
-    )
-
-
-def _tuto_update(cid):
-    send(
-        "Mettre a jour le bot\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "Une seule commande dans le terminal :\n"
-        "   ./bot.sh update\n"
-        "(git pull + dependances + redemarrage)\n"
-        "\n"
-        "Gestion du bot au quotidien :\n"
-        "   ./bot.sh start|stop|restart|status|logs\n"
-        "\n"
-        "Demarrage auto au boot + relance apres crash :\n"
-        "   ./bot.sh autostart\n"
-        "\n"
-        "⚠️ Avec autostart actif, ne JAMAIS utiliser\n"
-        "pkill — toujours ./bot.sh stop ou restart\n"
-        "(sinon double instance du bot).\n"
-        "\n"
-        "Voir ce qui a change :\n"
-        "   git log --oneline -10\n"
-        "\n"
-        "Verifier la version actuelle :\n"
-        "   /update\n"
-        "\n"
-        "Code source :\n"
-        "github.com/myopencomm/Tradingbot",
-        cid,
-    )
-
-
-# ─── Mode Playwright ────────────────────────────────────────────────────────
 
 def cmd_mode(args, cid):
     mode = bot_mode.get_mode()
@@ -2577,51 +2062,24 @@ def cmd_auto(args, cid):
 
 # ─── Routeur ────────────────────────────────────────────────────────────────
 
-COMMANDS = {
-    "/help": cmd_help,
-    "/start": cmd_start,
-    "/status": cmd_status,
-    "/mode": cmd_mode,
-    "/connect": cmd_connect,
-    "/disconnect": cmd_disconnect,
-    "/sync": cmd_sync,
-    "/trailing": cmd_trailing,
-    "/testordre": cmd_testordre,
-    "/capture": cmd_capture,
-    "/dashboard": cmd_dashboard,
-    "/lessons": cmd_lessons,
-    "/ordre": cmd_ordre,
-    "/oui": cmd_oui,
-    "/non": cmd_non,
-    "/annuler_bd": cmd_annuler_bd,
-    "/cash": cmd_cash,
-    "/add": cmd_add,
-    "/remove": cmd_remove,
-    "/reticker": cmd_reticker,
-    "/hold": cmd_hold,
-    "/sl": cmd_sl,
-    "/tp": cmd_tp,
-    "/buy": cmd_buy,
-    "/order": cmd_order,
-    "/setup": cmd_setup,
-    "/stats": cmd_stats,
-    "/fallback": cmd_fallback,
-    "/close": cmd_close,
-    "/attente": cmd_attente,
-    "/annuler": cmd_annuler,
-    "/vendu": cmd_vendu,
-    "/syncmail": cmd_syncmail,
-    "/update": cmd_update,
-    "/morning": cmd_morning,
-    "/scan": cmd_scan,
-    # Alias : le menu Telegram n'accepte pas d'argument, /scan_us y donne
-    # accès au scan US en un tap (équivaut à « /scan us »).
-    "/scan_us": lambda args, cid: cmd_scan(["us"], cid),
-    "/research": cmd_research,
-    "/import": cmd_import,
-    "/tuto": cmd_tuto,
-    "/auto": cmd_auto,
-}
+# ─── Dispatch, DÉRIVÉ de la table unique ────────────────────────────────────
+# Une commande déclarée dans commands.py est routée, listée au menu Telegram et
+# documentée dans /help sans autre geste. Un handler manquant fait échouer
+# l'import — donc au démarrage, pas au premier appel de la commande.
+def _resoudre(cmd):
+    fn = globals().get(cmd.handler)
+    if fn is None:
+        raise RuntimeError(
+            f"commands.py declare /{cmd.name} sur le handler « {cmd.handler} », "
+            f"introuvable dans telegram_bot.")
+    if cmd.args:
+        # Alias à arguments figés (le menu Telegram n'en accepte pas) :
+        # /scan_us donne accès au scan US en un tap, équivaut à « /scan us ».
+        return lambda args, cid, _f=fn, _a=list(cmd.args): _f(_a + list(args), cid)
+    return fn
+
+
+COMMANDS = {c.slash: _resoudre(c) for c in commands.ALL}
 
 
 def _handle_message(message: dict):

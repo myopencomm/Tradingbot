@@ -1,0 +1,96 @@
+Mode Playwright — Installation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Connexion directe a Bourse Direct.
+Lit le portefeuille en temps reel et
+passe des ordres depuis Telegram.
+Les screenshots restent disponibles.
+
+INSTALLATION (une seule fois)
+  venv/bin/pip install playwright
+  venv/bin/playwright install chromium
+
+CONFIGURATION (.env)
+  BD_LOGIN=ton_identifiant_bourse_direct
+  BD_PASSWORD=ton_mot_de_passe
+
+Redemarrer le bot apres avoir edite .env.
+===== PAGE =====
+Mode Playwright — Connexion
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/connect
+  Lance la connexion a Bourse Direct
+  2FA TOTP : le bot te demande le code
+  → Ouvre ton app d'authentification
+  → Envoie le code a 6 chiffres ici
+  → Coche 'Oui' quand demande
+
+/mode        → etat de la connexion
+/sync        → sync portefeuille depuis BD
+/disconnect  → revenir en mode Classic
+
+Le bot demarre toujours en mode Classic.
+/connect requis apres chaque redemarrage.
+===== PAGE =====
+Mode Playwright — Ordres
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SYNTAXE (validite optionnelle en dernier)
+  /ordre acheter TICKER QTE marche
+  /ordre acheter TICKER QTE limite PRIX
+  /ordre acheter TICKER QTE expert ENTREE SL TP
+  /ordre vendre  TICKER QTE marche
+  /ordre vendre  TICKER QTE limite PRIX
+  /ordre vendre  TICKER QTE expert SL TP
+
+VALIDITE (defaut : max)
+  seance         → expire fin de seance
+  max            → jusqu'a fin d'annee
+  JJ/MM/AAAA     → date precise
+
+EXEMPLES
+  /ordre acheter TTE.PA 3 expert 54.2 49.0 61.0
+  /ordre acheter MSFT 2 limite 420 seance
+  /ordre vendre GNFT.PA 100 expert 7.66 9.80
+  /ordre vendre EXENS.PA 17 marche
+
+CONFIRMATION
+  Le bot affiche recap + montant previsionnel
+  /oui → envoie au marche (irreversible)
+  /non → annule (timeout 120s)
+  /annuler_bd TICKER → annuler un ordre BD
+
+TICKERS : format Yahoo Finance
+  Euronext : EXENS.PA  TTE.PA  ASML.AS
+  NASDAQ/NYSE : AAPL  MSFT  NVDA
+  LSE : BP.L  GSK.L  |  Xetra : SAP.DE
+===== PAGE =====
+Mode Playwright — Mode Autonome
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Le bot gere un budget isole en totale
+autonomie : scan, entree, suivi, sortie.
+
+ACTIVER
+  /auto on 500     → budget fixe 500€
+  /auto on 20%     → 20% du cash dispo
+
+CE QUE LE BOT FAIT SEUL
+  - Scan quant + validation IA a chaque check
+  - Passe les ordres Expert (entree+SL+TP)
+  - Releve le SL au PRU quand +3% (breakeven)
+  - Detecte les sorties SL/TP et te notifie
+
+BALAYAGE DU RELIQUAT
+Si le cash restant apres l'achat tombe
+sous 500EUR, la position est AGRANDIE pour
+l'absorber : ce fond ne pouvait financer
+aucun autre trade.
+  /!\ la perte au SL grandit d'autant —
+  elle est annoncee dans le message d'achat.
+  CASH_SWEEP_MIN_LEFTOVER=0 pour desactiver.
+
+  Max 2 positions simultanees | SL/TP garanti
+  Playwright doit etre connecte pour entrer
+  Les sorties se gerent via Expert BD (auto)
+
+  /auto status    → etat + positions autonomes
+  /auto off       → desactiver
+  /auto pause     → suspendre les nouvelles entrees

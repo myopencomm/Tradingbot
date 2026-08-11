@@ -1,0 +1,127 @@
+Fonctions avancees — Ordres en attente
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Pour placer un ordre limite sur BD et
+laisser le bot surveiller son declenchement :
+
+  /attente NOM TICKER QTE PRIX [SL TP]
+  Ex: /attente EXOSENS EXENS.PA 17 63
+
+→ Reserve le cash automatiquement
+→ Alerte si le cours touche ton prix
+→ Alerte si le cours s'eloigne trop (+15%)
+→ /scan reevalue la viabilite a chaque analyse
+
+  /annuler NOM → annule et libere le cash
+===== PAGE =====
+Fonctions avancees — IA de secours
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Si ton IA principale tombe en panne
+(credits epuises...), le bot peut basculer
+automatiquement sur une IA de secours :
+
+  /fallback gemini TA_CLE_API
+
+→ La cle est testee avant activation
+→ Ton message est supprime du chat
+  (la cle ne reste pas dans l'historique)
+→ Stockee uniquement dans .env local
+→ /fallback = etat | /fallback off = stop
+
+Cle Gemini gratuite : aistudio.google.com
+===== PAGE =====
+Fonctions avancees — Trailing stop
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DEUX PALIERS, le plus haut l'emporte :
+
+1. BREAKEVEN — a +4% (manuel) / +6%
+   (autonome) : SL au PRU. Plus de perte
+   possible sur la position.
+
+2. SECURISATION DU GAIN — des 60% du
+   chemin parcouru du PRU vers le TP :
+   SL AU-DESSUS du PRU, sur une part du
+   gain deja acquis. Cette part grandit
+   quand on approche du TP (50% -> 80%).
+   Ex: PRU 100, TP 110, cours 108
+       -> SL a 105.20 (+5.2% verrouilles)
+   Le SL garde toujours 2% (ou 1xATR) de
+   marge sous le cours : un stop colle au
+   cours sort sur du bruit avant le TP.
+
+Dans les deux cas :
+
+→ Session BD connectee : l'ordre Expert
+  est REMPLACE automatiquement sur BD
+  (SL remonte au PRU, TP inchange).
+  Tu n'as RIEN a faire.
+→ Deconnecte : alerte avec la commande
+  /ordre vendre prete a l'emploi.
+
+P&L garanti >= 0 des le palier 1, et
+STRICTEMENT POSITIF des le palier 2.
+Seules les positions protegees par un
+Expert actif sont gerees (les positions
+historiques sans ordre ne sont pas touchees).
+
+QUAND le bot verifie :
+→ chaque heure a :35 (9h-22h, jours
+  de marche, session BD connectee)
+→ et des qu'une position franchit son
+  seuil aux checks 9h/12h/15h/17h.
+
+/trailing → verification IMMEDIATE, avec
+le detail de chaque position (le cycle
+auto reste silencieux s'il n'a rien a
+faire ; /trailing repond toujours).
+===== PAGE =====
+Fonctions avancees — HOLD long terme
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/hold TICKER → sort une position du
+perimetre de gestion du bot :
+
+→ plus d'alertes SL/TP ni trailing
+→ exclue du P&L trading (/stats)
+→ jamais proposee a la vente/swap par l'IA
+→ le sync BD suit toujours qte/PRU
+
+Pour les lignes de fond de portefeuille
+qu'on garde des annees, hors trading.
+
+  /hold          → liste les HOLD
+  /hold TICKER off → remet en gestion
+===== PAGE =====
+Fonctions avancees — Dashboard
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+/dashboard → graphique P&L cumule +
+resume (win rate, ROI, €/jour) en image.
+
+Version web complete (tableau filtrable,
+positions live, cash engage par deal) :
+  http://localhost:8642 sur la machine du bot
+
+Acces distant via Tailscale :
+  tailscale serve --bg 8642
+  (ou DASHBOARD_BIND=0.0.0.0 dans .env)
+===== PAGE =====
+Fonctions avancees — Cloture & Gmail
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CLOTURE DE POSITIONS
+  /vendu NOM       → prix TP automatique
+  /vendu NOM PRIX  → prix manuel
+  /close TICKER QTE PRIX FRAIS → avec frais
+
+SYNC GMAIL BOURSE DIRECT
+Detecte les emails 'Finalisation strategie'
+et cloture auto les positions concernees.
+
+  .env :
+    GMAIL_USER=ton@gmail.com
+    GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+  Mot de passe app :
+    myaccount.google.com/apppasswords
+
+  /syncmail → verifie maintenant
+  Auto : check aux horaires (9/12/15/17h)
+
+STATS
+  /stats → win rate, P&L, profit factor

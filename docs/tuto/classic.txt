@@ -1,0 +1,48 @@
+Mode Classic — Importer ton portefeuille
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3 facons d'entrer tes positions :
+
+1. SCREENSHOT (le plus simple)
+   Envoie une ou plusieurs photos de l'app
+   Bourse Direct → le bot lit tout auto
+   Tu peux envoyer plusieurs captures a la
+   suite, il les fusionne (attends 12s)
+
+2. MANUEL
+   /add TICKER QTE PRU SL TP
+   Ex: /add GNFT.PA 100 8.51 7.66 9.79
+
+3. CSV
+   Exporte depuis BD → envoie le fichier .csv
+   /import pour le guide
+
+Cash disponible : /cash 1500
+===== PAGE =====
+Mode Classic — Workflow quotidien
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+AUTOMATIQUE
+  9h05  → briefing IA (macro + positions)
+  9/12/15/17h → check SL/TP, alertes
+  16h → scan US · 18/20/21h40 → check positions US
+  Lundi 9h10 → analyse de rotation
+
+Le scan US de 16h et la recherche de
+candidats du briefing sont SAUTES quand
+aucun achat n'est possible (cash trop bas,
+ou mode auto sans place libre) : pas
+d'analyse IA payee pour rien. Un message
+par jour explique pourquoi. /scan force
+toujours une analyse complete.
+
+A LA DEMANDE
+  /status   → portefeuille + P&L live
+  /morning  → briefing maintenant
+  /scan     → 3 opportunites avec ton cash
+  /scan us  → valeurs US uniquement
+  /research TICKER → analyse approfondie
+
+ORDRES (instructions a saisir sur BD)
+  /buy TICKER QTE PRU
+    → ordre Expert Take Profit complet
+  /setup TICKER QTE PRU
+    → SL + TP apres achat deja effectue

@@ -1,0 +1,24 @@
+Mettre a jour le bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Une seule commande dans le terminal :
+   ./bot.sh update
+(git pull + dependances + redemarrage)
+
+Gestion du bot au quotidien :
+   ./bot.sh start|stop|restart|status|logs
+
+Demarrage auto au boot + relance apres crash :
+   ./bot.sh autostart
+
+⚠️ Avec autostart actif, ne JAMAIS utiliser
+pkill — toujours ./bot.sh stop ou restart
+(sinon double instance du bot).
+
+Voir ce qui a change :
+   git log --oneline -10
+
+Verifier la version actuelle :
+   /update
+
+Code source :
+github.com/myopencomm/Tradingbot
