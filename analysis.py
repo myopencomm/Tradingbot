@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import pytz
 import portfolio
+import position_view
 import prices
 import research
 from ai_provider import get_provider, VISION_PROMPT
@@ -396,35 +397,42 @@ def _portfolio_snapshot() -> str:
     # interdiction explicite pour l'IA de proposer vente, swap ou protection.
     holds = {k: v for k, v in positions.items() if v.get("hold")}
     positions = {k: v for k, v in positions.items() if not v.get("hold")}
-    for name, cfg in positions.items():
-        quote = prices.get_quote(cfg["ticker"])
-        # Cours retenu : yfinance s'il est frais, sinon le relevé Bourse Direct.
-        # Un briefing bâti sur des cours périmés raisonne juste sur des chiffres
-        # faux — et rien dans le prompt ne permet à l'IA de s'en apercevoir.
-        best  = portfolio.best_price(cfg, quote)
-        price = best["price"]
-        if price and not math.isnan(price):
-            chg  = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
-            pnl  = (price - cfg["entry_price"]) * cfg["qty"]
-            sym  = prices.currency_symbol(best["currency"])
+    # Cours retenu, P&L, provenance : calculés par position_view — comme
+    # /status, le STATUS planifié, le dashboard et /stats. Un briefing bâti sur
+    # des cours périmés raisonne juste sur des chiffres faux, et rien dans le
+    # prompt ne permet à l'IA de s'en apercevoir.
+    for v in position_view.views(positions):
+        if v["price"] and not math.isnan(v["price"]):
+            sym = v["sym"]
             cur_tag = (" | ⚠️ perf aberrante, PRU probablement dans la mauvaise devise — ignorer ce P&L"
-                       if best["currency"] != "EUR" and abs(chg) > 80 else "")
-            if best["source"] != "yf":
-                cur_tag += f" | ⚠️ {best['note']}"
+                       if v["aberrant"] else "")
+            if v["source"] != "yf":
+                cur_tag += f" | ⚠️ {v['note']}"
+            # ── Ce que l'IA ne voyait PAS avant (11/08/2026) ────────────────
+            # Le snapshot annoncé comme « SOURCE DE VÉRITÉ » présentait les
+            # SL/TP comme des faits, sans jamais dire qu'aucun ordre ne les
+            # portait sur BD. Du 31/07 au 05/08, l'IA a raisonné chaque matin
+            # comme si BAC était protégé alors qu'il était à nu.
+            if v["protected"] is False:
+                cur_tag += (" | 🚨 SL/TP NON PROTECTEURS : aucun ordre actif sur "
+                            "BD ne les porte — la position n'a AUCUN stop réel")
+            if v["pending_sl"]:
+                cur_tag += (f" | ⏳ SL {v['pending_sl']} calculé mais PAS posé "
+                            f"sur BD, le stop actif reste {v['sl']}")
             lines.append(
-                f"  {name} ({cfg['ticker']}): {sym}{price} ({chg:+.2f}%) | "
-                f"PRU {sym}{cfg['entry_price']} | {cfg['qty']}t | P&L {sym}{pnl:+.0f} | "
-                f"SL {sym}{cfg['target_low']} | TP {sym}{cfg['target_high']}{cur_tag}"
+                f"  {v['name']} ({v['ticker']}): {sym}{v['price']} ({v['chg_pct']:+.2f}%) | "
+                f"PRU {sym}{v['entry']} | {v['qty']}t | P&L {sym}{v['pnl']:+.0f} | "
+                f"SL {sym}{v['sl']} | TP {sym}{v['tp']}{cur_tag}"
             )
         else:
             # Le relevé BD tranche : si le courtier valorise le titre, il n'est
             # pas suspendu — c'est le ticker stocké qui est faux.
-            code, msg = portfolio.quote_problem(cfg, quote)
+            code, msg = v["problem"]
             icon = {"ticker": "🚨", "suspended": "⛔"}.get(code, "⚠️")
             suffix = " (liquidation judiciaire ?)" if code == "suspended" else ""
             lines.append(
-                f"  {name} ({cfg['ticker']}): {icon} {msg}{suffix} | "
-                f"PRU {cfg['entry_price']} | {cfg['qty']}t"
+                f"  {v['name']} ({v['ticker']}): {icon} {msg}{suffix} | "
+                f"PRU {v['entry']} | {v['qty']}t"
             )
 
     if holds:

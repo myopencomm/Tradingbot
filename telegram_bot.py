@@ -9,6 +9,7 @@ from config import (TELEGRAM_TOKEN, CHAT_ID, AUTHORIZED_CHAT_IDS,
                     GMAIL_USER, GMAIL_APP_PASSWORD,
                     DEFAULT_SL_PCT, DEFAULT_TP_PCT, BREAKEVEN_THRESHOLD)
 import portfolio
+import position_view
 import prices
 import analysis
 import orders
@@ -322,73 +323,61 @@ def cmd_status(args, cid):
     lines = ["PORTEFEUILLE", f"Cash: {cash}€", ""]
     total_pnl = 0
 
-    for name, cfg in positions.items():
+    # Cours retenu, P&L, drapeaux : position_view (source unique, partagée avec
+    # le STATUS planifié, le snapshot IA, le dashboard et /stats).
+    for v in position_view.views(positions):
+        name, sym, price = v["name"], v["sym"], v["price"]
+
         # HOLD long terme : affichage informatif, hors P&L trading, pas d'alerte
-        if cfg.get("hold"):
-            q = prices.get_quote(cfg["ticker"])
-            best = portfolio.best_price(cfg, q)
-            price = best["price"]
-            sym = prices.currency_symbol(best["currency"])
+        if v["hold"]:
             px = f"{sym}{price}" if price else "cours indispo"
-            if price and best["source"] != "yf":
+            if price and v["source"] != "yf":
                 px += " ᴮᴰ"
             lines.append(
-                f"🔒 {name} ({cfg['ticker']}) — HOLD long terme, hors gestion bot\n"
-                f"  {cfg['qty']} titres | PRU {sym}{cfg['entry_price']} | {px}"
+                f"🔒 {name} ({v['ticker']}) — HOLD long terme, hors gestion bot\n"
+                f"  {v['qty']} titres | PRU {sym}{v['entry']} | {px}"
             )
             continue
 
-        q = prices.get_quote(cfg["ticker"])
-        # Cours retenu : yfinance s'il est frais, sinon le relevé BD.
-        best = portfolio.best_price(cfg, q)
-        price = best["price"]
         if price:
-            chg = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
-            pnl = (price - cfg["entry_price"]) * cfg["qty"]
+            chg, pnl = v["chg_pct"], v["pnl"]
             total_pnl += pnl
             arrow  = "+" if chg >= 0 else ""
-            sl_tag = " ⚠️ SL DÉPASSÉ" if price < cfg["target_low"] else ""
-            tp_tag = " ⚠️ TP DÉPASSÉ" if price > cfg["entry_price"] * 1.25 else ""
-            sym    = prices.currency_symbol(best["currency"])
+            sl_tag = " ⚠️ SL DÉPASSÉ" if price < v["sl"] else ""
+            tp_tag = " ⚠️ TP DÉPASSÉ" if price > v["entry"] * 1.25 else ""
             cur_tag = ""
-            if best["source"] != "yf":
-                cur_tag = f"\n  ⚠️ {best['note']}"
-            if best["currency"] != "EUR" and abs(chg) > 80:
+            if v["source"] != "yf":
+                cur_tag = f"\n  ⚠️ {v['note']}"
+            if v["aberrant"]:
                 cur_tag = (f"\n  ❗ Perf aberrante — PRU dans la mauvaise devise ?"
-                           f"\n  (/remove {name} puis /add avec PRU/SL/TP en {q['currency']})")
-            pend = cfg.get("pending_sl")
-            pend_tag = ("" if not pend or pend <= (cfg.get("target_low") or 0) else
-                        f"\n  ⏳ SL {pend} calculé mais PAS posé sur BD — "
-                        f"le stop actif reste {cfg.get('target_low')}")
-            prot = ("" if cfg.get("protected") is not False else
-                    "\n  🚨 AUCUN ordre SL/TP actif sur BD — seuils non protecteurs\n"
-                    f"  → /ordre vendre {cfg['ticker']} {cfg['qty']} expert "
-                    f"{cfg.get('target_low')} {cfg.get('target_high')}")
+                           f"\n  (/remove {name} puis /add avec PRU/SL/TP en {v['currency']})")
+            pend_tag = position_view.alerte_stop_en_attente(v)
+            prot     = position_view.alerte_protection(v)
             lines.append(
-                f"{name} ({cfg['ticker']})\n"
+                f"{name} ({v['ticker']})\n"
                 f"  Prix: {sym}{price} ({arrow}{chg:.2f}%) | P&L: {sym}{pnl:+.0f}{sl_tag}{tp_tag}\n"
-                f"  PRU: {sym}{cfg['entry_price']} | {cfg['qty']} titres\n"
-                f"  SL: {sym}{cfg['target_low']}  TP: {sym}{cfg['target_high']}{pend_tag}{prot}{cur_tag}"
+                f"  PRU: {sym}{v['entry']} | {v['qty']} titres\n"
+                f"  SL: {sym}{v['sl']}  TP: {sym}{v['tp']}{pend_tag}{prot}{cur_tag}"
             )
         else:
             # Le relevé BD tranche : un titre que le courtier valorise n'est pas
             # suspendu, c'est le ticker stocké qui est faux (cas NVDA.PA).
-            code, msg = portfolio.quote_problem(cfg, q)
+            code, msg = v["problem"]
             if code == "ticker":
                 lines.append(
-                    f"{name} ({cfg['ticker']})\n"
+                    f"{name} ({v['ticker']})\n"
                     f"  🚨 {msg}\n"
                     f"  Corriger : /reticker {name} <TICKER_YAHOO>\n"
-                    f"  PRU: {cfg['entry_price']} | {cfg['qty']} titres"
+                    f"  PRU: {v['entry']} | {v['qty']} titres"
                 )
             elif code == "suspended":
                 lines.append(
-                    f"{name} ({cfg['ticker']})\n"
+                    f"{name} ({v['ticker']})\n"
                     f"  ⛔ {msg} (liquidation judiciaire ?)\n"
-                    f"  PRU: {cfg['entry_price']}€ | {cfg['qty']} titres"
+                    f"  PRU: {v['entry']}€ | {v['qty']} titres"
                 )
             else:
-                lines.append(f"{name}: {msg} | PRU {cfg['entry_price']}€")
+                lines.append(f"{name}: {msg} | PRU {v['entry']}€")
 
     lines.append(f"\nP&L total positions gérées (hors HOLD): {total_pnl:+.0f}€")
 

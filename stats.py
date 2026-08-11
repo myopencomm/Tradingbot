@@ -106,16 +106,14 @@ def get_stats() -> dict:
     unrealized_pnl = 0.0
     unpriced: list[str] = []
     positions = portfolio.get_managed_positions()
-    for name, cfg in positions.items():
-        # Cours retenu : yfinance frais, sinon relevé BD — un cours périmé
-        # fausse le P&L latent aussi sûrement qu'un cours manquant.
-        best  = portfolio.best_price(cfg)
-        price = best["price"]
-        if not price:
-            unpriced.append(name)
+    # Cours retenu et conversion en euros : position_view (source unique). Un
+    # cours périmé fausse le P&L latent aussi sûrement qu'un cours manquant.
+    import position_view
+    for v in position_view.views(positions):
+        if v["pnl_eur"] is None:
+            unpriced.append(v["name"])
             continue
-        gain = (price - cfg["entry_price"]) * cfg["qty"]
-        unrealized_pnl += gain * prices.fx_to_eur(best["currency"] or "EUR")
+        unrealized_pnl += v["pnl_eur"]
 
     # Coûts API IA — 2e charge réelle après les frais de courtage (déjà déduits
     # par trade). Sans eux, le bilan surestime l'efficacité du bot.

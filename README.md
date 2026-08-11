@@ -256,6 +256,7 @@ TradingBot/
 ├── main.py                  Point d'entrée : lance le scheduler + le polling Telegram
 ├── config.py                Variables d'env centralisées (lues depuis .env)
 ├── market.py                Places de marché : suffixe, devise, horaires, MIC BD → ticker Yahoo
+├── position_view.py         Valorisation d'une position : UN calcul, lu par les 5 rendus
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome
@@ -720,6 +721,36 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-11 (5) — Phase 3 : `position_view.py`, et l'IA cesse d'être mal informée
+« Combien vaut cette position » était recalculé dans **cinq** endroits :
+`/status`, le STATUS planifié, le snapshot envoyé à l'IA, le dashboard et
+`/stats`. Ils avaient déjà divergé — et pas seulement sur la forme.
+
+**Le trou** : `grep -n protected analysis.py` → aucune occurrence. Le bloc
+annoncé à l'IA comme « SOURCE DE VÉRITÉ » présentait les SL/TP comme des faits,
+**sans jamais dire qu'aucun ordre ne les portait sur BD**. Du 31/07 au 05/08,
+pendant que BAC était réellement à nu, le briefing matinal a raisonné chaque
+jour comme s'il était protégé. Le drapeau existait ; il n'était pas dans ce
+rendu-là.
+
+- **`position_view.view()`** calcule tout une fois : cours retenu et sa
+  provenance, variation, P&L en devise **et** en euros, PRU brut BD, perf
+  aberrante, diagnostic d'absence de cours, et les drapeaux `protected`,
+  `trailable`, `pending_sl`, `hold`, `autonomous`.
+- **Les cinq vues ne font plus que mettre en forme.** Chacune garde son style
+  (Telegram, prompt, web, texte) ; aucune ne peut plus afficher un chiffre
+  différent d'une autre pour la même position.
+- **Le snapshot IA hérite des drapeaux manquants** : un seuil non protecteur y
+  est désormais annoncé `🚨 SL/TP NON PROTECTEURS`, un stop calculé mais non
+  posé `⏳ … PAS posé sur BD`.
+- **Défaut trouvé au passage** : `prices.currency_symbol` renvoyait « € » pour
+  le franc suisse. Aucune position SIX détenue, donc jamais vu — corrigé par la
+  délégation à `market.symbol`.
+
+Équivalence vérifiée **sur les six positions réelles**, cours figés pour que la
+comparaison soit déterministe : ancien et nouveau calcul donnent exactement les
+mêmes chiffres. 14 tests ajoutés (107 au total).
 
 ### 2026-08-11 (4) — Phase 2 : `market.py`, une seule vérité sur un ticker
 « Où se traite ce ticker » avait **cinq réponses indépendantes** :

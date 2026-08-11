@@ -1,14 +1,13 @@
 from datetime import datetime
 import pytz
+import market
 import portfolio
+import position_view
 import prices
 import orders
 from config import TP_ALERTS, BREAKEVEN_THRESHOLD
 
 PARIS = pytz.timezone("Europe/Paris")
-
-
-import market
 
 _is_us = market.is_us      # source unique : market.py
 
@@ -106,36 +105,32 @@ def check_positions(send_fn, us_only: bool = False) -> None:
             status_lines.append(f"  🔒 {name}: HOLD long terme — hors gestion bot")
             continue
 
+        # Cours retenu, P&L, drapeaux : position_view (source unique). yfinance
+        # saute des séances entières sans le dire (04/08/2026) — s'en remettre à
+        # lui aveuglément fait afficher un P&L faux ET raisonner les alertes
+        # SL/TP sur un cours mort.
         quote = prices.get_quote(cfg["ticker"])
-        # Cours retenu : yfinance s'il est frais, sinon le relevé Bourse Direct.
-        # yfinance saute des séances entières sans le dire (04/08/2026) — s'en
-        # remettre à lui aveuglément fait afficher un P&L faux ET raisonner les
-        # alertes SL/TP sur un cours mort.
-        best  = portfolio.best_price(cfg, quote)
-        price = best["price"]
-        sym   = prices.currency_symbol(best["currency"])
+        v     = position_view.view(name, cfg, quote)
+        price = v["price"]
+        sym   = v["sym"]
 
         if price is None:
-            code, msg = portfolio.quote_problem(cfg, quote)
+            code, msg = v["problem"]
             icon = {"ticker": "🚨", "suspended": "⛔"}.get(code, "⚠️")
             status_lines.append(f"  {icon} {name}: {msg}")
             continue
 
-        change_pct = ((price - cfg["entry_price"]) / cfg["entry_price"]) * 100
-        pnl        = (price - cfg["entry_price"]) * cfg["qty"]
+        change_pct = v["chg_pct"]
+        pnl        = v["pnl"]
         icon       = "📈" if change_pct >= 0 else "📉"
-        src_tag    = "" if best["source"] == "yf" else f"\n     ⚠️ {best['note']}"
-        # Un SL/TP mémorisé n'est pas un SL/TP actif. Le dernier sync dit si un
-        # ordre les porte réellement sur BD ; sans ça on affiche des seuils qui
-        # ne protègent rien (cas BAC, 05/08/2026).
-        _pend = cfg.get("pending_sl")
-        pend_tag = ("" if not _pend or _pend <= (cfg.get("target_low") or 0) else
-                    f"\n     ⏳ SL {_pend} calculé mais PAS posé sur BD")
-        prot_tag = ("" if cfg.get("protected") is not False else
-                    "\n     🚨 AUCUN ordre SL/TP actif sur BD — ces seuils ne protègent RIEN")
+        src_tag    = "" if v["source"] == "yf" else f"\n     ⚠️ {v['note']}"
+        # Un SL/TP mémorisé n'est pas un SL/TP actif : le dernier sync dit si un
+        # ordre les porte réellement sur BD (cas BAC, 05/08/2026).
+        pend_tag = position_view.alerte_stop_en_attente(v, indent="     ")
+        prot_tag = position_view.alerte_protection(v, indent="     ")
         status_lines.append(
             f"  {icon} {name}: {sym}{price} ({change_pct:+.2f}%) | P&L: {sym}{pnl:+.0f}"
-            f"\n     SL {sym}{cfg['target_low']} — TP {sym}{cfg['target_high']}{pend_tag}{prot_tag}{src_tag}"
+            f"\n     SL {sym}{v['sl']} — TP {sym}{v['tp']}{pend_tag}{prot_tag}{src_tag}"
         )
 
         # Range intraday des 4 dernières heures pour détecter les franchissements

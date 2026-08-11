@@ -19,6 +19,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import portfolio
+import position_view
 import prices
 import stats
 
@@ -83,70 +84,32 @@ def build_data() -> dict:
 
     open_pos = []
     data = portfolio.load()
-    for name, cfg in data.get("positions", {}).items():
-        q     = prices.get_quote(cfg["ticker"])
-        price = q.get("price")
-        # Un cours PÉRIMÉ vaut un cours absent : la cascade BD ci-dessous est
-        # alors la bonne source (yfinance saute des séances entières sans le
-        # signaler — 04/08/2026).
-        if q.get("stale"):
-            price = None
-        # Titre suspendu / cours indisponible : yfinance ne renvoie pas de
-        # devise. Le suffixe de place tranche (pas de suffixe = valeur US).
-        cur   = q.get("currency") or ("EUR" if "." in cfg["ticker"] else "USD")
-        fx    = prices.fx_to_eur(cur)
-        # PRU en euros : valeur BRUTE de Bourse Direct quand on l'a (c'est SA
-        # référence, frais inclus, sans erreur de conversion) ; sinon le PRU en
-        # devise de cotation ramené en euros au taux du jour.
-        _eur = cfg["entry_price"] * fx
-        entry_eur = cfg.get("bd_pru_raw") or round(_eur, 2 if _eur >= 1 else 4)
-        from_bd = False
-        if price:
-            pnl_eur = round((price - cfg["entry_price"]) * cfg["qty"] * fx, 2)
-            chg     = round((price / cfg["entry_price"] - 1) * 100, 2)
-        else:
-            # Cours introuvable chez yfinance (faillite, cotation suspendue :
-            # GVN, MCPHY) → on prend le dernier relevé de Bourse Direct, qui
-            # continue de valoriser la ligne. Mieux vaut le chiffre du courtier
-            # qu'un trou dans le tableau.
-            price   = cfg.get("bd_price")
-            pnl_eur = cfg.get("bd_pnl_eur")
-            cur     = cfg.get("bd_price_currency") or cur
-            from_bd = price is not None or pnl_eur is not None
-            chg = (round((pnl_eur / (entry_eur * cfg["qty"])) * 100, 2)
-                   if pnl_eur is not None and entry_eur else None)
-        if pnl_eur is None and cfg.get("worthless"):
-            # Titre acté sans valeur (faillite, cotation suspendue définitive) :
-            # le PRU suffit à chiffrer la perte, aucun cours n'est nécessaire.
-            # Perte = tout le capital engagé. Marqué ≈ : c'est un calcul, pas
-            # un relevé (il ignore un éventuel résidu, 0.26 € sur GVN).
-            pnl_eur   = -round(entry_eur * cfg["qty"], 2)
-            chg       = -100.0
-            estimated = True
-        else:
-            estimated = False
+    # Cours, provenance, P&L en euros : calculés par position_view, comme
+    # /status, le STATUS planifié, le snapshot IA et /stats. Le dashboard ne
+    # fait plus que MISE EN FORME.
+    for v in position_view.views(data.get("positions", {})):
         open_pos.append({
-            "name":   name,
-            "ticker": cfg["ticker"],
-            "qty":    cfg["qty"],
-            "entry":     cfg["entry_price"],
-            "entry_eur": entry_eur,
-            "pru_bd":    bool(cfg.get("bd_pru_raw")),
-            "price":  price,
-            "chg":    chg,
-            "pnl":    pnl_eur,
-            "from_bd": from_bd,
-            "estimated": estimated,
-            "sl":     cfg.get("target_low"),
-            "tp":     cfg.get("target_high"),
+            "name":   v["name"],
+            "ticker": v["ticker"],
+            "qty":    v["qty"],
+            "entry":     v["entry"],
+            "entry_eur": v["entry_eur"],
+            "pru_bd":    v["pru_bd"],
+            "price":  v["price"],
+            "chg":    v["chg_eur"],
+            "pnl":    v["pnl_eur"],
+            "from_bd": v["source"] == "bd",
+            "estimated": v["estimated"],
+            "sl":     v["sl"],
+            "tp":     v["tp"],
             # Position hors gestion du bot (hold: true) : ses SL/TP ne sont
             # jamais surveillés — les afficher comme des seuils actifs serait
             # mensonger, d'où le ⛔.
-            "hold":   bool(cfg.get("hold")),
+            "hold":   v["hold"],
             # False = le dernier sync n'a trouvé AUCUN ordre SL/TP actif sur BD.
-            "unprotected": cfg.get("protected") is False,
-            "auto":   bool(cfg.get("autonomous")),
-            "sym":    prices.currency_symbol(cur),
+            "unprotected": v["protected"] is False,
+            "auto":   v["autonomous"],
+            "sym":    v["sym"],
         })
 
     # Coûts API JOUR PAR JOUR : le filtre de période les recalcule côté client

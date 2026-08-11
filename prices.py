@@ -26,7 +26,14 @@ def _ticker_currency(ticker: str) -> str:
 
 
 def currency_symbol(currency: str) -> str:
-    return {"USD": "$", "GBP": "£", "JPY": "¥"}.get(currency, "€")
+    """Symbole d'affichage — source unique : market.symbol.
+
+    La table locale renvoyait « € » pour le franc suisse : un cours SIX se
+    serait affiché en euros. Personne n'en détenait, le défaut n'a donc jamais
+    été vu ; il ne peut plus se produire.
+    """
+    import market
+    return market.symbol(currency)
 
 
 # Taux de change → EUR, cache 1h (suffisant pour du sizing de position)
