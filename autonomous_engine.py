@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 import pytz
 
+import market
 import portfolio
 import prices
 import bot_mode
@@ -87,33 +88,9 @@ def set_config(enabled: bool, budget_total: float | None = None,
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def _is_market_open() -> bool:
-    """Au moins un marché tradable est ouvert (Euronext OU US)."""
-    now = datetime.now(PARIS)
-    if now.weekday() >= 5:
-        return False
-    mins = now.hour * 60 + now.minute
-    return 9 * 60 + 5 <= mins <= 21 * 60 + 55
-
-
-def market_open_for(ticker: str) -> bool:
-    """
-    Le marché du TICKER est-il ouvert maintenant (heure de Paris) ?
-    - US (pas de suffixe) : NYSE/NASDAQ 15:30-22:00 Paris
-    - Londres (.L)        : LSE 9:00-17:30 Paris
-    - Euronext/Xetra (défaut) : 9:00-17:30 Paris
-    Sans gestion des jours fériés locaux : BD rejette alors l'ordre, le bot
-    réessaie au cycle suivant (l'opportunité reste en attente).
-    """
-    now = datetime.now(PARIS)
-    if now.weekday() >= 5:
-        return False
-    mins = now.hour * 60 + now.minute
-    t = ticker.upper()
-    is_us = "." not in t
-    if is_us:
-        return 15 * 60 + 35 <= mins <= 21 * 60 + 55
-    return 9 * 60 + 5 <= mins <= 17 * 60 + 25
+# Horaires de marché : source unique dans market.py (voir son en-tête).
+_is_market_open = market.any_market_open
+market_open_for = market.is_open_now
 
 
 

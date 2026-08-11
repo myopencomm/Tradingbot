@@ -2,42 +2,15 @@
 Synchronisation Bourse Direct → positions.json
 Appelé par /sync. Met à jour cash + détecte les écarts de positions.
 """
+import market
 import portfolio
 import bourse_direct_reader as reader
 
-# ── Places BD (MIC) → suffixe yfinance ET devise de cotation ────────────────
-# UNE SEULE table pour les deux. Elles étaient séparées, et elles ont dérivé :
-# `XNGS` (NASDAQ Global Select, la place que BD renvoie réellement pour NVDA)
-# figurait dans la table des devises mais PAS dans celle des suffixes. Le
-# défaut « Paris » a donc transformé NVDA en **NVDA.PA** à la création de la
-# position — ticker inexistant chez Yahoo, donc aucun cours, donc position de
-# 1 233 € invisible du suivi SL/TP et annoncée « COURS SUSPENDU » (03/08/2026).
-# Ajouter une place, c'est désormais ajouter UNE ligne qui porte les deux
-# informations : elles ne peuvent plus se contredire.
-MIC_MARKETS = {
-    # MIC   : (suffixe yfinance, devise)
-    "XPAR":  (".PA", "EUR"),   # Euronext Paris
-    "XAMS":  (".AS", "EUR"),   # Euronext Amsterdam
-    "XBRU":  (".BR", "EUR"),   # Euronext Bruxelles
-    "XLIS":  (".LS", "EUR"),   # Euronext Lisbonne
-    "XETR":  (".DE", "EUR"),   # Xetra
-    "XMIL":  (".MI", "EUR"),   # Borsa Italiana
-    "XMAD":  (".MC", "EUR"),   # Madrid
-    "XLON":  (".L",  "GBP"),   # London Stock Exchange
-    "XSWX":  (".SW", "CHF"),   # SIX Suisse
-    # US — aucun suffixe chez Yahoo, quel que soit le compartiment.
-    "XNYS":  ("",    "USD"),   # NYSE
-    "XNAS":  ("",    "USD"),   # NASDAQ (générique)
-    "XNGS":  ("",    "USD"),   # NASDAQ Global Select  ← celui que BD renvoie
-    "XNMS":  ("",    "USD"),   # NASDAQ Global Market
-    "XNCM":  ("",    "USD"),   # NASDAQ Capital Market
-    "ARCX":  ("",    "USD"),   # NYSE Arca
-    "XASE":  ("",    "USD"),   # NYSE American
-    "BATS":  ("",    "USD"),   # Cboe BZX
-}
-
-MIC_SUFFIX   = {mic: sfx for mic, (sfx, _) in MIC_MARKETS.items()}
-MIC_CURRENCY = {mic: cur for mic, (_, cur) in MIC_MARKETS.items()}
+# Places BD (MIC) → suffixe Yahoo et devise : source unique dans market.py.
+# La table vivait ici ; elle avait un jumeau dans config.py, et leur divergence
+# (XNGS présent d'un côté, absent de l'autre) a produit « NVDA.PA ».
+MIC_SUFFIX   = market.MIC_SUFFIX
+MIC_CURRENCY = {mic: market.currency(f"X{sfx}") for mic, sfx in MIC_SUFFIX.items()}
 
 
 def _pru_in_quote_currency(bd_pru, pru_cur: str, pos_cur: str):
@@ -64,28 +37,9 @@ def _pru_in_quote_currency(bd_pru, pru_cur: str, pos_cur: str):
 
 
 def _yf_ticker(bd_ticker: str, mic: str, currency: str = "") -> str:
-    """Reconstruit le ticker yfinance depuis le mnémo BD + la place (MIC).
-
-    Une place inconnue ne tombe PLUS silencieusement sur « .PA » : c'est ce
-    défaut qui a produit NVDA.PA. Deux garde-fous avant de deviner :
-      · la devise cotée par BD tranche le cas le plus fréquent (USD ⇒ US ⇒
-        aucun suffixe) même si le MIC n'est pas répertorié ;
-      · toute place non répertoriée est TRACÉE, pour être ajoutée à
-        MIC_MARKETS plutôt que subie une seconde fois.
-    """
-    bd_ticker = (bd_ticker or "").upper()
-    if not bd_ticker:
-        return ""
-    mic = (mic or "").upper()
-    if mic in MIC_SUFFIX:
-        return f"{bd_ticker}{MIC_SUFFIX[mic]}"
-
-    cur = (currency or "").upper()
-    guess = "" if cur == "USD" else ".PA"
-    print(f"[sync] place BD inconnue « {mic or '?'} » pour {bd_ticker} "
-          f"(devise {cur or '?'}) → suffixe supposé « {guess or 'aucun (US)'} ». "
-          f"À ajouter dans MIC_MARKETS.")
-    return f"{bd_ticker}{guess}"
+    """Ticker Yahoo depuis le mnémo BD + la place — source unique : market.py."""
+    return market.yf_ticker(bd_ticker, mic, currency,
+                            on_unknown=lambda m: print(f"[sync] {m}"))
 
 
 def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:

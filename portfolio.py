@@ -101,20 +101,9 @@ def get_cash() -> float:
 
 
 def market_close_expiry(ticker: str):
-    """Clôture du marché DU TITRE aujourd'hui (heure de Paris) — pas question
-    d'agir sur une validation du matin le lendemain sans re-validation.
-    US (pas de suffixe) : 21h55 ; Euronext/autres : 17h30. Si la clôture est
-    déjà passée : 9h00 le lendemain (fenêtre minimale avant re-validation)."""
-    import pytz
-    from datetime import datetime, timedelta
-    PARIS = pytz.timezone("Europe/Paris")
-    now = datetime.now(PARIS)
-    is_us = "." not in ticker.upper()
-    close_h, close_m = (21, 55) if is_us else (17, 30)
-    expires = now.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
-    if now >= expires:
-        expires = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
-    return expires
+    """Clôture du marché DU TITRE aujourd'hui — source unique : market.py."""
+    import market
+    return market.close_time_today(ticker)
 
 
 def get_pending_opportunities() -> list:

@@ -181,30 +181,21 @@ FX_COMMISSION_RATE = 0.0008
 TTF_RATE           = float(os.getenv("TTF_RATE", "0.004"))
 TTF_MIN_MARKET_CAP = 1_000_000_000.0
 
-# Devise par suffixe : sert à savoir si la commission de change s'applique.
-# Absent de la table = EUR (Euronext, Xetra, Milan, Madrid, Lisbonne).
-CURRENCY_BY_SUFFIX = {"": "USD", ".L": "GBP", ".SW": "CHF"}
+# Place, devise et suffixe : source unique dans market.py (module feuille, donc
+# importable ici sans créer de cycle). Les tables locales ont été supprimées —
+# c'est leur divergence avec celles de sync_engine qui a produit « NVDA.PA ».
+import market
 
-# Suffixes Yahoo des places au tarif Euronext.
-EURONEXT_SUFFIXES = (".PA", ".AS", ".BR")
-
-
-def _suffix(ticker: str) -> str:
-    """Suffixe Yahoo du ticker ('' = US, convention du projet)."""
-    t = (ticker or "").strip().upper()
-    return t[t.rindex("."):] if "." in t else ""
+_suffix           = market.suffix
+EURONEXT_SUFFIXES = market.EURONEXT_SUFFIXES
+is_foreign_currency = market.is_foreign_currency
 
 
 def is_foreign_ticker(ticker: str) -> bool:
     """Vrai si le ticker se traite hors Euronext (donc au tarif majoré)."""
     if not (ticker or "").strip():
         return False
-    return _suffix(ticker) not in EURONEXT_SUFFIXES
-
-
-def is_foreign_currency(ticker: str) -> bool:
-    """Vrai si l'ordre est libellé en devise → commission de change."""
-    return CURRENCY_BY_SUFFIX.get(_suffix(ticker), "EUR") != "EUR"
+    return not market.is_euronext(ticker)
 
 
 def brokerage_fee(ticker: str = "", amount_eur: float = 0.0) -> float:

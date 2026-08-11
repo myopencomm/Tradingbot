@@ -8,10 +8,9 @@ from config import TP_ALERTS, BREAKEVEN_THRESHOLD
 PARIS = pytz.timezone("Europe/Paris")
 
 
-def _is_us(ticker: str) -> bool:
-    """Ticker US (NYSE/NASDAQ) = sans suffixe de place, convention SCAN_UNIVERSE
-    (les valeurs Euronext/Xetra/LSE portent un suffixe .PA/.AS/.BR/.L…)."""
-    return "." not in (ticker or "")
+import market
+
+_is_us = market.is_us      # source unique : market.py
 
 
 def _sl_proche_level(cfg: dict) -> float:

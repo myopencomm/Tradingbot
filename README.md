@@ -255,6 +255,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 TradingBot/
 ├── main.py                  Point d'entrée : lance le scheduler + le polling Telegram
 ├── config.py                Variables d'env centralisées (lues depuis .env)
+├── market.py                Places de marché : suffixe, devise, horaires, MIC BD → ticker Yahoo
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome
@@ -719,6 +720,27 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-08-11 (4) — Phase 2 : `market.py`, une seule vérité sur un ticker
+« Où se traite ce ticker » avait **cinq réponses indépendantes** :
+`config._suffix` + `CURRENCY_BY_SUFFIX`, `monitor._is_us`,
+`autonomous_engine.market_open_for`, `portfolio.market_close_expiry` et
+`sync_engine.MIC_MARKETS`. C'est leur divergence qui a produit **NVDA.PA** —
+`XNGS` présent dans une table, absent de l'autre, défaut « Paris », position de
+1 233 € invisible du suivi SL/TP (03/08/2026).
+
+`market.py` est un module **feuille** (il n'importe aucun module du projet, donc
+il ne crée aucun cycle) : suffixe, base, devise, symbole, place US/Euronext,
+marché ouvert, clôture du jour, MIC BD → ticker Yahoo. Les cinq définitions y
+délèguent, code déplacé à l'identique.
+
+**La centralisation a révélé un désaccord réel** : `market_open_for` fermait
+Euronext à 17h25, `market_close_expiry` à 17h30. Ce sont deux questions
+distinctes — « puis-je encore poster un ordre ? » (avec sa marge) et « quand
+finit la séance ? » — donc la table porte **les deux chiffres**. Les fondre
+aurait changé un comportement sans le vouloir.
+
+20 tests figent l'équivalence avec les définitions d'avant.
 
 ### 2026-08-11 (3) — Phase 1 : `positions.json` ne peut plus être perdu ni tronqué
 `positions.json` porte **tout** l'état du bot et il était lu-modifié-écrit
