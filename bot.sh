@@ -211,17 +211,30 @@ do_update() {
     echo "✅ Mise à jour terminée. /update dans Telegram pour vérifier la version."
 }
 
+do_test() {
+    # Contrôle AVANT commit : compilation de tous les modules + tests de
+    # caractérisation. Aucun accès réseau, Playwright ni Telegram — donc
+    # exécutable à tout moment, bot en marche compris.
+    cd "$DIR" || exit 1
+    echo "── Compilation ────────────────────────────────────────────"
+    "$DIR/venv/bin/python3" -m py_compile ./*.py || exit 1
+    echo "✅ tous les modules compilent"
+    echo "── Tests ──────────────────────────────────────────────────"
+    "$DIR/venv/bin/python3" -m pytest tests/ -q || exit 1
+}
+
 case "${1:-}" in
     start)       do_start ;;
     stop)        do_stop ;;
     restart)     do_stop; do_start ;;
     status)      do_status ;;
+    test)        do_test ;;
     logs)        tail -f "$LOG" ;;
     update)      do_update ;;
     autostart)   do_autostart ;;
     unautostart) do_unautostart ;;
     *)
-        echo "Usage: ./bot.sh start|stop|restart|status|logs|update|autostart|unautostart"
+        echo "Usage: ./bot.sh start|stop|restart|status|test|logs|update|autostart|unautostart"
         exit 1
         ;;
 esac

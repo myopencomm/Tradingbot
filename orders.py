@@ -88,20 +88,6 @@ def buy_limit(ticker: str, qty: int, price: float, isin: str = None, account: st
     ))
 
 
-def sl_from_pru(ticker: str, qty: int, pru: float, pct: float = None) -> str:
-    """Calcule et formate un SL à partir du PRU."""
-    pct = pct or DEFAULT_SL_PCT
-    sl_price = round(pru * (1 - pct / 100), 2)
-    return stop_loss(ticker, qty, sl_price)
-
-
-def tp_from_pru(ticker: str, qty: int, pru: float, pct: float = None) -> str:
-    """Calcule et formate un TP à partir du PRU."""
-    pct = pct or DEFAULT_TP_PCT
-    tp_price = round(pru * (1 + pct / 100), 2)
-    return take_profit(ticker, qty, tp_price)
-
-
 def full_setup(ticker: str, qty: int, pru: float, sl_pct: float = None, tp_pct: float = None) -> str:
     """Retourne les 2 ordres de protection à saisir après un achat (SL + TP)."""
     sl_pct = sl_pct or DEFAULT_SL_PCT

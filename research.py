@@ -457,13 +457,3 @@ def get_social_sentiment(ticker: str) -> str:
     return "\n".join(lines) if lines else "Sentiment social : aucune donnée disponible."
 
 
-def scan_sector(sector: str) -> str:
-    """Meilleures opportunités dans un secteur, tous marchés."""
-    queries = [
-        (f"best {sector} stocks buy recommendation analyst target 2026", "us-en"),
-        (f"{sector} actions Euronext NYSE catalyseur hausse 2026", "fr-fr"),
-    ]
-    snippets = []
-    for q, lang in queries:
-        snippets += _snippets(_search(q, max_results=3, lang=lang))
-    return "\n".join(snippets[:10]) or "Aucune donnée web trouvée."

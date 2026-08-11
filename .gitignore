@@ -53,3 +53,6 @@ dashboard-link.local.txt
 universe_cache.json
 # Assujettissement TTF par ticker (pays + capitalisation yfinance, régénérable)
 ttf_cache.json
+
+# Tests
+.pytest_cache/

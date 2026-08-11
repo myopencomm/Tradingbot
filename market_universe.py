@@ -379,10 +379,3 @@ def load_indicators(source: str = "us", max_age_days: int = 3) -> dict[str, dict
         return {}
 
 
-def cache_info() -> dict:
-    try:
-        data = json.loads(CACHE_PATH.read_text())
-        return {k: {"updated": v.get("updated"), "count": v.get("count")}
-                for k, v in data.items()}
-    except Exception:
-        return {}

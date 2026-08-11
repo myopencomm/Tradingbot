@@ -66,12 +66,6 @@ def post_mortem(ctx: dict, entry: float, exit_price: float, result: str) -> list
 
 # ── Brique 3 : agrégation → bloc de leçons pour les prompts ──────────────────
 
-def _closed_with_context() -> list[dict]:
-    import stats
-    return [t for t in stats.load_history().get("closed_trades", [])
-            if t.get("entry_context") or t.get("lessons")]
-
-
 def build_lessons_block(max_lines: int = 6) -> str:
     """
     Bloc texte compact injecté dans les prompts. Vide si pas assez de données

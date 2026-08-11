@@ -22,3 +22,12 @@ vaderSentiment
 
 # Graphiques chandeliers pour analyse technique vision
 mplfinance>=0.12.0
+
+# Mode Playwright — pilotage réel de Bourse Direct (connexion, ordres, sync).
+# Après installation : venv/bin/playwright install chromium
+# (Était absent de ce fichier jusqu'au 11/08/2026 alors que TOUTE l'intégration
+# BD en dépend : une installation neuve suivant le README échouait.)
+playwright>=1.40.0
+
+# Tests — ./bot.sh test
+pytest>=8.0.0

@@ -137,12 +137,6 @@ def login(page, send_fn) -> bool:
         return False
 
 
-def _needs_otp(page) -> bool:
-    # Détection stricte : uniquement sur la présence réelle des spinbuttons
-    # (pas de match texte — "authentification" est présent sur la page de login)
-    return page.locator('[role="spinbutton"]').count() >= 4
-
-
 def _fill_totp(page, code: str, send_fn=None) -> bool:
     """
     Remplit le formulaire TOTP BD (6 spinbuttons individuels).

@@ -720,6 +720,31 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-11 (2) — Phase 0 : un filet de tests avant tout refactoring
+14 640 lignes qui passent des ordres réels, **zéro test**. Toute factorisation
+était un pari. `tests/` contient désormais **66 tests de caractérisation** :
+ils figent le comportement **actuel**, pas un comportement idéal — c'est ce qui
+permet de refactoriser en prouvant que rien n'a bougé.
+
+- **`./bot.sh test`** — compilation de tous les modules + pytest, sans réseau,
+  sans Playwright, sans Telegram. Exécutable bot en marche.
+- **Couverture** : modèle de frais BD (les 3 ordres réels vérifiés au centime),
+  parseurs de la page portefeuille (lignes réelles tirées du log), validité des
+  ordres et pas de cotation, choix du cours retenu (`best_price`) et diagnostic
+  d'absence de cours (`quote_problem`), les deux paliers du trailing, et le
+  scénario complet du contrôle de protection (non-régression de la fausse
+  alerte du matin même).
+- **Dette corrigée** : `playwright` **ajouté à `requirements.txt`** (il en était
+  absent alors que toute l'intégration BD en dépend — une installation neuve
+  suivant le README échouait), 7 variables `.env` documentées, et suppression du
+  code mort confirmé (`read_portfolio_screenshot`, `scan_sector`, `sl_from_pru`,
+  `tp_from_pru`, `prices.get_price`, `_closed_with_context`, `cache_info`,
+  `_needs_otp`) dont **`portfolio.update_sl` défini deux fois**, la seconde
+  définition masquant silencieusement la première.
+
+Les tests raisonnent sur les seuils **effectifs** lus dans la configuration, pas
+sur des littéraux : ajuster `BREAKEVEN_THRESHOLD` dans `.env` ne casse rien.
+
 ### 2026-08-11 — Fausse alerte « SANS PROTECTION » : une liste vide n'est pas une preuve
 Le sync auto de 8h a annoncé les **trois** positions à nu (AIR, BAC, NVDA). Un `/sync` lancé dans la foulée les a toutes retrouvées protégées, ordres intacts. Le log tranche : sur ce cycle, **aucune ligne `[order raw]`** — l'onglet « Mes ordres » n'avait rien rendu, alors que le cycle suivant relit les trois ordres à l'identique.
 

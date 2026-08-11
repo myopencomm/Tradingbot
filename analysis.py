@@ -2261,8 +2261,3 @@ def import_screenshots(images: list) -> str:
         lines.append("Aucune position exploitable detectee.")
 
     return "\n".join(lines)
-
-
-# Gardé pour compatibilité — utilise import_screenshots avec une seule image
-def read_portfolio_screenshot(image_bytes: bytes) -> str:
-    return import_screenshots([image_bytes])

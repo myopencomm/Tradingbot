@@ -123,16 +123,6 @@ def is_french_large_cap(ticker: str) -> bool:
     return liable
 
 
-def get_price(ticker: str) -> float | None:
-    try:
-        hist = yf.Ticker(ticker).history(period="1d")
-        if not hist.empty:
-            return round(float(hist["Close"].iloc[-1]), 4)
-    except Exception as e:
-        print(f"⚠️ Price error {ticker}: {e}")
-    return None
-
-
 def get_fundamentals(ticker: str) -> dict:
     """Fondamentaux yfinance : objectif analyste, P/E, beta, 52w range, consensus."""
     try:

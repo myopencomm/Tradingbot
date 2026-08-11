@@ -390,15 +390,6 @@ def mark_breakeven(name: str, notified: bool = True):
         save(data)
 
 
-def update_sl(name: str, price: float):
-    data = load()
-    if name.upper() in data.get("positions", {}):
-        data["positions"][name.upper()]["target_low"] = round(price, 4)
-        save(data)
-        return True
-    return False
-
-
 def update_tp(name: str, price: float):
     data = load()
     if name.upper() in data.get("positions", {}):
