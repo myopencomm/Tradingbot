@@ -731,6 +731,39 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-13 (2) — Le watchdog criait au blocage sur un job simplement lent
+Ce matin : *« Job planifié « briefing » bloqué depuis plus de 240s »*. **Rien
+n'était bloqué** — le briefing a terminé deux minutes plus tard.
+
+La cause est la sortie de NVDA au TP la veille : une place s'est libérée, donc le
+briefing a repris le chemin **complet** (screen quant sur tout l'univers, puis
+pour chacun des 6 finalistes : recherche web, graphique chandeliers, analyse
+vision, validation) au lieu du chemin court qu'il suivait depuis des jours faute
+de place. **24 appels IA au lieu d'un.** Le seuil de 240 s était calibré sur le
+chemin court ; sur les 6 briefings ayant fait le chemin complet, 2 l'avaient
+déjà dépassé.
+
+- **Budget par job** (`JOB_TIMEOUTS`) : 900 s pour `briefing`, `us_scan` et
+  `weekly_swap` — les trois qui appellent l'IA en boucle et les trois qui ont
+  déjà déclenché l'alerte. 240 s reste le défaut pour les checks SL/TP et le
+  sync BD, où quatre minutes *seraient* une anomalie.
+- **Le watchdog revient sur son alerte.** Dépasser un délai n'est pas une preuve
+  de blocage : le scheduler est libéré, mais le thread est suivi et l'issue
+  annoncée — *« finalement terminé en Xs, lent pas bloqué »* ou, au-delà du
+  délai de grâce, *« toujours en cours »*. L'ancienne alerte affirmait « celui-ci
+  n'a pas terminé » sans jamais revenir vérifier : c'était faux et ça le restait.
+
+**Et le fond du problème : Anthropic n'est plus sollicité pour rien.** Les 159
+échecs « credit balance too low » du log venaient d'un provider à sec retenté à
+*chaque* appel. Un échec **définitif** (solde, clé, permission) met désormais le
+provider en quarantaine 1 h ; un échec **passager** (rate limit, timeout, 5xx)
+reste retenté immédiatement. Si toute la chaîne est écartée, la quarantaine est
+levée et on retente — mieux vaut un aller-retour perdu qu'un bot aveugle parce
+qu'un solde a été rechargé sans qu'on s'en aperçoive.
+
+Mesuré sur l'équivalent d'un briefing : **24 appels au provider mort → 1**, et
+**48 lignes de log → 4**.
+
 ### 2026-08-13 — Le suivi des coûts API était mort depuis 9 jours, en silence
 `api_costs.json` n'avait pas été écrit depuis le **4 août 09:05**. Les deux
 appelants passaient **cinq** arguments à `record()` qui n'en acceptait que

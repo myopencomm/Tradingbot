@@ -346,9 +346,48 @@ class FallbackProvider(AIProvider):
 
     _last_notify = 0.0
 
+    # ── Mise en quarantaine d'un provider à sec ─────────────────────────────
+    # Un solde épuisé ne se répare pas tout seul : réessayer le principal à
+    # CHAQUE appel ne fait que payer un aller-retour perdu à chaque fois. Le
+    # 13/08/2026, les 24 appels du briefing ont tous commencé par un 400
+    # Anthropic « credit balance too low » avant de basculer sur Gemini — 159
+    # échecs dans le log, ~20 par jour depuis le 20/07.
+    #
+    # On écarte donc le provider pour un temps après un échec DÉFINITIF (solde,
+    # clé invalide, modèle inconnu) — pas après une panne passagère (rate limit,
+    # timeout, 5xx), qui mérite d'être retentée tout de suite.
+    QUARANTAINE_S = 3600.0
+    _quarantaine: dict = {}           # nom du provider → instant de sortie
+
+    # Signatures d'un échec qui ne se réparera pas dans l'heure.
+    _DEFINITIFS = ("credit balance", "quota", "billing", "insufficient",
+                   "invalid_api_key", "authentication", "permission",
+                   "not_found_error", "model not found")
+
     def __init__(self, chain: list[str]):
         self.chain = chain            # noms, ex ["anthropic", "gemini"]
         self._instances: dict = {}
+
+    @classmethod
+    def _echec_definitif(cls, err: Exception) -> bool:
+        m = str(err).lower()
+        return any(s in m for s in cls._DEFINITIFS)
+
+    @classmethod
+    def _en_quarantaine(cls, name: str) -> bool:
+        import time as _time
+        fin = cls._quarantaine.get(name, 0.0)
+        if fin and _time.time() < fin:
+            return True
+        cls._quarantaine.pop(name, None)     # quarantaine expirée → on retente
+        return False
+
+    @classmethod
+    def _mettre_en_quarantaine(cls, name: str, err: Exception) -> None:
+        import time as _time
+        cls._quarantaine[name] = _time.time() + cls.QUARANTAINE_S
+        print(f"[AI fallback] {name} écarté {int(cls.QUARANTAINE_S / 60)} min "
+              f"— échec définitif : {str(err)[:120]}")
 
     def _get(self, name: str) -> AIProvider:
         if name not in self._instances:
@@ -376,19 +415,41 @@ class FallbackProvider(AIProvider):
 
     def _run(self, method: str, *args, **kwargs):
         last_err = None
+        écartés = []
         for i, name in enumerate(self.chain):
+            if self._en_quarantaine(name):
+                écartés.append(name)
+                continue
             try:
                 result = getattr(self._get(name), method)(*args, **kwargs)
-                if i > 0:
+                if last_err is not None:
+                    # Bascule constatée SUR CET APPEL (`last_err` n'est posé
+                    # que par une vraie exception). Sauter un provider déjà en
+                    # quarantaine ne se réjournalise pas : c'était une ligne
+                    # par appel IA, soit 24 lignes par briefing pour une
+                    # information déjà écrite une fois.
+                    origine = écartés[0] if écartés else self.chain[0]
                     print(f"[AI fallback] {method} servi par {name} "
-                          f"(échec de {self.chain[0]})")
-                    self._notify_switch(self.chain[0], name, last_err or Exception("?"))
+                          f"(échec de {origine})")
+                    self._notify_switch(origine, name, last_err or Exception("?"))
                 return result
             except NotImplementedError as e:
                 last_err = e            # provider sans vision → suivant
             except Exception as e:
                 last_err = e
                 print(f"[AI fallback] {name}.{method} : {e}")
+                if self._echec_definitif(e):
+                    self._mettre_en_quarantaine(name, e)
+
+        # Toute la chaîne est en quarantaine : on la vide et on retente une
+        # fois. Mieux vaut un aller-retour perdu qu'un bot devenu aveugle
+        # parce qu'un solde a été rechargé sans qu'on s'en aperçoive.
+        if écartés and last_err is None:
+            print("[AI fallback] tous les providers écartés — quarantaine levée, "
+                  "nouvel essai")
+            self._quarantaine.clear()
+            return self._run(method, *args, **kwargs)
+
         raise last_err if last_err else RuntimeError("aucun provider disponible")
 
     def complete(self, prompt: str, max_tokens: int = 800) -> str:

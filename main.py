@@ -16,7 +16,34 @@ def _market_day() -> bool:
     return datetime.now().weekday() < 5  # 0=lundi … 4=vendredi
 
 
-def _bounded(fn, name, timeout=240):
+# ─── Délais maximum par job ─────────────────────────────────────────────────
+# Un seuil unique de 240 s était calibré sur le chemin COURT : quand toutes les
+# places sont prises, le briefing saute la recherche de candidats et tient en un
+# appel IA. Dès qu'une place se libère il fait le chemin complet — screen quant
+# sur tout l'univers, puis pour chacun des 6 finalistes : recherche web,
+# graphique chandeliers, analyse vision, validation, soit ~24 appels IA. Ce
+# matin-là (13/08/2026, après la sortie de NVDA au TP) il a dépassé les 240 s
+# alors que RIEN n'était bloqué — il a terminé deux minutes plus tard.
+#
+# Historique des dépassements : briefing ×2, us_scan ×2, check ×1 — tous sur des
+# jobs qui appellent l'IA en boucle. Le budget colle donc à ce que le job fait,
+# pas à une moyenne.
+JOB_TIMEOUTS = {
+    "briefing":         900,    # chemin complet : screen + 6 validations IA
+    "us_scan":          900,    # même travail sur l'univers US
+    "weekly_swap":      900,    # compare chaque position à des candidats
+    "monthly_breach":   600,
+    "universe_refresh": 2400,   # ~2500 valeurs, 2 ans d'historique
+}
+JOB_TIMEOUT_DEFAUT = 240        # checks SL/TP, sync BD : pas d'IA, quelques secondes
+
+# Délai de grâce accordé APRÈS l'alerte avant de conclure au vrai blocage. Un
+# job qui dépasse son budget est suspect ; un job qui dépasse budget + grâce ne
+# répond plus.
+JOB_GRACE_S = 600
+
+
+def _bounded(fn, name, timeout=None):
     """
     Enrobe fn pour l'exécuter dans un thread dédié avec délai maximum : un job
     planifié qui bloque (ex: appel réseau sans timeout côté yfinance/Gmail) ne
@@ -26,23 +53,60 @@ def _bounded(fn, name, timeout=240):
     le scheduler pendant ~36h, sans aucun message d'erreur (keepalive et
     polling Telegram, sur d'autres threads, ont continué à tourner
     normalement — rien ne laissait deviner que le bot était figé).
+
+    Le délai dépassé n'est PAS une preuve de blocage : le scheduler est libéré,
+    mais le thread continue. On le surveille donc jusqu'au bout et on annonce
+    l'issue — « finalement terminé en Xs » ou « toujours en cours ». Sans ce
+    retour, l'alerte restait un mensonge dans l'historique : le 13/08 elle
+    affirmait « celui-ci n'a pas terminé » à propos d'un briefing qui a terminé.
     """
+    budget = timeout if timeout is not None else JOB_TIMEOUTS.get(name, JOB_TIMEOUT_DEFAUT)
+
     def wrapped(*args, **kwargs):
+        debut = time.time()
+
         def worker():
             try:
                 fn(*args, **kwargs)
             except Exception as e:
                 print(f"[job:{name}] erreur : {e}")
+
         t = threading.Thread(target=worker, daemon=True, name=f"job-{name}")
         t.start()
-        t.join(timeout=timeout)
-        if t.is_alive():
-            print(f"[job:{name}] ⚠️ bloqué au-delà de {timeout}s — scheduler libéré, thread abandonné")
-            telegram_bot.send(
-                f"⚠️ Job planifié « {name} » bloqué depuis plus de {timeout}s "
-                f"(probable appel réseau sans réponse). Le scheduler continue "
-                f"normalement pour les prochains jobs, mais celui-ci n'a pas terminé."
-            )
+        t.join(timeout=budget)
+        if not t.is_alive():
+            return
+
+        print(f"[job:{name}] ⚠️ dépasse {budget}s — scheduler libéré, "
+              f"le thread continue et sera suivi")
+        telegram_bot.send(
+            f"⚠️ Job planifié « {name} » dépasse {budget}s.\n"
+            f"Le scheduler est libéré (les prochains jobs tournent normalement) "
+            f"et celui-ci continue en arrière-plan — je te dis ce qu'il devient."
+        )
+
+        # Suivi jusqu'à l'issue, sur un thread à part : le scheduler, lui, est
+        # déjà reparti.
+        def surveiller():
+            t.join(timeout=max(budget, JOB_GRACE_S))
+            écoulé = int(time.time() - debut)
+            if t.is_alive():
+                print(f"[job:{name}] toujours en cours après {écoulé}s")
+                telegram_bot.send(
+                    f"🔴 « {name} » toujours en cours après {écoulé}s — cette "
+                    f"fois c'est probablement un appel réseau sans réponse. "
+                    f"Le reste du bot n'est pas affecté."
+                )
+            else:
+                print(f"[job:{name}] finalement terminé en {écoulé}s")
+                telegram_bot.send(
+                    f"✅ « {name} » a finalement terminé en {écoulé}s — "
+                    f"lent, pas bloqué. Rien n'a été perdu."
+                )
+
+        threading.Thread(target=surveiller, daemon=True,
+                         name=f"watch-{name}").start()
+
     return wrapped
 
 
@@ -198,10 +262,10 @@ def run_scheduler():
     # Univers de marché : rafraîchi le week-end, marchés fermés. JAMAIS à la
     # demande — un passage complet (~5000 symboles) fait rate-limiter yfinance,
     # ce qui dégraderait les cours du scan et du suivi de positions.
-    # Budget large : le pipeline complet a été mesuré à ~4 min, mais il
-    # télécharge 2 ans d'historique pour ~2500 valeurs.
+    # Son budget (large : ~4 min mesurés, mais 2 ans d'historique sur ~2500
+    # valeurs) est déclaré avec les autres dans JOB_TIMEOUTS.
     schedule.every().sunday.at("08:00").do(
-        _bounded(_refresh_market_universe, "universe_refresh", timeout=2400)
+        _bounded(_refresh_market_universe, "universe_refresh")
     )
     schedule.every().hour.at(":35").do(_bounded(_hourly_bd_sync, "hourly_bd_sync"))
 
