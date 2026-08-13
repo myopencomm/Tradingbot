@@ -731,6 +731,33 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-13 — Le suivi des coûts API était mort depuis 9 jours, en silence
+`api_costs.json` n'avait pas été écrit depuis le **4 août 09:05**. Les deux
+appelants passaient **cinq** arguments à `record()` qui n'en acceptait que
+**trois** : le `TypeError` partait avant d'entrer dans la fonction — donc son
+propre `except` ne pouvait rien rattraper — et les appelants l'avalaient par un
+`except: pass`.
+
+Neuf jours d'appels IA facturés nulle part. `/stats` et le dashboard affichaient
+des coûts figés au 04/08 (donc un `net_pnl` faux), et `top_model` restait vide
+**alors que c'est exactement l'indicateur construit pour révéler que le bot
+tourne sur Gemini depuis le 20/07**. Le défaut a caché ce qu'il devait montrer.
+
+- **Signature alignée** sur les appelants, jetons de cache compris.
+- **Le cache est facturé à son vrai tarif** : écriture ×1.25, relecture ×0.10 du
+  tarif d'entrée. Gemini les inclut dans `prompt_token_count`, Anthropic les
+  compte à part — l'appelant Gemini les retranche donc pour ne pas payer deux
+  fois. Le contrat est désormais explicite : *entrée = tarif plein, hors cache*.
+- **La ventilation par modèle est persistée** (`daily[jour]["models"]`) : sans
+  elle, `top_model` serait resté vide même sans l'erreur d'arité. Deux défauts,
+  pas un.
+- **Écriture atomique** du fichier de coûts, comme `positions.json`.
+- **Plus aucun `except: pass`** sur ce chemin — un échec de suivi se voit dans
+  le log. 13 tests, dont un qui compare la signature réelle aux appels réels.
+
+Vérifié en conditions réelles : un appel IA est de nouveau enregistré, et
+`top_model` répond `gemini-3.6-flash`.
+
 ### 2026-08-11 (7) — Phase 5 : découpe des gros modules, **plus aucun cycle d'import**
 Six cycles d'import étaient contournés par **164 imports différés** au fond des
 fonctions — chacun retardant la résolution juste assez pour que Python ne

@@ -65,14 +65,17 @@ class AnthropicProvider(AIProvider):
         try:
             import api_costs
             u = msg.usage
+            # `input_tokens` d'Anthropic exclut déjà le cache : rien à retrancher.
             api_costs.record(
                 getattr(msg, "model", None) or model,
                 u.input_tokens, u.output_tokens,
                 getattr(u, "cache_creation_input_tokens", 0) or 0,
                 getattr(u, "cache_read_input_tokens", 0) or 0,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # Surtout PAS un `pass` : c'est lui qui a caché neuf jours de
+            # TypeError et laissé le suivi des coûts mort en silence.
+            print(f"[api costs] suivi anthropic impossible : {e}")
 
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
         msg = self.client.messages.create(
@@ -263,13 +266,21 @@ class GeminiProvider(AIProvider):
         try:
             import api_costs
             u = r.usage_metadata
+            # Gemini INCLUT les jetons de cache dans prompt_token_count ; on les
+            # retranche pour ne pas les facturer deux fois (Anthropic, lui, les
+            # compte à part — d'où le contrat « entrée hors cache » de record).
+            cache_read = getattr(u, "cached_content_token_count", 0) or 0
             api_costs.record(
                 getattr(r, "model_version", None) or model_name,
-                u.prompt_token_count, u.candidates_token_count,
-                0, getattr(u, "cached_content_token_count", 0) or 0,
+                max(0, u.prompt_token_count - cache_read),
+                u.candidates_token_count,
+                0, cache_read,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            # Surtout PAS un `pass` : c'est un `except: pass` ici qui a caché
+            # neuf jours de TypeError et laissé le suivi des coûts mort sans
+            # que rien ne le signale (04→13/08/2026).
+            print(f"[api costs] suivi gemini impossible : {e}")
 
     @staticmethod
     def _extract(r) -> str:

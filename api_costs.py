@@ -11,6 +11,7 @@ fourni par l'utilisateur). L'usage antérieur (mai-juin) est inconnu et n'est
 PAS estimé — on ne comptabilise que ce qui est mesuré.
 """
 import json
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -72,15 +73,45 @@ def rates(model: str) -> tuple[float, float]:
     return _DEFAULT_PRICING
 
 
-def _price(model: str, input_tokens: int, output_tokens: int) -> float:
+# Multiplicateurs des jetons de CACHE, appliqués au tarif d'entrée du modèle.
+# Écrire dans le cache coûte plus cher qu'un jeton normal, le relire coûte
+# presque rien — c'est tout l'intérêt du cache, et l'ignorer fausse la facture
+# dans les deux sens selon le trafic.
+CACHE_WRITE_MULT = 1.25
+CACHE_READ_MULT  = 0.10
+
+
+def _price(model: str, input_tokens: int, output_tokens: int,
+           cache_write: int = 0, cache_read: int = 0) -> float:
     pin, pout = rates(model)
-    return input_tokens / 1e6 * pin + output_tokens / 1e6 * pout
+    return (input_tokens / 1e6 * pin
+            + cache_write / 1e6 * pin * CACHE_WRITE_MULT
+            + cache_read / 1e6 * pin * CACHE_READ_MULT
+            + output_tokens / 1e6 * pout)
 
 
-def record(model: str, input_tokens: int, output_tokens: int) -> None:
-    """Enregistre un appel API (best-effort : ne lève jamais)."""
+def record(model: str, input_tokens: int, output_tokens: int,
+           cache_write: int = 0, cache_read: int = 0) -> None:
+    """Enregistre un appel API.
+
+    `input_tokens` = jetons d'entrée au TARIF PLEIN, cache exclu. Les deux
+    compteurs de cache sont facturés à part (voir les multiplicateurs) — les
+    appelants doivent donc les retrancher de l'entrée quand leur SDK les y
+    inclut, ce que fait Gemini et pas Anthropic.
+
+    Les quatre compteurs et la ventilation PAR MODÈLE sont persistés : c'est
+    `models` que lit `get_costs()` pour dire QUI a réellement répondu.
+
+    ⚠️ Cette fonction n'a rien enregistré du 04/08 au 13/08/2026. Les deux
+    appelants lui passaient déjà cinq arguments alors qu'elle n'en acceptait
+    que trois : chaque appel levait un `TypeError` AVANT d'entrer ici, donc son
+    propre `except` ne pouvait rien rattraper — et les appelants avalaient
+    l'erreur par un `except: pass`. Neuf jours d'appels IA facturés nulle part,
+    et `top_model` resté vide alors que c'est précisément l'indicateur qui
+    devait révéler que le bot tournait sur Gemini depuis le 20/07.
+    """
     try:
-        cost = _price(model, input_tokens, output_tokens)
+        cost = _price(model, input_tokens, output_tokens, cache_write, cache_read)
         day = datetime.now(PARIS).strftime("%Y-%m-%d")
         with _lock:
             data = _load()
@@ -90,9 +121,19 @@ def record(model: str, input_tokens: int, output_tokens: int) -> None:
             d["input"]   += int(input_tokens)
             d["output"]  += int(output_tokens)
             d["calls"]   += 1
-            COSTS_PATH.write_text(json.dumps(data, indent=1), encoding="utf-8")
+            d["cache_write"] = d.get("cache_write", 0) + int(cache_write)
+            d["cache_read"]  = d.get("cache_read", 0) + int(cache_read)
+
+            m = d.setdefault("models", {}).setdefault(
+                model or "?", {"cost_usd": 0.0, "calls": 0})
+            m["cost_usd"] = round(m["cost_usd"] + cost, 6)
+            m["calls"]   += 1
+
+            tmp = COSTS_PATH.with_suffix(COSTS_PATH.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+            os.replace(tmp, COSTS_PATH)
     except Exception as e:
-        print(f"[api costs] record: {e}")
+        print(f"[api costs] record({model}) : {e}")
 
 
 def get_costs() -> dict:
