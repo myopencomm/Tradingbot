@@ -731,6 +731,34 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-13 (3) — La suite de tests envoyait de VRAIS messages Telegram
+Alerte reçue sur le téléphone : *« 🔀 FALLBACK IA ACTIF — mort en échec →
+bascule sur vivant »*. Ni « mort » ni « vivant » n'existent : ce sont les
+doublures de `tests/test_fallback_ia.py`.
+
+Ces tests exercent la bascule de provider IA, laquelle notifie par Telegram —
+et `tg.send` fait un **vrai POST HTTP**. Chaque exécution de la suite envoyait
+donc une fausse alerte parfaitement crédible **sur le canal qui sert aux vraies**.
+Environ cinq messages avant que ce soit repéré.
+
+La règle « aucun test ne touche le réseau, Telegram, Playwright » existait
+depuis le premier jour… **en commentaire** dans `conftest.py`. Une règle
+déclarée n'est pas une règle appliquée.
+
+- **Coupe-circuit `autouse`** : `requests.get/post/put/patch/delete/head/request`
+  et `Session.request` lèvent `SortieReseauInterdite` dans tous les tests, sans
+  que ceux-ci aient à y penser — c'est le seul niveau qui tienne, puisque
+  l'oubli vient précisément de ce qu'on n'y pense pas.
+- **Sorties Telegram neutralisées à la source** et capturées, pour que les
+  tests puissent encore vérifier ce qui *aurait* été envoyé.
+- **Doublures renommées** `FAUX-PROVIDER-KO` / `FAUX-PROVIDER-OK` : si une fuite
+  survenait malgré tout, le message ne pourrait plus passer pour une vraie alerte.
+- **10 tests** verrouillent le coupe-circuit lui-même, dont un qui rejoue
+  l'incident.
+
+Effet de bord révélateur : la suite passe de **11,8 s à 2,7 s**. D'autres tests
+faisaient des appels yfinance réels sans que personne l'ait voulu.
+
 ### 2026-08-13 (2) — Le watchdog criait au blocage sur un job simplement lent
 Ce matin : *« Job planifié « briefing » bloqué depuis plus de 240s »*. **Rien
 n'était bloqué** — le briefing a terminé deux minutes plus tard.

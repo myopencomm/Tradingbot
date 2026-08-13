@@ -44,21 +44,21 @@ def quarantaine_propre():
     FallbackProvider._quarantaine.clear()
 
 
-def chaine(mort, vivant):
-    f = FallbackProvider(["mort", "vivant"])
-    f._instances = {"mort": mort, "vivant": vivant}
+def chaine(ko, ok):
+    f = FallbackProvider(["FAUX-PROVIDER-KO", "FAUX-PROVIDER-OK"])
+    f._instances = {"FAUX-PROVIDER-KO": ko, "FAUX-PROVIDER-OK": ok}
     return f
 
 
 class TestQuarantaine:
     def test_un_solde_epuise_n_est_sollicite_qu_une_fois(self, capsys):
         """LE cas du 13/08 : 24 appels de briefing, 24 aller-retours perdus."""
-        mort, vivant = ProviderMort(), ProviderVivant()
-        f = chaine(mort, vivant)
+        ko, ok = ProviderMort(), ProviderVivant()
+        f = chaine(ko, ok)
         for _ in range(24):
             assert f._run("complete_cheap", "ping") == "ok"
-        assert mort.appels == 1
-        assert vivant.appels == 24
+        assert ko.appels == 1
+        assert ok.appels == 24
 
     def test_le_log_ne_repete_pas_la_bascule(self, capsys):
         """Une ligne par appel IA, c'était 24 lignes par briefing pour une
@@ -66,18 +66,18 @@ class TestQuarantaine:
         f = chaine(ProviderMort(), ProviderVivant())
         for _ in range(24):
             f._run("complete_cheap", "ping")
-        bascules = capsys.readouterr().out.count("servi par vivant")
+        bascules = capsys.readouterr().out.count("servi par FAUX-PROVIDER-OK")
         assert bascules == 1
 
     def test_une_panne_passagere_est_retentee(self):
         """Rate limit, timeout, 5xx : ça se répare tout seul, on ne renonce
         pas au provider principal pour autant."""
-        mort = ProviderMort("429 rate limit exceeded, retry later")
-        vivant = ProviderVivant()
-        f = chaine(mort, vivant)
+        ko = ProviderMort("429 rate limit exceeded, retry later")
+        ok = ProviderVivant()
+        f = chaine(ko, ok)
         for _ in range(5):
             f._run("complete_cheap", "ping")
-        assert mort.appels == 5, "un échec passager ne doit pas écarter le provider"
+        assert ko.appels == 5, "un échec passager ne doit pas écarter le provider"
 
     @pytest.mark.parametrize("message", [
         "Error code: 400 - credit balance is too low",
@@ -101,32 +101,32 @@ class TestQuarantaine:
 
     def test_la_quarantaine_expire(self, monkeypatch):
         """Un solde rechargé doit être repris en compte sans redémarrage."""
-        mort, vivant = ProviderMort(), ProviderVivant()
-        f = chaine(mort, vivant)
+        ko, ok = ProviderMort(), ProviderVivant()
+        f = chaine(ko, ok)
         f._run("complete_cheap", "ping")
-        assert mort.appels == 1
+        assert ko.appels == 1
         # On avance le temps au-delà de la quarantaine
         monkeypatch.setattr(FallbackProvider, "QUARANTAINE_S", -1.0)
-        FallbackProvider._quarantaine["mort"] = 0.0
+        FallbackProvider._quarantaine["FAUX-PROVIDER-KO"] = 0.0
         f._run("complete_cheap", "ping")
-        assert mort.appels == 2, "après expiration, le principal est retenté"
+        assert ko.appels == 2, "après expiration, le principal est retenté"
 
 
 class TestJamaisAveugle:
     def test_toute_la_chaine_ecartee_on_retente_quand_meme(self):
         """Mieux vaut un aller-retour perdu qu'un bot devenu aveugle parce
         qu'un solde a été rechargé sans qu'on s'en aperçoive."""
-        vivant = ProviderVivant()
+        ok = ProviderVivant()
         f = FallbackProvider(["a", "b"])
-        f._instances = {"a": vivant, "b": vivant}
+        f._instances = {"a": ok, "b": ok}
         FallbackProvider._quarantaine.update({"a": 1e18, "b": 1e18})
         assert f._run("complete_cheap", "ping") == "ok"
-        assert vivant.appels >= 1
+        assert ok.appels >= 1
 
     def test_l_erreur_remonte_si_personne_ne_repond(self):
-        mort1, mort2 = ProviderMort(), ProviderMort("503 unavailable")
+        ko1, ko2 = ProviderMort(), ProviderMort("503 unavailable")
         f = FallbackProvider(["m1", "m2"])
-        f._instances = {"m1": mort1, "m2": mort2}
+        f._instances = {"m1": ko1, "m2": ko2}
         with pytest.raises(Exception):
             f._run("complete_cheap", "ping")
 
