@@ -183,14 +183,49 @@ def _ensure_cto(page) -> bool:
         return False
 
 
-def _click_tab(page, label: str):
-    """Clique un onglet de la sidebar par son texte."""
-    try:
-        page.locator(f'a[role="button"]:has-text("{label}")').first.click(timeout=3000)
-        time.sleep(1.5)
-        return True
-    except Exception:
-        return False
+def _click_tab(page, label: str) -> bool:
+    """Ouvre un onglet de la sidebar par son texte.
+
+    Le navigateur tourne en mode FENÊTRÉ (`headless=False`). Quand sa fenêtre
+    est masquée, minimisée ou sur un autre bureau, Chromium met le rendu en
+    pause : lire le DOM continue de fonctionner — `inner_text()` n'a besoin de
+    rien — mais `click()` exige que l'élément soit visible et stable À L'ÉCRAN,
+    et rend la main sur timeout.
+
+    C'est exactement le tableau du 13/08/2026 : les positions se lisaient
+    normalement, seul « Mes ordres » restait « introuvable » cycle après cycle,
+    et tout est rentré dans l'ordre dès que la fenêtre a été affichée. Le seul
+    geste qui demandait un vrai clic était aussi le seul à échouer.
+
+    Trois tentatives de moins en moins dépendantes du rendu ; la dernière n'en
+    dépend plus du tout. La fenêtre n'est jamais remontée au premier plan : le
+    bot ne doit pas voler le focus de la machine pour lire un onglet.
+    """
+    loc = page.locator(f'a[role="button"]:has-text("{label}")').first
+    tentatives = (
+        ("clic", lambda: loc.click(timeout=3000)),
+        # force=True saute les contrôles d'« actionnabilité » (visible, stable,
+        # reçoit les événements) — ceux-là mêmes qu'une fenêtre en arrière-plan
+        # ne peut pas satisfaire.
+        ("clic forcé", lambda: loc.click(timeout=3000, force=True)),
+        # Dernier recours : on envoie l'événement au DOM. L'application est une
+        # SPA React, son gestionnaire se déclenche sans qu'aucun pixel n'ait
+        # besoin d'être peint.
+        ("événement DOM", lambda: loc.dispatch_event("click")),
+    )
+    échecs = []
+    for i, (nom, action) in enumerate(tentatives, 1):
+        try:
+            action()
+            time.sleep(1.5)
+            if i > 1:
+                print(f"[BD Reader] onglet « {label} » ouvert par {nom} "
+                      f"(fenêtre probablement masquée)")
+            return True
+        except Exception as e:
+            échecs.append(f"{nom}: {type(e).__name__}")
+    print(f"[BD Reader] onglet « {label} » inaccessible — {' | '.join(échecs)}")
+    return False
 
 
 def read_order_book(page, send_fn=None) -> list[dict]:

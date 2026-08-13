@@ -121,3 +121,75 @@ class TestCarnetLegacy:
         irrattrapable (incident du 28/07/2026, carnet du PEA lu à la place)."""
         html = '<select name="nc"><option value="1" selected>PEA</option></select>'
         assert reader.find_account_nc(html, account="") is None
+
+
+class TestOngletsFenetreMasquee:
+    """Ouvrir un onglet quand la fenêtre Chromium est masquée.
+
+    Le navigateur tourne en mode fenêtré. Fenêtre masquée, Chromium met le rendu
+    en pause : lire le DOM marche toujours, `click()` non — il exige un élément
+    visible à l'écran. Le 13/08/2026 les positions se lisaient et « Mes ordres »
+    restait introuvable, cycle après cycle, jusqu'à ce que la fenêtre soit
+    affichée.
+    """
+
+    class _Loc:
+        """Locator qui échoue sur les N premières façons de cliquer."""
+
+        def __init__(self, echecs: int):
+            self.echecs = echecs
+            self.essais = []
+
+        def click(self, timeout=None, force=False):
+            self.essais.append("clic forcé" if force else "clic")
+            if len(self.essais) <= self.echecs:
+                raise TimeoutError("element is not visible")
+
+        def dispatch_event(self, _name):
+            self.essais.append("événement DOM")
+            if len(self.essais) <= self.echecs:
+                raise TimeoutError("nope")
+
+    class _Page:
+        def __init__(self, loc):
+            self._loc = loc
+
+        def locator(self, _sel):
+            return self
+
+        @property
+        def first(self):
+            return self._loc
+
+    def _page(self, echecs):
+        loc = self._Loc(echecs)
+        page = self._Page(loc)
+        return page, loc
+
+    def test_fenetre_visible_un_seul_clic(self, monkeypatch):
+        monkeypatch.setattr(reader.time, "sleep", lambda *_: None)
+        page, loc = self._page(0)
+        assert reader._click_tab(page, "Mes ordres") is True
+        assert loc.essais == ["clic"]
+
+    def test_fenetre_masquee_le_clic_force_reprend_la_main(self, monkeypatch):
+        monkeypatch.setattr(reader.time, "sleep", lambda *_: None)
+        page, loc = self._page(1)
+        assert reader._click_tab(page, "Mes ordres") is True
+        assert loc.essais == ["clic", "clic forcé"]
+
+    def test_dernier_recours_l_evenement_dom(self, monkeypatch):
+        """Une SPA React réagit à l'événement sans qu'un pixel soit peint."""
+        monkeypatch.setattr(reader.time, "sleep", lambda *_: None)
+        page, loc = self._page(2)
+        assert reader._click_tab(page, "Mes ordres") is True
+        assert loc.essais == ["clic", "clic forcé", "événement DOM"]
+
+    def test_onglet_vraiment_absent_on_renonce(self, monkeypatch, capsys):
+        """Les trois échouent : l'onglet n'existe pas. On le dit, et le sync
+        suspendra ses conclusions plutôt que d'inventer une absence d'ordres."""
+        monkeypatch.setattr(reader.time, "sleep", lambda *_: None)
+        page, loc = self._page(3)
+        assert reader._click_tab(page, "Mes ordres") is False
+        assert len(loc.essais) == 3
+        assert "inaccessible" in capsys.readouterr().out

@@ -553,9 +553,33 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
             if not ok:
                 naked.append((name, cfg, was is not False))   # was: 1re détection ?
 
-    welded = [(n, c) for n, c in data.get("positions", {}).items()
-              if not c.get("hold") and c.get("qty")
-              and c.get("protected") and c.get("trailable") is False]
+    # ── Protections hors carnet : remontables ou vraiment soudées ? ──────
+    # `trailable` ne dit qu'une chose : « le carnet expose-t-il une jambe de
+    # vente annulable ? ». Ce n'est PAS la même question que « le bot peut-il
+    # remonter ce stop ? » — depuis le 05/08/2026, une position achetée en
+    # Expert conserve les ids de ses deux jambes (`protection_ids`, les
+    # `children` renvoyés par /order/create), et `trailing.py` sait les annuler
+    # une par une pour reposer plus haut.
+    #
+    # Ce message-ci n'avait pas suivi ce correctif : il annonçait « annulation
+    # depuis l'interface BD requise » pour JNJ (13/08/2026) alors que ses deux
+    # ids étaient bien en base et que le trailing les gérait tout seul.
+    hors_carnet = [(n, c) for n, c in data.get("positions", {}).items()
+                   if not c.get("hold") and c.get("qty")
+                   and c.get("protected") and c.get("trailable") is False]
+    welded    = [(n, c) for n, c in hors_carnet if not c.get("protection_ids")]
+    par_ids   = [(n, c) for n, c in hors_carnet if c.get("protection_ids")]
+
+    if par_ids:
+        lines.append("\n🔁 PROTECTIONS HORS CARNET, REMONTABLES PAR LE BOT")
+        for n, c in par_ids:
+            lines.append(
+                f"  {n} : SL {c.get('target_low')} actif. Absent du carnet (porté "
+                f"par l'ordre d'achat Expert), mais ses {len(c['protection_ids'])} "
+                f"jambes sont connues — le trailing les annulera et reposera plus "
+                f"haut tout seul. Rien à faire."
+            )
+
     if welded:
         lines.append("\n🔒 PROTECTIONS NON REMONTABLES PAR LE BOT")
         for n, c in welded:

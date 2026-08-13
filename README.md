@@ -731,6 +731,37 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-13 (4) — Deux défauts révélés par l'achat de JNJ
+**1. Le sync annonçait « non remontable » une protection que le bot sait remonter.**
+JNJ affichait *« soudé à l'ordre d'ACHAT exécuté — annulation depuis l'interface
+BD requise »* alors que ses **deux `protection_ids` étaient bien en base**,
+capturés à la création de l'Expert comme prévu depuis le 05/08.
+
+`trailable` ne répond qu'à une question — « le carnet expose-t-il une jambe de
+vente annulable ? » — et ce n'est pas la même que « le bot peut-il remonter ce
+stop ? ». `trailing.py` traite le cas `protection_ids` **avant** le cas soudé et
+sait annuler les deux jambes une par une ; c'est le compte rendu du sync qui
+n'avait pas suivi le correctif. Il distingue désormais les deux, et le cas
+remontable s'annonce comme tel : *« ses 2 jambes sont connues — le trailing les
+annulera et reposera plus haut tout seul. Rien à faire. »*
+
+**2. « Onglet Mes ordres introuvable », cycle après cycle, jusqu'à afficher la fenêtre.**
+Le navigateur tourne en mode **fenêtré** (`headless=False`). Fenêtre masquée,
+minimisée ou sur un autre bureau, Chromium met le rendu en pause : lire le DOM
+continue de marcher — d'où des positions parfaitement lues — mais `click()`
+exige un élément visible **à l'écran** et rend la main sur timeout. Le seul
+geste qui demandait un vrai clic était aussi le seul à échouer.
+
+`_click_tab` insiste maintenant en trois temps de moins en moins dépendants du
+rendu : clic normal, puis `force=True` (qui saute les contrôles
+d'actionnabilité), puis `dispatch_event("click")` — l'application est une SPA
+React, son gestionnaire se déclenche sans qu'un pixel soit peint. La fenêtre
+n'est jamais remontée au premier plan : le bot ne doit pas voler le focus de la
+machine pour lire un onglet. L'échec, lui, dit désormais *pourquoi*.
+
+À noter : le garde-fou du 11/08 a parfaitement joué son rôle entre-temps — le
+sync a suspendu ses conclusions au lieu d'annoncer trois positions à nu.
+
 ### 2026-08-13 (3) — La suite de tests envoyait de VRAIS messages Telegram
 Alerte reçue sur le téléphone : *« 🔀 FALLBACK IA ACTIF — mort en échec →
 bascule sur vivant »*. Ni « mort » ni « vivant » n'existent : ce sont les
