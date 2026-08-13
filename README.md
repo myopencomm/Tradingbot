@@ -731,6 +731,30 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-13 (6) — Les coûts API affichaient 5,12 € pour 12,63 € dépensés
+Plus de la moitié de la facture manquait. Deux causes qui se cumulaient :
+
+- **L'amorce ne couvrait qu'Anthropic du 1er au 17/07** (5,66 $ relevés sur la
+  console), en disant elle-même « usage mai-juin inconnu, non estimé ». La
+  dépense Anthropic réelle est de **10 €**, jusqu'à l'épuisement du prépaiement
+  le 20/07.
+- **Gemini n'était compté que par le suivi interne**, aveugle du 04 au 13/08.
+  La console dit **2,63 €** (10 € crédités le 09/07, solde 7,37 €).
+- **Le dashboard ne sommait que le suivi quotidien** et ignorait l'amorce : il
+  affichait **-0,21 €** en vue Global.
+
+Le modèle change : ce sont désormais des **relevés de console par fournisseur**
+qui font foi (`RELEVES`), chacun avec sa période et sa note. Le suivi interne ne
+compte qu'**après** la dernière date couverte — additionner les deux facturerait
+deux fois la même dépense.
+
+- **Global** : 12,63 € — `anthropic 10.00€ + gemini 2.63€`, détaillé sur la carte.
+- **Vue mensuelle** : mesuré seulement, et libellé comme tel. Un relevé couvre
+  plusieurs mois (Gemini du 09/07 au 13/08) et rien ne permet de le découper ;
+  l'attribuer en entier à un mois serait faux.
+- **Mise à jour** : relever le solde sur chaque console, ajuster `eur` et `au`
+  dans `api_costs.RELEVES`. Le bot ne recalcule jamais un relevé.
+
 ### 2026-08-13 (5) — Combien de temps un trade prend-il ?
 Nouveau KPI : la **durée de détention**. Un gain de 100 € en trois jours et le
 même en trois mois n'ont pas la même valeur — entre les deux, le capital n'a pas

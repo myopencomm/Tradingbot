@@ -50,15 +50,47 @@ PRICING = (
 # sait pas lire donne un bilan flatteur et faux ; la surestimer se voit.
 _DEFAULT_PRICING = (10.0, 50.0)
 
-SEED = {"seed_usd": 5.66,
-        "seed_note": "console Anthropic 01-17/07/2026 (CSV) ; usage mai-juin inconnu, non estimé"}
+# ─── Relevés des consoles fournisseurs — la SEULE source qui fasse foi ──────
+# Le compteur interne ne voit que ce que le bot a lui-même appelé, et il a été
+# aveugle du 04 au 13/08/2026 (cf. le TypeError avalé). Les consoles, elles,
+# facturent réellement. Chaque relevé est donc autoritaire pour son fournisseur
+# jusqu'à sa date, et les jours suivis ANTÉRIEURS sont ignorés — ils mesurent
+# la même dépense et la compteraient deux fois.
+#
+# Constat du 13/08/2026 : le bilan affichait 5,12 € pour ~12,63 € réellement
+# dépensés — plus de la moitié de la facture manquait, parce que l'amorce ne
+# couvrait qu'Anthropic du 1er au 17/07 et que Gemini n'était compté que
+# depuis le 19/07.
+#
+# Pour mettre à jour : relever le solde sur chaque console et ajuster `eur` +
+# `au`. Un relevé n'est jamais recalculé par le bot.
+RELEVES = [
+    {
+        "provider": "anthropic",
+        "eur": 10.00,
+        "du": "2026-05-01", "au": "2026-07-20",
+        "note": "console Anthropic — prépaiement épuisé le 20/07/2026 "
+                "(tous les appels échouent depuis, d'où la bascule sur Gemini)",
+    },
+    {
+        "provider": "gemini",
+        "eur": 2.63,
+        "du": "2026-07-09", "au": "2026-08-13",
+        "note": "console Google AI Studio au 13/08/2026 : 10,00 € crédités le "
+                "09/07, solde restant 7,37 €",
+    },
+]
+
+# Dernière date couverte par un relevé : au-delà, le suivi interne prend le
+# relais et s'ajoute.
+COUVERT_JUSQU_AU = max(r["au"] for r in RELEVES)
 
 
 def _load() -> dict:
     try:
         return json.loads(COSTS_PATH.read_text(encoding="utf-8"))
     except Exception:
-        return {**SEED, "daily": {}}
+        return {"daily": {}}
 
 
 def rates(model: str) -> tuple[float, float]:
@@ -144,20 +176,27 @@ def get_costs() -> dict:
     month_prefix = now.strftime("%Y-%m")
     today = now.strftime("%Y-%m-%d")
 
-    tracked = sum(d.get("cost_usd", 0.0) for d in daily.values())
-    total_usd = data.get("seed_usd", 0.0) + tracked
-    month_usd = sum(d.get("cost_usd", 0.0) for day, d in daily.items()
-                    if day.startswith(month_prefix))
-    # l'amorce (01-17/07/2026) appartient à juillet 2026
-    if month_prefix == "2026-07":
-        month_usd += data.get("seed_usd", 0.0)
-    today_usd = daily.get(today, {}).get("cost_usd", 0.0)
-
     try:
         import prices
         fx = prices.fx_to_eur("USD") or 0.92
     except Exception:
         fx = 0.92
+
+    # Suivi interne : ne compte QUE les jours postérieurs au dernier relevé.
+    # Avant cette date les consoles font foi, et additionner les deux
+    # reviendrait à facturer deux fois la même dépense.
+    tracked_usd = sum(d.get("cost_usd", 0.0)
+                      for day, d in daily.items() if day > COUVERT_JUSQU_AU)
+    releves_eur = sum(r["eur"] for r in RELEVES)
+
+    total_eur = releves_eur + tracked_usd * fx
+
+    # Mois en cours : MESURÉ seulement. Un relevé couvre une période à cheval
+    # sur deux mois (le Gemini va du 09/07 au 13/08) et rien ne permet de le
+    # découper — l'attribuer en entier à l'un des deux serait faux.
+    month_usd = sum(d.get("cost_usd", 0.0) for day, d in daily.items()
+                    if day.startswith(month_prefix) and day > COUVERT_JUSQU_AU)
+    today_usd = daily.get(today, {}).get("cost_usd", 0.0) if today > COUVERT_JUSQU_AU else 0.0
     # Répartition par modèle sur les 30 derniers jours : sert à dire QUI a
     # réellement répondu. Le bot a basculé sur le fallback Gemini le 20/07 et
     # n'a plus jamais servi un appel Anthropic — invisible jusqu'ici.
@@ -176,12 +215,24 @@ def get_costs() -> dict:
     return {
         "by_model":  by_model,
         "top_model": top[0],
-        "total_usd": round(total_usd, 2),
-        "total_eur": round(total_usd * fx, 2),
+        "total_eur": round(total_eur, 2),
+        "total_usd": round(total_eur / fx, 2),
         "month_usd": round(month_usd, 2),
         "month_eur": round(month_usd * fx, 2),
+        "month_mesure_seul": True,   # le mois n'inclut jamais les relevés
         "today_usd": round(today_usd, 4),
+        # Ce que chaque fournisseur a réellement coûté, relevés compris.
+        "par_fournisseur": {
+            **{r["provider"]: r["eur"] for r in RELEVES},
+            "suivi depuis le " + COUVERT_JUSQU_AU: round(tracked_usd * fx, 2),
+        },
+        "releves_eur": round(releves_eur, 2),
+        "tracked_eur": round(tracked_usd * fx, 2),
+        "couvert_jusqu_au": COUVERT_JUSQU_AU,
+        # Le suivi quotidien reste exposé ENTIER (le dashboard trace la courbe
+        # avec) ; c'est get_costs qui décide ce qui compte dans les totaux.
         "daily":     {d: v.get("cost_usd", 0.0) for d, v in daily.items()},
         "calls":     sum(d.get("calls", 0) for d in daily.values()),
-        "seed_note": data.get("seed_note", ""),
+        "seed_note": " · ".join(f"{r['provider']} {r['eur']:.2f}€ ({r['du']}→{r['au']})"
+                                for r in RELEVES),
     }

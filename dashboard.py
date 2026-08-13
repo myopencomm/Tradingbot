@@ -127,18 +127,28 @@ def build_data() -> dict:
     # page à ignorer la période sélectionnée.
     try:
         import api_costs
-        api_daily = api_costs.get_costs().get("daily", {})
         api_meta  = api_costs.get_costs()
+        api_daily = api_meta.get("daily", {})
         api_top   = api_meta.get("top_model")
         api_models = api_meta.get("by_model", {})
+        # Relevés des consoles fournisseurs : la part de la facture que le
+        # compteur interne ne voit pas. Sans eux le dashboard affichait 0,21 €
+        # pour 12,63 € réellement dépensés.
+        api_releves = api_meta.get("releves_eur", 0.0)
+        api_couvert = api_meta.get("couvert_jusqu_au", "")
+        api_fourn   = api_meta.get("par_fournisseur", {})
     except Exception:
         api_daily, api_top, api_models = {}, None, {}
+        api_releves, api_couvert, api_fourn = 0.0, "", {}
 
     return {
         "trades":    cum,
         "api_daily": api_daily,
         "api_top_model": api_top,
         "api_models":    api_models,
+        "api_releves_eur": api_releves,
+        "api_couvert":     api_couvert,
+        "api_fournisseurs": api_fourn,
         "fx_usd":    prices.fx_to_eur("USD"),
         "stats":     s,
         "open":      open_pos,
@@ -369,11 +379,18 @@ function applyPeriod() {
   const loss   = Math.abs(losses.reduce((a, t) => a + t.pnl, 0));
   const invested = ts.reduce((a, t) => a + t.invested, 0);
 
-  // Coûts API de la période (USD → EUR au taux du jour, comme côté serveur)
+  // Coûts API de la période. Deux sources qui ne se recouvrent pas :
+  //  · les RELEVÉS des consoles fournisseurs, qui font foi jusqu'à leur date ;
+  //  · le suivi interne, qui ne compte qu'APRÈS cette date.
+  // Les additionner sans cette césure facturerait deux fois la même dépense —
+  // et ne prendre que le suivi affichait 0,21 € pour 12,63 € réels.
   let api = 0;
   for (const [day, usd] of Object.entries(D.api_daily || {}))
-    if (inPeriod(day, r)) api += usd;
+    if (inPeriod(day, r) && day > (D.api_couvert || '')) api += usd;
   api *= (D.fx_usd || 0.92);
+  // Les relevés couvrent plusieurs mois : ils n'entrent que dans le Global,
+  // car rien ne permet de les découper mois par mois.
+  if (period === 'all') api += (D.api_releves_eur || 0);
 
   // Le P&L latent est un instantané : il n'appartient à aucune période. On ne
   // l'ajoute qu'en vue Global, sinon le "total" mélangerait deux horizons.
@@ -385,8 +402,13 @@ function applyPeriod() {
   el('l_real').textContent = `P&L réalisé (${nb} trade${nb > 1 ? 's' : ''})`;
   el('c_tot').textContent  = fmt(total) + '€';              setCls(el('c_tot'), total);
   el('c_api').textContent  = '-' + api.toFixed(2) + '€';
-  el('l_api').textContent  = 'Coûts API IA' + (period === 'all' ? '' : ' — ' + PLABEL[period])
-                           + (D.api_top_model ? ' · ' + D.api_top_model : '');
+  el('l_api').textContent  = 'Coûts API IA'
+    + (period === 'all'
+        ? ' — ' + Object.entries(D.api_fournisseurs || {})
+              .filter(([, v]) => v > 0)
+              .map(([k, v]) => `${k} ${v.toFixed(2)}€`).join(' + ')
+        : ' — ' + PLABEL[period] + ' (mesuré seul)')
+    + (D.api_top_model ? ' · ' + D.api_top_model : '');
   el('c_net').textContent  = fmt(total - api) + '€';        setCls(el('c_net'), total - api);
   el('c_wr').textContent   = (nb ? (wins.length / nb * 100).toFixed(0) : 0) + '%';
   el('l_wr').textContent   = `Win rate (${wins.length}W / ${losses.length}L)`;

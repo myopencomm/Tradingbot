@@ -155,8 +155,10 @@ def get_stats() -> dict:
         # le 20/07/2026 (crédit Anthropic épuisé) et n'a plus servi un seul
         # appel Anthropic depuis — sans que rien ne l'indique nulle part.
         api_model = costs.get("top_model")
+        api_fournisseurs = costs.get("par_fournisseur", {})
     except Exception:
         api_cost_eur, api_month_eur, api_model = 0.0, 0.0, None
+        api_fournisseurs = {}
 
     # ── Combien de temps prend un trade ? ────────────────────────────────
     # KPI demandé le 13/08/2026 : trouver les trades RAPIDES. Un gain de 100 €
@@ -204,6 +206,7 @@ def get_stats() -> dict:
         "api_cost_eur":   api_cost_eur,
         "api_month_eur":  api_month_eur,
         "api_model":      api_model,
+        "api_fournisseurs": api_fournisseurs,
         "net_pnl":        round(total_pnl - api_cost_eur, 2),
         "avg_win":        round(avg_win, 2),
         "avg_loss":       round(avg_loss, 2),

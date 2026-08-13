@@ -107,3 +107,54 @@ class TestRobustesse:
         api_costs.record("gemini-flash-latest", 10, 1)
         assert not list(couts.parent.glob("*.tmp"))
         json.loads(couts.read_text())      # fichier toujours valide
+
+
+class TestRelevesFournisseurs:
+    """Les consoles font foi, le compteur interne complète.
+
+    Le 13/08/2026 le bilan affichait 5,12 € pour ~12,63 € réellement dépensés :
+    l'amorce ne couvrait qu'Anthropic du 1er au 17/07, Gemini n'était compté que
+    depuis le 19/07, et le dashboard ne sommait QUE le suivi interne — soit
+    0,21 € affichés en vue Global.
+    """
+
+    def test_le_total_part_des_releves(self, couts):
+        c = api_costs.get_costs()
+        assert c["releves_eur"] == pytest.approx(sum(r["eur"] for r in api_costs.RELEVES))
+        assert c["total_eur"] >= c["releves_eur"]
+
+    def test_les_jours_couverts_ne_sont_pas_recomptes(self, couts):
+        """Un jour antérieur au dernier relevé mesure une dépense que la console
+        facture déjà : l'additionner la compterait deux fois."""
+        avant = api_costs.get_costs()["total_eur"]
+        jour = api_costs.COUVERT_JUSQU_AU
+        import json
+        d = json.loads(couts.read_text())
+        d["daily"][jour] = {"cost_usd": 99.0, "input": 0, "output": 0, "calls": 1}
+        couts.write_text(json.dumps(d))
+        assert api_costs.get_costs()["total_eur"] == avant
+
+    def test_les_jours_posterieurs_s_ajoutent(self, couts):
+        avant = api_costs.get_costs()["total_eur"]
+        import json
+        d = json.loads(couts.read_text())
+        d["daily"]["2099-01-01"] = {"cost_usd": 10.0, "input": 0, "output": 0, "calls": 1}
+        couts.write_text(json.dumps(d))
+        assert api_costs.get_costs()["total_eur"] > avant
+
+    def test_le_mois_ne_contient_que_du_mesure(self, couts):
+        """Un relevé couvre plusieurs mois (Gemini : 09/07 → 13/08) et rien ne
+        permet de le découper — l'attribuer en entier à un mois serait faux."""
+        c = api_costs.get_costs()
+        assert c["month_mesure_seul"] is True
+        assert c["month_eur"] <= c["total_eur"]
+
+    def test_chaque_fournisseur_est_nomme(self, couts):
+        f = api_costs.get_costs()["par_fournisseur"]
+        for r in api_costs.RELEVES:
+            assert f[r["provider"]] == r["eur"]
+
+    def test_les_releves_ont_une_periode_coherente(self):
+        for r in api_costs.RELEVES:
+            assert r["du"] <= r["au"], f"{r['provider']} : période à l'envers"
+            assert r["eur"] > 0 and r["note"]
