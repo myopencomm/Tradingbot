@@ -13,14 +13,44 @@ load_history = history.load
 save_history = history.save
 
 
+def held_days(opened_at: str | None, closed_at: str) -> float | None:
+    """Durée de détention en jours (décimale), ou None si l'entrée est inconnue.
+
+    Décimale et non entière : un aller-retour dans la journée est le trade le
+    plus rapide qui soit, et l'arrondir à 0 jour le rendrait indistinguable
+    d'une donnée manquante.
+    """
+    if not opened_at:
+        return None
+    try:
+        d0 = datetime.fromisoformat(opened_at)
+        d1 = datetime.fromisoformat(closed_at)
+    except (TypeError, ValueError):
+        return None
+    if d0.tzinfo is None:
+        d0 = PARIS.localize(d0)
+    if d1.tzinfo is None:
+        d1 = PARIS.localize(d1)
+    return round(max(0.0, (d1 - d0).total_seconds() / 86400), 2)
+
+
 def record_close(name: str, ticker: str, qty: int, entry_price: float,
-                 exit_price: float, fees: float = 0.0) -> float:
+                 exit_price: float, fees: float = 0.0,
+                 opened_at: str | None = None) -> float:
     """Enregistre un trade clôturé (+ contexte d'entrée et post-mortem) et
-    retourne le P&L net."""
+    retourne le P&L net.
+
+    `opened_at` vient de la position (`portfolio.new_position`) et permet de
+    chiffrer COMBIEN DE TEMPS le trade a pris. Il est passé explicitement plutôt
+    que relu ici : au moment de l'appel la position est encore en base mais sur
+    le point d'être retirée, et faire dépendre un KPI de cet ordre-là serait le
+    genre de fragilité qui se paie six mois plus tard.
+    """
     import portfolio
     data = load_history()
     pnl = round((exit_price - entry_price) * qty - fees, 2)
     result = "win" if pnl > 0 else "loss"
+    closed_at = portfolio.now_iso()
 
     # Brique 2 : récupère le POURQUOI de l'entrée et en tire des leçons.
     ctx = portfolio.get_entry_context(ticker) or portfolio.get_entry_context(name)
@@ -52,6 +82,13 @@ def record_close(name: str, ticker: str, qty: int, entry_price: float,
         "source":       ctx.get("source", "inconnu"),
         "entry_context": ctx,
         "lessons":      tags,
+        # ── Combien de temps ce trade a-t-il pris ? ──────────────────────
+        # `held_source` sépare le mesuré du reconstitué : un KPI de vitesse
+        # bâti sur un mélange des deux sans le dire ne vaut rien.
+        "opened_at":    opened_at,
+        "closed_at":    closed_at,
+        "held_days":    held_days(opened_at, closed_at),
+        "held_source":  "exact" if opened_at else None,
     }
     data["closed_trades"].append(record)
     save_history(data)
@@ -121,8 +158,41 @@ def get_stats() -> dict:
     except Exception:
         api_cost_eur, api_month_eur, api_model = 0.0, 0.0, None
 
+    # ── Combien de temps prend un trade ? ────────────────────────────────
+    # KPI demandé le 13/08/2026 : trouver les trades RAPIDES. Un gain de 100 €
+    # en trois jours et le même en trois mois n'ont pas la même valeur — le
+    # capital immobilisé n'a pas travaillé pendant ce temps.
+    def _duree(ts):
+        vals = sorted(t["held_days"] for t in ts if t.get("held_days") is not None)
+        if not vals:
+            return None
+        milieu = len(vals) // 2
+        return {
+            "n":      len(vals),
+            "median": vals[milieu] if len(vals) % 2 else round((vals[milieu - 1] + vals[milieu]) / 2, 2),
+            "avg":    round(sum(vals) / len(vals), 2),
+            "min":    vals[0],
+            "max":    vals[-1],
+        }
+
+    chronometres = [t for t in closed if t.get("held_days") is not None]
+    # Gain par jour de détention : le classement qui répond vraiment à « quels
+    # trades vont vite ». Un +8 % en 2 jours passe devant un +25 % en 40 jours.
+    par_jour = sorted(
+        ({**t, "eur_per_day": round(_eur(t) / max(t["held_days"], 0.25), 2)}
+         for t in chronometres if _eur(t) > 0),
+        key=lambda t: -t["eur_per_day"],
+    )
+
     total_pnl = round(realized_pnl + unrealized_pnl, 2)
     return {
+        "hold":          _duree(chronometres),
+        "hold_wins":     _duree([t for t in chronometres if t["result"] == "win"]),
+        "hold_losses":   _duree([t for t in chronometres if t["result"] == "loss"]),
+        # Trades dont la durée est inconnue : à dire, pas à masquer — sinon la
+        # médiane porte sur un échantillon dont on ignore la taille réelle.
+        "hold_unknown":  len(closed) - len(chronometres),
+        "fastest_wins":  par_jour[:3],
         "nb_closed":      len(closed),
         "nb_wins":        len(wins),
         "nb_losses":      len(losses),

@@ -731,6 +731,42 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-13 (5) — Combien de temps un trade prend-il ?
+Nouveau KPI : la **durée de détention**. Un gain de 100 € en trois jours et le
+même en trois mois n'ont pas la même valeur — entre les deux, le capital n'a pas
+travaillé. Sert à repérer les trades rapides, et à terme à voir ce qui fait un
+bon candidat.
+
+Le bot connaissait la date de **sortie** de chaque trade et jamais celle
+d'entrée : les positions naissaient à quatre endroits, chacun écrivant son
+propre dictionnaire, et aucun ne datait l'ouverture.
+
+- **`portfolio.new_position()`** — une seule forme pour une position qui
+  s'ouvre, `opened_at` compris. Les quatre points de création y passent, et un
+  test refuse le retour d'un cinquième qui construirait son dict à la main.
+- **Chaque clôture enregistre** `opened_at`, `closed_at`, `held_days` (décimal —
+  un aller-retour intraday est le trade le plus rapide qui soit, l'arrondir à
+  « 0 j » le confondrait avec une donnée manquante) et `held_source`.
+- **`/stats`** : médiane, plus court, plus long, gagnants contre perdants, et le
+  classement des **gains les plus rapides en € par jour de détention** — c'est
+  lui qui répond vraiment à la question : +8 % en 2 jours passe devant +25 % en
+  40 jours.
+- **Dashboard** : deux tuiles (durée médiane, meilleur gain par jour), les
+  colonnes *Durée* et *€/jour* dans le tableau, et un **nuage gain (%) × durée**
+  — en haut à gauche, les trades rapides et rentables.
+- **Ce qui n'est pas mesuré est dit tel quel.** 11 des 14 trades clôturés sont
+  antérieurs au suivi : ils affichent « — » et sont comptés à part, la médiane ne
+  porte jamais sur un échantillon dont on ignorerait la taille.
+- **Rattrapage** limité à ce que deux sources indépendantes confirment (le log du
+  cycle d'achat et `entry_contexts`) : 3 trades clôturés et 2 positions ouvertes.
+  AIR n'a pas de date d'entrée fiable — elle reste vide plutôt qu'inventée.
+
+**Le vert et le rouge du dashboard ne sont séparés que de ΔE 4.8 en
+deutéranopie** (mesuré, pas estimé) : indistinguables pour un daltonien
+rouge-vert. Le nuage encode donc gagnants et perdants **par la forme** — rond
+plein contre triangle — en plus de la couleur, avec légende et infobulle. La
+ligne du zéro est appuyée : c'est elle qui sépare gain et perte.
+
 ### 2026-08-13 (4) — Deux défauts révélés par l'achat de JNJ
 **1. Le sync annonçait « non remontable » une protection que le bot sait remonter.**
 JNJ affichait *« soudé à l'ordre d'ACHAT exécuté — annulation depuis l'interface

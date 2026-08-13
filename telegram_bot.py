@@ -278,13 +278,8 @@ def cmd_add(args, cid):
             else:
                 # Achat direct : on déduit le coût du cash disponible
                 data["cash_available"] = round(data.get("cash_available", 0) - cost, 2)
-            data.setdefault("positions", {})[name.upper()] = {
-                "ticker":      ticker,
-                "qty":         qty,
-                "entry_price": round(pru, 4),
-                "target_high": round(tp, 4),
-                "target_low":  round(sl, 4),
-            }
+            data.setdefault("positions", {})[name.upper()] = portfolio.new_position(
+                ticker, qty, round(pru, 4), round(sl, 4), round(tp, 4))
         new_cash = portfolio.get_cash()
         note = " (ordre en attente cloture)" if had_pending else ""
         send(
@@ -499,6 +494,17 @@ def cmd_setup(args, cid):
     send(orders.full_setup(ticker, qty, pru), cid)
 
 
+def _duree(jours: float | None) -> str:
+    """Durée lisible. Sous la journée on passe aux heures : un aller-retour
+    intraday est le trade le plus rapide qui soit, l'afficher « 0 j » le
+    rendrait indistinguable d'une donnée manquante."""
+    if jours is None:
+        return "—"
+    if jours < 1:
+        return f"{round(jours * 24)} h"
+    return f"{jours:.1f} j".replace(".0 j", " j")
+
+
 def cmd_stats(args, cid):
     send("Calcul des performances...", cid)
     s = stats.get_stats()
@@ -526,6 +532,31 @@ def cmd_stats(args, cid):
         if s["worst_trade"]:
             w = s["worst_trade"]
             lines.append(f"Pire trade    : {w['name']} {w['pnl']:+.0f}€")
+
+        # ── Vitesse ──────────────────────────────────────────────────────
+        # Un gain de 100€ en 3 jours et le meme en 3 mois n'ont pas la meme
+        # valeur : entre les deux, le capital n'a pas travaille.
+        if s.get("hold"):
+            h = s["hold"]
+            lines.append(f"\nDUREE DE DETENTION — {h['n']} trades chronometres")
+            lines.append(f"Mediane       : {_duree(h['median'])}")
+            lines.append(f"Plus court    : {_duree(h['min'])}  |  plus long : {_duree(h['max'])}")
+            if s.get("hold_wins"):
+                lines.append(f"Gagnants      : {_duree(s['hold_wins']['median'])} (mediane)")
+            if s.get("hold_losses"):
+                lines.append(f"Perdants      : {_duree(s['hold_losses']['median'])} (mediane)")
+            if s.get("hold_unknown"):
+                lines.append(f"  ({s['hold_unknown']} trades sans duree — anterieurs au suivi)")
+
+            if s.get("fastest_wins"):
+                lines.append("\nGAINS LES PLUS RAPIDES (€ par jour de detention)")
+                for t in s["fastest_wins"]:
+                    gain = t.get("pnl_eur", t["pnl"])
+                    lines.append(f"  {t['name']:6} {_duree(t['held_days']):>8} "
+                                 f"{gain:+.0f}€  →  {t['eur_per_day']:+.1f}€/j")
+        elif s.get("hold_unknown"):
+            lines.append(f"\nDuree de detention : aucun trade chronometre "
+                         f"({s['hold_unknown']} anterieurs au suivi)")
 
     lines.append(f"\nPOSITIONS OUVERTES")
     lines.append(f"P&L latent    : {s['unrealized_pnl']:+.0f}€")
@@ -688,7 +719,8 @@ def cmd_close(args, cid):
         return
 
     cfg = positions[name]
-    pnl = stats.record_close(name, cfg["ticker"], qty, cfg["entry_price"], exit_price, fees)
+    pnl = stats.record_close(name, cfg["ticker"], qty, cfg["entry_price"], exit_price, fees,
+                               opened_at=cfg.get("opened_at"))
 
     portfolio.remove_position(name)
     proceeds = round(exit_price * qty - fees, 2)
@@ -882,7 +914,8 @@ def cmd_vendu(args, cid):
             send(f"Prix indisponible pour {cfg['ticker']}. Utilise /vendu {name} PRIX", cid)
             return
 
-    pnl      = stats.record_close(name, cfg["ticker"], cfg["qty"], cfg["entry_price"], exit_price)
+    pnl      = stats.record_close(name, cfg["ticker"], cfg["qty"], cfg["entry_price"], exit_price,
+                                  opened_at=cfg.get("opened_at"))
     proceeds = round(exit_price * cfg["qty"], 2)
     portfolio.clear_gmail_triggered(name)
     portfolio.remove_position(name)

@@ -279,16 +279,40 @@ def set_autonomous_config(cfg: dict):
     save(data)
 
 
-def add_position(name: str, ticker: str, qty: int, entry_price: float, sl: float, tp: float):
-    data = load()
-    data.setdefault("positions", {})[name.upper()] = {
+def now_iso() -> str:
+    """Instant présent, heure de Paris, au format ISO — l'horodatage du bot."""
+    import pytz
+    from datetime import datetime
+    return datetime.now(pytz.timezone("Europe/Paris")).isoformat(timespec="seconds")
+
+
+def new_position(ticker: str, qty: int, entry_price: float, sl: float, tp: float,
+                 **extra) -> dict:
+    """La forme d'une position qui vient d'être ouverte — UN seul endroit.
+
+    Les positions naissaient à quatre endroits (ici, le sync qui les découvre
+    sur BD, /add, l'import). Chacun écrivait son propre dictionnaire, donc
+    ajouter un champ demandait de penser aux quatre — c'est ainsi que la DATE
+    D'ENTRÉE a manqué à l'appel jusqu'au 13/08/2026, et sans elle la durée de
+    détention n'est pas calculable : on connaissait la date de sortie de chaque
+    trade et jamais celle d'entrée.
+    """
+    return {
         "ticker": ticker,
         "qty": qty,
         "entry_price": round(entry_price, 4),
         "target_high": round(tp, 4),
         "target_low": round(sl, 4),
+        # Le point de départ du KPI « combien de temps pour faire ce gain ».
+        "opened_at": now_iso(),
+        **extra,
     }
-    save(data)
+
+
+def add_position(name: str, ticker: str, qty: int, entry_price: float, sl: float, tp: float):
+    with mutate() as data:
+        data.setdefault("positions", {})[name.upper()] = new_position(
+            ticker, qty, entry_price, sl, tp)
 
 
 def remove_position(name: str):

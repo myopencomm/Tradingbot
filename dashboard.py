@@ -5,6 +5,9 @@ Page HTML autonome régénérée à chaque visite (données toujours fraîches) 
     €/jour, ROI sur cash engagé)
   - courbe du P&L cumulé sur axe temporel (taille des points ∝ cash engagé)
   - P&L par trade (un emplacement par trade : nom / date / cash engagé)
+  - vitesse : nuage gain (%) × durée de détention — gagnants et perdants
+    distingués par la FORME autant que par la couleur (le vert et le rouge du
+    dashboard sont à ΔE 4.8 en deutéranopie : indistinguables pour un daltonien)
   - tableau des trades filtrable (texte, WIN/LOSS)
   - positions ouvertes avec P&L latent live
 PWA : manifest + icônes servis par le même serveur — "Ajouter à l'écran
@@ -66,6 +69,13 @@ def build_data() -> dict:
             "invested": invested,
             "roi":      roi,
             "result": t.get("result", ""),
+            # Combien de temps le capital est resté immobilisé, et ce qu'il a
+            # rapporté par jour. `held` est None pour les trades antérieurs au
+            # suivi (13/08/2026) — le tableau affiche « — », il n'invente pas.
+            "held":     t.get("held_days"),
+            "held_src": t.get("held_source"),
+            "per_day":  (round(pnl_eur / max(t["held_days"], 0.25), 2)
+                         if t.get("held_days") is not None else None),
         })
 
     # Durée de la performance : du premier trade à aujourd'hui
@@ -249,6 +259,8 @@ button.on { border-color: #3fd583; color: #3fd583; }
   <div class="card"><div class="v">@CASH@€</div><div class="l">Cash disponible</div></div>
   <div class="card"><div class="v @PNL_CLS@" id="c_day">@PER_DAY@€/j</div><div class="l" id="l_day">depuis le @SINCE@ (@SPAN@ jours)</div></div>
   <div class="card"><div class="v @ROI_CLS@" id="c_roi">@AVG_ROI@%</div><div class="l" id="l_roi">ROI / cash engagé (moy. @AVG_INV@€/deal)</div></div>
+  <div class="card"><div class="v" id="c_hold">—</div><div class="l" id="l_hold">Durée médiane d'un trade</div></div>
+  <div class="card"><div class="v" id="c_perday">—</div><div class="l" id="l_perday">Meilleur gain par jour de détention</div></div>
 </div>
 
 
@@ -257,6 +269,10 @@ button.on { border-color: #3fd583; color: #3fd583; }
 
 <h2>P&L par trade <span class="muted">— nom / date / cash engagé</span></h2>
 <div class="chartbox"><canvas id="bars"></canvas></div>
+
+<h2>Vitesse <span class="muted">— gain (%) selon la durée de détention</span></h2>
+<div class="chartbox"><canvas id="speed"></canvas></div>
+<p class="muted" id="speednote" style="margin:-6px 0 22px;font-size:.8em"></p>
 
 <h2>Trades clôturés</h2>
 <div class="filters">
@@ -268,7 +284,7 @@ button.on { border-color: #3fd583; color: #3fd583; }
 <div class="tablewrap">
 <table id="tt"><thead><tr><th>Nom</th><th class="m-hide">Ticker</th><th>Date</th>
 <th class="m-hide">Qté</th><th class="m-hide">Entrée</th><th class="m-hide">Sortie</th>
-<th>Investi</th><th>P&L</th><th>ROI</th><th>Cumul</th></tr></thead><tbody></tbody></table>
+<th>Investi</th><th>P&L</th><th>ROI</th><th>Durée</th><th class="m-hide">€/jour</th><th>Cumul</th></tr></thead><tbody></tbody></table>
 </div>
 
 <h2>Positions ouvertes</h2>
@@ -333,6 +349,13 @@ function periodTrades() {
 }
 
 function fmt(v, d = 2) { return (v >= 0 ? '+' : '') + v.toFixed(d); }
+// Sous la journée on passe aux heures : un aller-retour intraday est le trade
+// le plus rapide qui soit, « 0 j » le confondrait avec une durée manquante.
+function duree(j) {
+  if (j == null) return '—';
+  if (j < 1) return Math.round(j * 24) + ' h';
+  return (j < 10 ? j.toFixed(1) : Math.round(j)) + ' j';
+}
 function setCls(el, v) { el.classList.remove('green', 'red'); el.classList.add(v >= 0 ? 'green' : 'red'); }
 
 function applyPeriod() {
@@ -372,6 +395,34 @@ function applyPeriod() {
   setCls(el('c_roi'), realized);
   el('l_roi').textContent  = `ROI / cash engagé (moy. ${nb ? Math.round(invested / nb) : 0}€/deal)`;
 
+  // ── Vitesse : combien de temps le capital reste immobilisé ──────────────
+  // Médiane et non moyenne : un seul trade gardé trois mois déplacerait la
+  // moyenne sans rien dire du rythme habituel.
+  const chrono = ts.filter(t => t.held != null);
+  const inconnus = nb - chrono.length;
+  if (chrono.length) {
+    const d = chrono.map(t => t.held).sort((a, b) => a - b);
+    const m = d.length % 2 ? d[(d.length - 1) / 2]
+                           : (d[d.length / 2 - 1] + d[d.length / 2]) / 2;
+    el('c_hold').textContent = duree(m);
+    el('l_hold').textContent = `Durée médiane d'un trade (${chrono.length} chronométré${chrono.length > 1 ? 's' : ''}`
+                             + (inconnus ? `, ${inconnus} sans durée)` : ')');
+    const best = chrono.filter(t => t.pnl > 0).sort((a, b) => b.per_day - a.per_day)[0];
+    el('c_perday').textContent = best ? fmt(best.per_day) + '€/j' : '—';
+    setCls(el('c_perday'), best ? best.per_day : 0);
+    el('l_perday').textContent = best
+      ? `Meilleur gain par jour — ${best.name} en ${duree(best.held)}`
+      : 'Meilleur gain par jour de détention';
+  } else {
+    el('c_hold').textContent = '—';
+    el('l_hold').textContent = inconnus
+      ? `Durée médiane — aucun trade chronométré (${inconnus} antérieurs au suivi)`
+      : "Durée médiane d'un trade";
+    el('c_perday').textContent = '—';
+    el('c_perday').classList.remove('green', 'red');
+    el('l_perday').textContent = 'Meilleur gain par jour de détention';
+  }
+
   // €/jour : sur la durée RÉELLEMENT couverte par la période, bornée à
   // aujourd'hui — diviser une période future par sa durée nominale gonflerait
   // artificiellement le rythme.
@@ -406,7 +457,10 @@ function renderT() {
       <td class="m-hide">${t.entry}</td><td class="m-hide">${t.exit}</td>
       <td>${t.invested}€</td>
       <td class="${c}">${t.pnl >= 0 ? '+' : ''}${t.pnl}€</td>
-      <td class="${c}">${t.roi >= 0 ? '+' : ''}${t.roi}%</td><td>${t.cum}€</td></tr>`;
+      <td class="${c}">${t.roi >= 0 ? '+' : ''}${t.roi}%</td>
+      <td>${duree(t.held)}</td>
+      <td class="m-hide ${t.per_day == null ? '' : c}">${t.per_day == null ? '—' : fmt(t.per_day) + '€'}</td>
+      <td>${t.cum}€</td></tr>`;
   }
 }
 
@@ -417,7 +471,7 @@ const timeScale = {
   ticks: { maxRotation: 0 }
 };
 
-let cumChart = null, barsChart = null;
+let cumChart = null, barsChart = null, speedChart = null;
 
 function redrawCharts() {
   const ts = periodTrades();
@@ -449,6 +503,60 @@ function redrawCharts() {
       pointBorderColor: '#7a9bd4', pointBorderWidth: 2 }] },
     options: { maintainAspectRatio: false, scales: { x: timeScale },
                plugins: { legend: { display: false }, tooltip: tt } }
+  });
+
+  // ── Vitesse : durée de détention (x) × gain en % (y) ────────────────────
+  // Deux mesures dont on cherche la RELATION → nuage de points. Le gain est
+  // en % et non en € pour que des positions de tailles différentes soient
+  // comparables ; la taille du point reste le cash engagé.
+  //
+  // Gagnants et perdants sont distingués par la FORME autant que par la
+  // couleur : le vert #3fd583 et le rouge #ff7070 du dashboard ne sont
+  // séparés que de ΔE 4.8 en deutéranopie (mesuré) — indistinguables pour un
+  // daltonien rouge-vert. Rond plein contre triangle, plus la légende, plus
+  // l'infobulle : l'information ne repose jamais sur la seule couleur.
+  const chr = ts.filter(t => t.held != null);
+  const speedSet = (nom, filtre, couleur, forme) => ({
+    label: nom,
+    data: chr.filter(filtre).map(t => ({ x: t.held, y: t.roi, t })),
+    backgroundColor: couleur, borderColor: '#151923', borderWidth: 2,
+    pointStyle: forme, radius: 9, hoverRadius: 12,
+  });
+  if (speedChart) speedChart.destroy();
+  document.getElementById('speednote').textContent = chr.length
+    ? (chr.length < 5
+        ? `${chr.length} trade${chr.length > 1 ? 's' : ''} chronométré${chr.length > 1 ? 's' : ''} — trop peu pour conclure, le nuage se remplira au fil des sorties.`
+        : `${chr.length} trades chronométrés. En haut à gauche : les trades rapides et rentables.`)
+    : "Aucun trade chronométré pour l'instant — la durée est enregistrée depuis le 13/08/2026.";
+  speedChart = new Chart(document.getElementById('speed'), {
+    type: 'scatter',
+    data: { datasets: [
+      speedSet('Gagnants', t => t.pnl > 0, '#3fd583', 'circle'),
+      speedSet('Perdants', t => t.pnl <= 0, '#ff7070', 'triangle'),
+    ] },
+    options: {
+      maintainAspectRatio: false,
+      scales: {
+        x: { title: { display: true, text: 'jours de détention', color: '#7c8695' },
+             beginAtZero: true, grace: '6%', ticks: { color: '#7c8695' },
+             grid: { color: '#212836' } },
+        // `grace` écarte les points des bords : sans elle un trade extrême se
+        // dessine à cheval sur l'axe. La ligne du zéro est appuyée — c'est
+        // elle qui sépare gain et perte, les autres graduations non.
+        y: { title: { display: true, text: 'gain (%)', color: '#7c8695' },
+             grace: '12%', ticks: { color: '#7c8695' },
+             grid: { color: c => c.tick.value === 0 ? '#4a5364' : '#212836',
+                     lineWidth: c => c.tick.value === 0 ? 2 : 1 } },
+      },
+      plugins: {
+        legend: { labels: { color: '#e6e9ef', usePointStyle: true } },
+        tooltip: { callbacks: { label: c => {
+          const t = c.raw.t;
+          return `${t.name} · ${duree(t.held)} · ROI ${fmt(t.roi)}% `
+               + `(${fmt(t.pnl)}€, ${fmt(t.per_day)}€/j)`;
+        } } },
+      },
+    },
   });
 
   if (barsChart) barsChart.destroy();

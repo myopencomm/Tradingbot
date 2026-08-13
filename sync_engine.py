@@ -300,14 +300,16 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                     f"/add NOM {bd_ticker or '?'}{MIC_SUFFIX.get(mic.upper(), '.PA')} {bd_qty} {bd_pru} <SL> <TP>"
                 )
             else:
-                data.setdefault("positions", {})[new_key] = {
-                    "ticker":      yf_t,
-                    "qty":         bd_qty,
-                    "entry_price": round(entry, 5),
-                    "target_high": round(tp, 4),
-                    "target_low":  round(sl, 4),
-                    "bd_name":     pos["name"],
-                }
+                data.setdefault("positions", {})[new_key] = portfolio.new_position(
+                    yf_t, bd_qty, round(entry, 5), round(sl, 4), round(tp, 4),
+                    bd_name=pos["name"],
+                )
+                # `opened_at` vaut « découverte », pas « achat » : le sync voit
+                # la position au premier passage qui suit l'exécution, dans
+                # l'heure. Pour une position déjà là avant le bot, ce serait
+                # faux de plusieurs semaines — mais ce chemin ne concerne que
+                # les nouvelles apparitions.
+                data["positions"][new_key]["opened_at_source"] = "sync"
                 if pru_native and pru_cur != pos_cur:
                     # Référence brute BD : sert à ne reconvertir que si BD
                     # change son PRU (cf. mise à jour ci-dessus).
@@ -392,7 +394,8 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
 
         import stats
         pnl = stats.record_close(local_key, cfg["ticker"], cfg["qty"],
-                                 cfg["entry_price"], exit_price)
+                                 cfg["entry_price"], exit_price,
+                                 opened_at=cfg.get("opened_at"))
         pct = ((exit_price - cfg["entry_price"]) / cfg["entry_price"]) * 100
         portfolio.clear_gmail_triggered(local_key)
         data["positions"].pop(local_key, None)
