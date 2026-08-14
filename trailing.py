@@ -24,6 +24,44 @@ BREAKEVEN_PCT = AUTO_BREAKEVEN_PCT   # seuil du palier 1 en mode autonome
 _trailing_cancel_failed: set[str] = set()
 
 
+def raise_worth_it(pos: dict, cur_sl: float | None, target: float,
+                   qty: int) -> tuple[bool, str]:
+    """La remontée du SL de `cur_sl` à `target` justifie-t-elle son risque ?
+
+    Retourne (oui/non, raison lisible). Voir `config.TRAIL_MIN_STEP_*` pour le
+    pourquoi des deux seuils : une part de coût FIXE (l'avarie possible pendant
+    l'annulation/repose) et une part PROPORTIONNELLE (ce qui est exposé pendant
+    la fenêtre). Un seuil unique ne peut pas représenter les deux — en euros
+    seuls, une grosse ligne ratchetterait sans arrêt ; en pourcentage seul, une
+    remontée qui vaut 40 € sur une ligne de 5 000 € serait refusée parce qu'elle
+    ne fait que 0,8 %.
+
+    Le gain est ramené en EUROS : le SL d'une position US est en dollars, et le
+    comparer tel quel à un seuil en euros surestimerait l'enjeu de ~15 %.
+    """
+    from config import TRAIL_MIN_STEP_EUR, TRAIL_MIN_STEP_PCT
+    if cur_sl is None:
+        return True, ""
+    entry = pos.get("entry_price") or 0
+    delta = target - cur_sl
+    if delta <= 0 or not entry or not qty:
+        return False, "pas une remontée"
+
+    fx = prices.fx_to_eur(prices._ticker_currency(pos.get("ticker", "")))
+    gain_eur = delta * qty * fx
+    pct = delta / entry * 100
+
+    if gain_eur < TRAIL_MIN_STEP_EUR:
+        return False, (f"ne verrouillerait que {gain_eur:.2f} € de plus "
+                       f"(seuil {TRAIL_MIN_STEP_EUR:.0f} €) — une fenêtre sans "
+                       f"protection ne se joue pas pour ça")
+    if pct < TRAIL_MIN_STEP_PCT:
+        return False, (f"+{gain_eur:.2f} € mais seulement {pct:.2f} % du PRU "
+                       f"(seuil {TRAIL_MIN_STEP_PCT} %) — trop fin, la position "
+                       f"serait à découvert à chaque frémissement")
+    return True, f"verrouille {gain_eur:+.2f} € de plus ({pct:.2f} % du PRU)"
+
+
 def rearm_notifications() -> None:
     """Oublie les échecs déjà signalés, pour que le prochain cycle les redise.
 
@@ -124,7 +162,7 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     voulu — ici l'utilisateur a demandé, il doit obtenir une réponse.
     """
     from config import (BREAKEVEN_THRESHOLD, BREAKEVEN_TOLERANCE_PCT,
-                        TRAIL_LOCK_TRIGGER_PCT, TRAIL_MIN_STEP_PCT)
+                        TRAIL_LOCK_TRIGGER_PCT)
 
     if not (bot_mode.is_playwright() and playwright_session.is_connected()):
         if verbose:
@@ -244,10 +282,12 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                 # le stop d'une position achetée en Expert, ce qui était
                 # impossible jusqu'ici.
                 target, step, step_label = trailing_target(pos, price, tp, atr_pct)
-                if not target or target <= (pos.get("target_low") or 0) + entry * TRAIL_MIN_STEP_PCT / 100:
+                vaut_le_coup, pourquoi = (
+                    raise_worth_it(pos, pos.get("target_low"), target, qty_pos)
+                    if target else (False, "palier non atteint"))
+                if not vaut_le_coup:
                     if verbose:
-                        send_fn(f"  ↳ {name} : protégé (hors carnet), palier "
-                                f"non atteint — rien à faire")
+                        send_fn(f"  ↳ {name} : protégé (hors carnet) — {pourquoi}")
                     continue
                 oids = list(pos.get("protection_ids") or [])
                 send_fn(f"🔁 {name} : remontée du stop {pos.get('target_low')} → "
@@ -381,7 +421,8 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         #   · tolérance BD au breakeven : un SL à 196.84 pour un PRU de 196.90 est
         #     déjà au PRU à 0.03% près, annuler/reposer pour ces centimes ne
         #     rapporte rien ;
-        #   · pas minimal ailleurs : ratcheter de 0.2% n'en vaut pas la peine.
+        #   · `raise_worth_it` ailleurs : deux seuils, en euros ET en % — voir
+        #     config.TRAIL_MIN_STEP_* pour pourquoi un seul ne suffit pas.
         if cur_sl is not None:
             at_breakeven = cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100)
             if step == "breakeven" and at_breakeven:
@@ -389,12 +430,12 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                     send_fn(f"  ↳ {name} : SL déjà au PRU ({cur_sl} vs PRU {entry}, "
                             f"tolérance {BREAKEVEN_TOLERANCE_PCT}%) — rien à faire ✅")
                 continue
-            min_step = entry * TRAIL_MIN_STEP_PCT / 100
-            if target <= cur_sl + min_step:
+            qty_ordre = abs((sl_ord or tp_ord or {}).get("qty") or pos.get("qty") or 0)
+            vaut_le_coup, pourquoi = raise_worth_it(pos, cur_sl, target, qty_ordre)
+            if not vaut_le_coup:
                 if verbose:
-                    send_fn(f"  ↳ {name} : cible {target} trop proche du SL actuel "
-                            f"({cur_sl}) — moins de {TRAIL_MIN_STEP_PCT}% de gain, "
-                            f"le risque d'annuler/reposer n'en vaut pas la peine")
+                    send_fn(f"  ↳ {name} : cible {target} vs SL actuel {cur_sl} — "
+                            f"{pourquoi}")
                 continue
 
         new_sl = round(target, 4)

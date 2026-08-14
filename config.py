@@ -345,11 +345,29 @@ TRAIL_LOCK_MAX_RATIO = float(os.getenv("TRAIL_LOCK_MAX_RATIO", "80"))
 # moins d'1×ATR. Un stop collé au cours se fait sortir par le bruit ordinaire
 # avant que le TP soit atteint — le SL initial est lui posé à 2×ATR.
 TRAIL_MIN_BUFFER_PCT = float(os.getenv("TRAIL_MIN_BUFFER_PCT", "2"))
-# Amélioration minimale du SL (en % du PRU) pour justifier une action. CHAQUE
-# remontée annule les 2 ordres BD et en repose un : cette fenêtre a déjà laissé
-# une position à nu (UNA, 28/07/2026). Ratcheter pour 0.2% n'en vaut pas le
-# risque — 0 rendrait le trailing bavard ET dangereux.
-TRAIL_MIN_STEP_PCT = float(os.getenv("TRAIL_MIN_STEP_PCT", "1"))
+# ── Quand une remontée du SL vaut-elle son risque ? ─────────────────────────
+# CHAQUE remontée annule les DEUX ordres BD (le SL et le TP — BD ne sait pas
+# modifier un Expert) et en repose un. Entre les deux, la position n'a aucune
+# protection ; cette fenêtre a déjà laissé une position à nu (UNA, 28/07/2026).
+#
+# Le coût d'une remontée a deux composantes, et il faut les deux seuils :
+#   · une part FIXE — le risque qu'une annulation/repose tourne mal, à peu près
+#     indépendant de la taille de la ligne. C'est le seuil en EUROS : en dessous,
+#     on joue une avarie possible contre des cacahuètes.
+#   · une part PROPORTIONNELLE — ce qui est exposé pendant la fenêtre grandit
+#     avec la position. C'est le seuil en POURCENTAGE : il empêche une grosse
+#     ligne de ratcheter à chaque frémissement du cours.
+#
+# Une remontée doit franchir LES DEUX. En pratique le seuil en euros commande
+# les petites lignes (1 % du PRU d'une position de 1 000 € ne fait que 10 €) et
+# le pourcentage commande les grosses (0,2 % d'une ligne de 5 000 € fait déjà
+# 10 €, inutile d'exiger davantage).
+#
+# Mesuré sur AIR le 14/08/2026, cours de 213 à 217 : à 1 % le bot remontait UNE
+# fois (+10,35 € verrouillés), à 0 % neuf fois (+14,80 €) — 4,45 € de plus pour
+# neuf fenêtres sans protection au lieu d'une.
+TRAIL_MIN_STEP_EUR = float(os.getenv("TRAIL_MIN_STEP_EUR", "5"))
+TRAIL_MIN_STEP_PCT = float(os.getenv("TRAIL_MIN_STEP_PCT", "0.2"))
 
 # Scheduler (Paris time, 24h format)
 CHECK_TIMES = ["09:00", "12:00", "15:00", "17:00"]

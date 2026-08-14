@@ -731,6 +731,38 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-14 (2) — Le seuil de remontée du SL devient proportionnel à l'enjeu
+Le trailing refusait de remonter le SL d'AIR de 209,7 à 210,7 : « moins de 1 %
+de gain ». Objection légitime — **ça ne coûte ni token ni euro**, annuler et
+reposer un ordre non exécuté est gratuit chez BD.
+
+Le coût est ailleurs : chaque remontée annule **le SL *et* le TP** (BD ne sait
+pas modifier un Expert), vérifie chaque annulation jusqu'à trois fois, puis
+repose. Entre les deux, la position n'a **aucune protection** — la fenêtre qui a
+laissé UNA à nu le 28/07.
+
+Mesuré sur AIR, cours de 213 à 217 : seuil à 1 % → **1** remontée (+10,35 €
+verrouillés) ; seuil à 0 % → **9** remontées (+14,80 €). Soit 4,45 € de plus
+pour neuf fenêtres sans protection au lieu d'une. Et ces euros ne se
+matérialisent **que si le stop est touché** : si le titre va au TP, toutes ces
+remontées étaient du risque pur.
+
+Le seuil unique en pourcentage avait pourtant un vrai défaut : sur une ligne de
+5 000 €, 1 % du PRU représente 50 € — on refusait des remontées qui valaient
+40 €. Deux seuils remplacent donc l'unique, et une remontée doit franchir **les
+deux** :
+
+| | rôle | commande |
+|---|---|---|
+| `TRAIL_MIN_STEP_EUR` (5 €) | coût **fixe** — l'avarie possible | les petites lignes |
+| `TRAIL_MIN_STEP_PCT` (0,2 %) | coût **proportionnel** — ce qui est exposé | les grosses lignes |
+
+Le gain est ramené en euros avant comparaison : le SL d'une position US est en
+dollars, le comparer tel quel surestimerait l'enjeu d'environ 15 %.
+
+Effet sur AIR : la barre passe de 9,85 € à 5,00 €, et la même montée de 213 à
+217 déclenche 2 remontées au lieu d'une (+12,22 € au lieu de +10,35 €).
+
 ### 2026-08-14 — `/trailing` cassé depuis la découpe, et le test qui manquait
 *« Erreur trailing : module 'autonomous_engine' has no attribute
 '_trailing_cancel_failed' »* — et la commande n'allait même pas jusqu'au cycle :
