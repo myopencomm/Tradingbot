@@ -1282,15 +1282,15 @@ def cmd_trailing(args, cid):
     if not playwright_session.is_connected():
         send("Session Playwright non connectee. /connect pour relancer.", cid)
         return
-    import autonomous_engine
+    import trailing
 
     def _do_trailing():
         try:
             # Réarme les notifications d'échec : l'utilisateur demande
             # explicitement un état, il doit le recevoir même si le même
             # échec a déjà été signalé lors d'un cycle automatique.
-            autonomous_engine._trailing_cancel_failed.clear()
-            autonomous_engine.trailing_stop_cycle(lambda m: send(m, cid), verbose=True)
+            trailing.rearm_notifications()
+            trailing.trailing_stop_cycle(lambda m: send(m, cid), verbose=True)
         except Exception as e:
             send(f"Erreur trailing : {e}", cid)
 

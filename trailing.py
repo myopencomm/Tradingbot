@@ -23,6 +23,24 @@ BREAKEVEN_PCT = AUTO_BREAKEVEN_PCT   # seuil du palier 1 en mode autonome
 # boucle (chaque tentative ratée laisse une fenêtre sans protection).
 _trailing_cancel_failed: set[str] = set()
 
+
+def rearm_notifications() -> None:
+    """Oublie les échecs déjà signalés, pour que le prochain cycle les redise.
+
+    Appelé par `/trailing` : l'utilisateur qui demande explicitement un état
+    doit le recevoir en entier, même si le même échec a déjà été annoncé lors
+    d'un cycle automatique.
+
+    Existe pour que personne n'ait à toucher `_trailing_cancel_failed` depuis
+    un autre module. C'est exactement ce que faisait `telegram_bot`, en allant
+    le chercher sur `autonomous_engine` — et quand cet état a déménagé ici
+    (13/08/2026), `/trailing` s'est mis à répondre « module
+    'autonomous_engine' has no attribute '_trailing_cancel_failed' » sans même
+    lancer le cycle. Une fonction publique ne peut pas casser en silence de
+    cette façon : elle est importée, donc vérifiable.
+    """
+    _trailing_cancel_failed.clear()
+
 def tp_progress(entry: float, tp: float | None, price: float) -> float | None:
     """Part du chemin PRU → TP déjà parcourue (0 = au PRU, 1 = au TP)."""
     if not entry or not tp or tp <= entry:

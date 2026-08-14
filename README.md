@@ -731,6 +731,36 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-14 — `/trailing` cassé depuis la découpe, et le test qui manquait
+*« Erreur trailing : module 'autonomous_engine' has no attribute
+'_trailing_cancel_failed' »* — et la commande n'allait même pas jusqu'au cycle :
+elle échouait sur sa **première ligne**.
+
+`telegram_bot` réarmait un compteur d'échecs en atteignant l'état **privé**
+d'`autonomous_engine`. La découpe du 13/08 a déplacé cet état dans
+`trailing.py` ; le bloc d'alias laissé derrière ne ré-exportait que les
+**fonctions**, pas l'état.
+
+**Le trailing automatique n'a jamais cessé** : `main` et `monitor` appellent
+`trailing_stop_cycle`, un nom bien ré-exporté. Seule la commande manuelle était
+morte, du 13/08 au 14/08.
+
+Pourquoi rien ne l'a vu : un accès `module.attribut` se résout à l'exécution —
+`py_compile` n'y voit rien — et le `except Exception` du handler transformait
+l'`AttributeError` en message Telegram au lieu d'un plantage.
+
+- **`trailing.rearm_notifications()`** remplace l'accès à l'état privé. Une
+  fonction publique est importée, donc vérifiable ; un attribut atteint de
+  l'extérieur ne l'est pas.
+- **Un test parcourt le code et vérifie que chaque `module.attribut` écrit en
+  dur existe réellement** — exactement la classe d'erreur qu'un déplacement
+  produit. Il distingue les vrais modules des variables locales homonymes
+  (`orders.append` sur une liste nommée `orders`) et suit les alias
+  (`import sizing as _ae`). Vérifié en réintroduisant le bug : il désigne la
+  ligne fautive.
+- Plus un test qui exerce `/trailing` de bout en bout, puisqu'il n'y en avait
+  aucun.
+
 ### 2026-08-13 (6) — Les coûts API affichaient 5,12 € pour 12,63 € dépensés
 Plus de la moitié de la facture manquait. Deux causes qui se cumulaient :
 
