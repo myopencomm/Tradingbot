@@ -121,6 +121,17 @@ class TestCeQuOnDitDuCours:
             for interdit in ("yfinance", "yahoo", "bourse direct", "yf"):
                 assert interdit not in note, f"« {interdit} » dans : {note}"
 
+    def test_un_cours_sans_date_n_est_jamais_presente_comme_frais(self):
+        """Reconstitution du 18/08 : GVN s'est retrouvé avec un cours BD sans
+        `bd_price_at`. Sans date, l'âge est inconnu — le déclarer à jour serait
+        exactement l'erreur que ce module existe pour empêcher."""
+        b = portfolio.best_price(
+            {"ticker": "X.PA", "bd_price": 10.0},
+            q(price=None, stale=True, as_of=None))
+        assert b["price"] == 10.0
+        assert b["stale"] is True
+        assert "sans date" in b["note"]
+
     def test_stale_et_note_vont_toujours_ensemble(self):
         """Un cours périmé sans explication, ou une explication sur un cours
         frais, seraient tous deux des incohérences."""

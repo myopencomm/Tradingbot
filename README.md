@@ -758,6 +758,24 @@ devenu vieux de cinq séances. Ils sont désormais relatifs à aujourd'hui — u
 test de caractérisation dont le verdict dépend du calendrier ne caractérise
 plus rien.
 
+### 2026-08-18 (3) — Séquelle de la restauration : `bd_name` manquait
+Le `/sync` suivant a produit deux avertissements contradictoires sur GVN : « sur
+BD, impossible d'auto-ajouter » ET « absent des positions BD, clôture refusée ».
+La même ligne, vue à la fois comme nouvelle et comme disparue.
+
+L'état reconstitué à la main omettait `bd_name`. Or la ligne BD de GVN n'a
+**aucun ticker** — titre suspendu, plus de lien marché — et son nom
+« GENOMIC VISION » n'a aucun rapport avec la clé locale `GVN` ni avec son ticker
+`FR0011799907.PA`, qui est un ISIN. `bd_name` est précisément le champ qui sert
+à rapprocher ce cas ; sans lui, rien ne relie les deux. MCPHY s'en sortait par
+chance (« MCPHY » est contenu dans « MCPHY ENERGY »).
+
+Corrigé au niveau de la donnée. Et un défaut du code, introduit le matin même
+avec le nouveau calcul d'âge : **un cours sans date était traité comme frais**.
+GVN, privé de `bd_price_at`, se serait affiché comme à jour indéfiniment. Un
+cours dont on ignore l'âge se dit désormais tel quel — c'est exactement l'erreur
+que ce module existe pour empêcher.
+
 ### 2026-08-18 (2) — Un test a écrasé `positions.json`
 En écrivant le test de bout en bout ci-dessus, `portfolio.load()` a été simulé…
 **mais pas `portfolio.save()`**. Or `monitor.check_positions` écrit — il réarme

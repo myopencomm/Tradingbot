@@ -186,9 +186,17 @@ def best_price(cfg: dict, quote: dict | None = None) -> dict:
         jour = (as_of or "")[:10]
         try:
             from datetime import date
-            age = _prices._sessions_since(date.fromisoformat(jour)) if jour else 0
+            age = _prices._sessions_since(date.fromisoformat(jour)) if jour else None
         except ValueError:
-            age = 0
+            age = None
+        # Un cours SANS date ne peut pas être déclaré à jour. Le dire, plutôt
+        # que de le présenter comme frais : c'est exactement l'erreur que ce
+        # module existe pour empêcher.
+        if age is None:
+            return {"price": price, "currency": currency, "source": source,
+                    "as_of": as_of, "stale": True,
+                    "note": "cours sans date connue — impossible de garantir "
+                            "qu'il est à jour"}
         # Une séance d'écart, c'est la dernière clôture : normal avant
         # l'ouverture, normal le week-end. Au-delà, le titre n'a pas coté et
         # le lecteur doit le savoir.
