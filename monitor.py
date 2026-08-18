@@ -123,7 +123,10 @@ def check_positions(send_fn, us_only: bool = False) -> None:
         change_pct = v["chg_pct"]
         pnl        = v["pnl"]
         icon       = "📈" if change_pct >= 0 else "📉"
-        src_tag    = "" if v["source"] == "yf" else f"\n     ⚠️ {v['note']}"
+        # On ne signale un cours QUE s'il est réellement périmé. Dire d'où il
+        # vient à chaque ligne, c'était exposer la plomberie du bot au lieu de
+        # répondre à « ce chiffre est-il bon ? » (18/08/2026).
+        src_tag    = f"\n     ⚠️ {v['note']}" if v["stale"] else ""
         # Un SL/TP mémorisé n'est pas un SL/TP actif : le dernier sync dit si un
         # ordre les porte réellement sur BD (cas BAC, 05/08/2026).
         pend_tag = position_view.alerte_stop_en_attente(v, indent="     ")

@@ -26,11 +26,54 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import tg  # noqa: E402  (après l'ajout du chemin)
+import config  # noqa: E402  (après l'ajout du chemin)
+import tg      # noqa: E402
 
 
 class SortieReseauInterdite(RuntimeError):
     """Levée quand un test tente de joindre le monde extérieur."""
+
+
+class EcritureEtatInterdite(RuntimeError):
+    """Levée quand un test tente d'écrire un fichier d'état RÉEL."""
+
+
+@pytest.fixture(autouse=True)
+def _etat_en_bac_a_sable(tmp_path, monkeypatch):
+    """Aucun test n'écrit dans les fichiers d'état réels.
+
+    INCIDENT DU 18/08/2026 : un test remplaçait `portfolio.load()` par un
+    portefeuille fictif — mais pas `portfolio.save()`. `monitor.check_positions`
+    écrit (il réarme les drapeaux d'alerte) : il a donc sauvegardé le faux
+    portefeuille PAR-DESSUS le vrai. `positions.json` s'est retrouvé réduit à
+    une position avec les seuils du test.
+
+    Remplacer `load` sans remplacer `save` est une erreur trop facile à faire
+    pour qu'on compte sur la vigilance. Les CHEMINS sont donc redirigés vers un
+    dossier temporaire : même un `save()` non simulé n'atteint plus rien de
+    réel. Un test qui veut lire l'état le simule, comme avant.
+
+    Frère du coupe-circuit réseau : la même leçon, appliquée au disque.
+    """
+    bac = tmp_path / "etat"
+    bac.mkdir()
+    reels = {
+        "POSITIONS_PATH": bac / "positions.json",
+        "HISTORY_PATH":   bac / "trades_history.json",
+    }
+    for nom, chemin in reels.items():
+        monkeypatch.setattr(config, nom, chemin, raising=False)
+    # Les modules ont capturé le chemin à l'import : on les redirige aussi.
+    import history
+    import portfolio
+    monkeypatch.setattr(portfolio, "POSITIONS_PATH", reels["POSITIONS_PATH"])
+    monkeypatch.setattr(history, "HISTORY_PATH", reels["HISTORY_PATH"])
+    try:
+        import api_costs
+        monkeypatch.setattr(api_costs, "COSTS_PATH", bac / "api_costs.json")
+    except Exception:
+        pass
+    return bac
 
 
 @pytest.fixture(autouse=True)

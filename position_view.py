@@ -35,8 +35,10 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
     Champs retournés
     ----------------
     name, ticker, qty, entry              identité et PRU en devise de cotation
-    price, currency, sym, source, note    cours retenu et sa PROVENANCE
-                                          source : 'yf' | 'bd' | 'yf_stale' | ''
+    price, currency, sym                  cours retenu
+    source                                provenance ('yf'|'bd'|'yf_stale') —
+                                          diagnostic, pas pour l'utilisateur
+    stale, note                           le cours est-il périmé, et pourquoi | ''
     chg_pct, pnl                          en devise de COTATION
     entry_eur, pnl_eur, chg_eur           en EUROS (dashboard, totaux)
     sl, tp                                seuils mémorisés
@@ -102,7 +104,11 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
         "price":      price,
         "currency":   currency,
         "sym":        market.symbol(currency),
+        # `source` reste pour le diagnostic ; `stale` est ce sur quoi les
+        # rendus décident, parce que c'est la question du lecteur : ce chiffre
+        # est-il à jour ? La provenance ne l'est pas.
         "source":     best["source"],
+        "stale":      best["stale"],
         "note":       best["note"],
         "as_of":      best["as_of"],
         "chg_pct":    chg_pct,

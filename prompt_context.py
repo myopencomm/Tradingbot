@@ -170,7 +170,10 @@ def _portfolio_snapshot() -> str:
             sym = v["sym"]
             cur_tag = (" | ⚠️ perf aberrante, PRU probablement dans la mauvaise devise — ignorer ce P&L"
                        if v["aberrant"] else "")
-            if v["source"] != "yf":
+            # L'IA, elle, DOIT savoir qu'un cours est vieux : elle raisonne
+            # dessus. Mais seulement quand il l'est vraiment — le critère est
+            # l'âge du cours, pas la bibliothèque qui l'a fourni.
+            if v["stale"]:
                 cur_tag += f" | ⚠️ {v['note']}"
             # ── Ce que l'IA ne voyait PAS avant (11/08/2026) ────────────────
             # Le snapshot annoncé comme « SOURCE DE VÉRITÉ » présentait les

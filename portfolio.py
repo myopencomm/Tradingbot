@@ -157,8 +157,9 @@ def get_auto_pending_orders() -> dict:
 def best_price(cfg: dict, quote: dict | None = None) -> dict:
     """Meilleur cours disponible pour une position DÉTENUE, avec sa provenance.
 
-    Retourne {price, currency, source, as_of, note} — `price` à None si aucune
-    source. `source` : 'yf' | 'bd' | 'yf_stale'.
+    Retourne {price, currency, source, as_of, stale, note}. `price` à None si
+    aucune source. `source` : 'yf' | 'bd' | 'yf_stale' — c'est de la plomberie,
+    utile au diagnostic, jamais à montrer à l'utilisateur.
 
     Ordre : yfinance frais → relevé Bourse Direct → yfinance périmé (faute de
     mieux). BD passe AVANT un yfinance périmé parce que le sync horaire le
@@ -169,14 +170,38 @@ def best_price(cfg: dict, quote: dict | None = None) -> dict:
     trois séances en les présentant comme courants : NVDA à 200.75 quand BD
     cotait 206.64, AIR à 208.00 quand BD cotait 211.40. Le P&L affiché, les
     alertes SL/TP et le trailing raisonnaient tous sur ces cours morts.
+
+    `stale` et `note` répondent à la SEULE question qui intéresse le lecteur :
+    « ce chiffre est-il à jour ? ». Ils ne parlent donc pas de la source qui a
+    échoué. Le bot annonçait « cours Bourse Direct du 17/08 22:35 — yfinance
+    périmé (14/08) » sur un cours qui était la dernière clôture, donc
+    parfaitement bon : de la plomberie prise pour une alerte (18/08/2026).
     """
     import prices as _prices
     q = quote if quote is not None else _prices.get_quote(cfg.get("ticker", ""))
     price, stale = q.get("price"), q.get("stale")
 
+    def _fini(price, currency, source, as_of):
+        """Habille un cours retenu : son âge décide de ce qu'on en dit."""
+        jour = (as_of or "")[:10]
+        try:
+            from datetime import date
+            age = _prices._sessions_since(date.fromisoformat(jour)) if jour else 0
+        except ValueError:
+            age = 0
+        # Une séance d'écart, c'est la dernière clôture : normal avant
+        # l'ouverture, normal le week-end. Au-delà, le titre n'a pas coté et
+        # le lecteur doit le savoir.
+        perime = age >= 2
+        note = ""
+        if perime:
+            note = (f"cours du {jour} — pas de cotation depuis "
+                    f"{age} séances, ce chiffre peut avoir bougé")
+        return {"price": price, "currency": currency, "source": source,
+                "as_of": as_of, "stale": perime, "note": note}
+
     if price is not None and not stale:
-        return {"price": price, "currency": q.get("currency", "EUR"),
-                "source": "yf", "as_of": q.get("as_of"), "note": ""}
+        return _fini(price, q.get("currency", "EUR"), "yf", q.get("as_of"))
 
     bd_price = cfg.get("bd_price")
     # Un relevé BD plus VIEUX que la barre yfinance ne vaut pas mieux (session
@@ -186,20 +211,15 @@ def best_price(cfg: dict, quote: dict | None = None) -> dict:
     if bd_price and bd_at and q.get("as_of") and bd_at < q["as_of"]:
         bd_price = None
     if bd_price:
-        at = cfg.get("bd_price_at")
-        return {"price": bd_price,
-                "currency": cfg.get("bd_price_currency") or q.get("currency", "EUR"),
-                "source": "bd", "as_of": at,
-                "note": (f"cours Bourse Direct{' du ' + at[:16].replace('T', ' ') if at else ''}"
-                         f" — yfinance périmé ({q.get('as_of') or 'aucune donnée'})")}
+        return _fini(bd_price,
+                     cfg.get("bd_price_currency") or q.get("currency", "EUR"),
+                     "bd", cfg.get("bd_price_at"))
 
     if price is not None:
-        return {"price": price, "currency": q.get("currency", "EUR"),
-                "source": "yf_stale", "as_of": q.get("as_of"),
-                "note": f"cours yfinance PÉRIMÉ du {q.get('as_of')} — aucun relevé BD"}
+        return _fini(price, q.get("currency", "EUR"), "yf_stale", q.get("as_of"))
 
     return {"price": None, "currency": q.get("currency", "EUR"),
-            "source": "", "as_of": None, "note": ""}
+            "source": "", "as_of": None, "stale": False, "note": ""}
 
 
 def quote_problem(cfg: dict, quote: dict) -> tuple[str, str]:

@@ -731,6 +731,53 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-18 — Le bot disait sa plomberie au lieu de dire l'essentiel
+Trois lignes de STATUS sur six portaient *« ⚠️ cours Bourse Direct du 17/08
+22:35 — yfinance périmé (2026-08-14) »* — sur des cours qui étaient la dernière
+clôture, donc parfaitement bons. Le bot avait déjà retenu la bonne valeur ; il
+exposait le détail de son approvisionnement à la place de répondre à la seule
+question du lecteur : **ce chiffre est-il à jour ?**
+
+Trois avertissements sur un status de six lignes n'inspirent pas confiance,
+surtout quand rien ne va mal.
+
+- **Le critère devient l'ÂGE du cours retenu**, plus la source qui a échoué.
+  Une séance d'écart, c'est la dernière clôture — normal avant l'ouverture,
+  normal le week-end, rien à signaler. Au-delà de deux séances, le titre n'a pas
+  coté et le lecteur doit le savoir : *« cours du 12/08 — pas de cotation depuis
+  4 séances, ce chiffre peut avoir bougé »*.
+- **Aucune note ne nomme plus yfinance, Yahoo ou Bourse Direct.** La provenance
+  reste dans `source`, pour le diagnostic ; l'utilisateur voit `stale` et une
+  phrase qui parle de son argent. Un test refuse le retour de ces mots.
+- **L'IA garde l'information** : elle raisonne sur les cours, elle doit savoir
+  qu'un chiffre est vieux — mais avec le même critère, l'âge réel.
+
+Au passage, deux tests sont tombés non parce que le code avait changé mais
+parce que leurs **dates écrites en dur avaient vieilli** : « 2026-08-11 » était
+devenu vieux de cinq séances. Ils sont désormais relatifs à aujourd'hui — un
+test de caractérisation dont le verdict dépend du calendrier ne caractérise
+plus rien.
+
+### 2026-08-18 (2) — Un test a écrasé `positions.json`
+En écrivant le test de bout en bout ci-dessus, `portfolio.load()` a été simulé…
+**mais pas `portfolio.save()`**. Or `monitor.check_positions` écrit — il réarme
+les drapeaux d'alerte. Il a donc sauvegardé le portefeuille fictif par-dessus le
+vrai : `positions.json` réduit à une position, avec les seuils du test.
+
+Rien n'est parti chez le courtier — les ordres SL/TP réels étaient intacts sur
+BD, seul le fichier local a été touché. L'état a été reconstitué depuis le log
+du bot (lignes BD horodatées : quantités, PRU, cours) et les ordres actifs
+relevés au même moment.
+
+C'est le frère de l'incident du 13/08, où la suite de tests envoyait de vrais
+messages Telegram : une règle qui repose sur la vigilance finit par céder.
+
+- **Les chemins des fichiers d'état sont redirigés vers un dossier temporaire**
+  pour TOUS les tests (`autouse`). Même un `save()` non simulé n'atteint plus
+  rien de réel.
+- **Vérifié en désactivant le garde-fou** : les trois tests tombent et
+  `positions.json` est modifié. Réactivé, ils passent et le fichier est intact.
+
 ### 2026-08-14 (2) — Le seuil de remontée du SL devient proportionnel à l'enjeu
 Le trailing refusait de remonter le SL d'AIR de 209,7 à 210,7 : « moins de 1 %
 de gain ». Objection légitime — **ça ne coûte ni token ni euro**, annuler et

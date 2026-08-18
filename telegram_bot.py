@@ -141,7 +141,7 @@ def cmd_status(args, cid):
             sl_tag = " ⚠️ SL DÉPASSÉ" if price < v["sl"] else ""
             tp_tag = " ⚠️ TP DÉPASSÉ" if price > v["entry"] * 1.25 else ""
             cur_tag = ""
-            if v["source"] != "yf":
+            if v["stale"]:
                 cur_tag = f"\n  ⚠️ {v['note']}"
             if v["aberrant"]:
                 cur_tag = (f"\n  ❗ Perf aberrante — PRU dans la mauvaise devise ?"
