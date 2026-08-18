@@ -299,6 +299,39 @@ def create_order(page, ticker: str, side: str, qty: int,
 
     validity_api, validity_date = parse_validity(validity, info["mic"])
 
+    # ── Pas de cotation US, appliqué AVANT l'envoi ──────────────────────────
+    # Les actions américaines se traitent au cent (SEC Rule 612 : 0.01 $ au
+    # dessus d'un dollar). Le bot envoyait des limites à trois décimales et
+    # comptait sur BD pour le corriger — BD renvoie en effet un 400 « Le pas de
+    # cotation pour cette limite est 0.01 », et l'ordre est retenté arrondi.
+    #
+    # Mais cette validation de BD est INCONSTANTE. Le 18/08/2026, RTX à
+    # 224.431 $ est passé sans 400 : `create_order` a répondu 200, puis le NYSE
+    # a refusé l'ordre. Le carnet légal le dit mot pour mot — « Achat rejeté
+    # marché » — et ni l'app ni l'API ne donnent le motif. JNJ, la veille, avait
+    # eu le 400 et s'était exécuté sans problème après arrondi.
+    #
+    # On n'attend donc plus que BD s'en aperçoive : les prix US sont arrondis
+    # ici. Le retry sur 400 reste en place pour les autres places, dont le pas
+    # dépend du cours et que BD, lui, signale de façon fiable.
+    if info["currency"] == "USD":
+        tick_us = 0.01 if (limit_price or 1) >= 1 else 0.0001
+        if limit_price is not None:
+            arrondi = _round_to_tick(limit_price, tick_us,
+                                     "down" if side == "buy" else "up")
+            if arrondi != limit_price:
+                print(f"[BD Orders] {ticker} : limite {limit_price} → {arrondi} "
+                      f"(pas US {tick_us})")
+                limit_price = arrondi
+        if stop_price is not None:
+            stop_price = _round_to_tick(stop_price, tick_us, "up")
+        if smart:
+            smart = dict(smart)
+            if smart.get("stop_loss") is not None:
+                smart["stop_loss"] = _round_to_tick(smart["stop_loss"], tick_us, "up")
+            if smart.get("take_profit") is not None:
+                smart["take_profit"] = _round_to_tick(smart["take_profit"], tick_us, "down")
+
     payload = {
         "login":           BD_LOGIN.upper(),
         "mic":             info["mic"],

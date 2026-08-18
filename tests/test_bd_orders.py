@@ -115,3 +115,45 @@ class TestOrdreRejete:
         import bourse_direct_reader as reader
         o = reader._parse_order(self._row(self.REJETE))
         assert o["statut"] != "En cours"
+
+
+class TestPasDeCotationUS:
+    """Les actions américaines se traitent au cent.
+
+    INCIDENT DU 18/08/2026 : RTX envoyé à 224.431 $ — trois décimales. BD a
+    répondu 200 (`create_order OK`), puis le NYSE a refusé. Le carnet légal le
+    dit mot pour mot : « Achat rejeté marché ». Ni l'app ni l'API ne donnent le
+    motif, et le bouton d'annulation renvoie « Une erreur s'est produite ».
+
+    Le bot comptait sur la validation de BD, qui renvoie bien un 400 « Le pas de
+    cotation pour cette limite est 0.01 »… mais pas toujours : JNJ l'avait eu la
+    veille et s'était exécuté après arrondi, RTX ne l'a jamais eu. Une garantie
+    qui ne se déclenche qu'une fois sur deux n'en est pas une.
+    """
+
+    def test_un_prix_us_a_trois_decimales_est_arrondi(self):
+        """LE cas RTX : 224.431 n'est pas un prix traitable au NYSE."""
+        assert bd._round_to_tick(224.431, 0.01, "down") == 224.43
+
+    def test_l_achat_arrondit_vers_le_bas_la_vente_vers_le_haut(self):
+        """Conservateur : on ne paie jamais plus cher que voulu à l'achat, on
+        ne vend jamais moins cher que voulu."""
+        assert bd._round_to_tick(224.431, 0.01, "down") == 224.43   # achat
+        assert bd._round_to_tick(224.431, 0.01, "up") == 224.44     # vente
+
+    def test_un_prix_deja_au_cent_ne_bouge_pas(self):
+        """JNJ après arrondi valait 262.29 — un second passage doit le laisser
+        intact, sinon chaque ordre dériverait d'un cent."""
+        for p in (262.29, 215.0, 248.5, 286.95):
+            assert bd._round_to_tick(p, 0.01, "down") == p
+            assert bd._round_to_tick(p, 0.01, "up") == p
+
+    def test_le_stop_monte_et_le_profit_descend(self):
+        """Arrondir un SL vers le bas l'éloignerait de la protection voulue ;
+        arrondir un TP vers le haut le rendrait plus dur à atteindre."""
+        assert bd._round_to_tick(215.004, 0.01, "up") == 215.01
+        assert bd._round_to_tick(248.506, 0.01, "down") == 248.5
+
+    def test_les_actions_sous_un_dollar_ont_un_pas_plus_fin(self):
+        """SEC Rule 612 : 0.0001 sous le dollar."""
+        assert bd._round_to_tick(0.87654, 0.0001, "down") == 0.8765

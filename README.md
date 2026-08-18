@@ -731,6 +731,31 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-18 (5) — RTX : le NYSE a refusé un prix à trois décimales
+Le motif du rejet, que ni l'app ni l'API ne donnent, est écrit dans le carnet
+légal : **« Achat rejeté marché »**. Ce n'est pas Bourse Direct qui a refusé,
+c'est le NYSE.
+
+La limite envoyée était **224.431 $**. Les actions américaines se traitent au
+cent (SEC Rule 612) : trois décimales est un prix intraitable.
+
+Le bot comptait sur la validation de BD, qui renvoie bien un
+`400 — Le pas de cotation pour cette limite est 0.01` et déclenche un retry
+arrondi. **Mais cette validation est inconstante** : JNJ l'avait eue la veille
+et s'était exécuté après arrondi ; RTX ne l'a jamais eue — `create_order` a
+répondu 200, et l'ordre est mort à la bourse. Une garantie qui ne se déclenche
+qu'une fois sur deux n'en est pas une.
+
+- **Les prix US sont arrondis au cent AVANT l'envoi**, sans attendre que BD
+  s'en aperçoive. Achat vers le bas, vente vers le haut, SL vers le haut, TP
+  vers le bas — on ne paie jamais plus cher ni ne protège moins que voulu.
+- **Le retry sur 400 reste** pour les autres places, dont le pas dépend du cours
+  (AIR : 0,05) et que BD signale de façon fiable.
+
+Bonne nouvelle au passage, lisible dans le même carnet : les deux jambes de
+protection de RTX **n'y figurent pas**. Le « Ordre en cours » affiché par l'app
+est un artefact — rien n'est réellement actif côté marché.
+
 ### 2026-08-18 (4) — Un ordre rejeté par BD était invisible de bout en bout
 `/order/create` a répondu 200 pour RTX, avec un id et ses deux jambes de
 protection. Le bot a annoncé **« ✅ ORDRE AUTONOME PLACÉ SUR BD »**, crédité
