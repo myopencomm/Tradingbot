@@ -769,7 +769,15 @@ def _parse_order(text: str) -> dict | None:
     # Exécution AVANT "Annulé" : sur un ordre TP/SL à 2 volets exécuté, le
     # volet non déclenché est "Annulé" et le volet déclenché porte "Exé." —
     # c'est une exécution, pas une annulation.
-    if re.search(r'en cours', flat, re.I):
+    # REJETÉ en premier : BD refuse un ordre APRÈS l'avoir accepté à la
+    # création (`/order/create` répond 200 avec un id et ses enfants). Aucun
+    # des motifs ci-dessous ne s'applique alors, et le statut restait à None :
+    # le rejet était invisible pour tout le bot. RTX, 18/08/2026 — « ORDRE
+    # AUTONOME PLACÉ SUR BD ✅ » annoncé sur un achat que BD venait de refuser,
+    # découvert sur le téléphone.
+    if re.search(r'rejet', flat, re.I):
+        order["statut"] = "Rejeté"
+    elif re.search(r'en cours', flat, re.I):
         order["statut"] = "En cours"
     elif m_ex or re.search(r'exécuté|execute', flat, re.I):
         # Conservé pour la détection automatique des ventes par le sync.

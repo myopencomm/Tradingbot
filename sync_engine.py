@@ -692,3 +692,69 @@ def schedule_post_order_sync(cid=None, delay: float = 8.0):
             print(f"[post-order sync] {e}")
 
     threading.Timer(delay, _run).start()
+
+
+def schedule_order_verification(order_id: str, ticker: str, send_fn,
+                                delay: float = 45.0) -> None:
+    """Vérifie qu'un ordre passé sur BD a bien SURVÉCU, et le dit.
+
+    `/order/create` répond 200 avec un id et ses jambes de protection — puis BD
+    peut rejeter l'ordre APRÈS coup, sans prévenir. Le bot annonçait donc
+    « ✅ ORDRE AUTONOME PLACÉ SUR BD », créditait l'engagement au budget, et ne
+    revenait jamais vérifier. Le 18/08/2026, l'achat de RTX a été refusé par BD
+    quelques minutes après : découvert sur le téléphone, jamais annoncé.
+
+    Annoncer un succès sans en contrôler l'issue, c'est la même faute que
+    l'alerte du watchdog qui ne revenait pas sur son verdict.
+
+    Le délai laisse à BD le temps de statuer : le rejet n'est pas instantané.
+    """
+    import threading
+
+    import playwright_session
+    import portfolio
+    import tg
+
+    def _verifier():
+        try:
+            bd = playwright_session.run(
+                lambda page: reader.get_portfolio(page, send_fn=None), timeout=90)
+        except Exception as e:
+            print(f"[verif ordre] {ticker} : lecture impossible ({e})")
+            return
+        # Onglet ordres illisible : on ne conclut rien — même règle que le
+        # contrôle de protection (11/08). Une liste vide n'est pas une preuve.
+        if not (bd and bd.get("orders_read", True)):
+            print(f"[verif ordre] {ticker} : ordres non lus, aucune conclusion")
+            return
+
+        base = (ticker or "").upper().split(".")[0]
+        mien = [o for o in bd.get("orders", [])
+                if order_id and order_id in (o.get("order_ids") or [o.get("order_id")])]
+        if not mien:
+            mien = [o for o in bd.get("orders", [])
+                    if (o.get("bd_ticker") or "").upper() == base]
+        statut = mien[0].get("statut") if mien else None
+
+        if statut == "Rejeté":
+            # L'ordre n'existe pas : l'engagement doit être rendu au budget,
+            # sinon il gèlerait une place jusqu'à l'expiration.
+            portfolio.clear_auto_pending_order(ticker)
+            (send_fn or tg.send)(
+                f"🚫 {ticker} : ORDRE REJETÉ PAR BOURSE DIRECT\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"L'ordre a bien été créé puis refusé par BD — aucun titre "
+                f"acheté, aucun euro engagé.\n"
+                f"BD ne donne pas de motif ici : ouvre le détail de l'ordre "
+                f"dans l'app pour le voir.\n\n"
+                f"Budget libéré. Les deux jambes de protection peuvent rester "
+                f"affichées « en cours » côté BD alors qu'elles n'ont aucun "
+                f"titre à vendre — annule l'ordre depuis l'app pour nettoyer."
+            )
+        elif statut is None:
+            print(f"[verif ordre] {ticker} : introuvable au carnet "
+                  f"(exécuté et déjà soldé ?) — le sync tranchera")
+        else:
+            print(f"[verif ordre] {ticker} : statut « {statut} » — rien à signaler")
+
+    threading.Timer(delay, _verifier).start()

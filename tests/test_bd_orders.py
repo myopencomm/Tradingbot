@@ -66,3 +66,52 @@ class TestPasDeCotation:
         cran — et le trailing annulerait/reposerait la protection en boucle."""
         assert bd._round_to_tick(209.70, 0.02, "up") == 209.70
         assert bd._round_to_tick(209.70, 0.02, "down") == 209.70
+
+
+class TestOrdreRejete:
+    """Un ordre accepté puis REJETÉ par BD doit se voir.
+
+    `/order/create` répond 200 avec un id et ses deux jambes de protection —
+    puis BD peut refuser l'ordre après coup. Le 18/08/2026, RTX : le bot a
+    annoncé « ✅ ORDRE AUTONOME PLACÉ SUR BD », crédité l'engagement au budget,
+    et n'est jamais revenu vérifier. Le rejet a été découvert sur le téléphone.
+
+    Le parseur n'avait aucun cas « Rejeté » : le statut restait à None, donc
+    invisible de bout en bout.
+    """
+
+    REJETE = ("RTX Corporation(XNYS) | XNYS › RTX | 224.090 USD | +1.10 % |  |  | \t | "
+              "Achat(CPT)\tRejeté\t0/6\tLim. 224.431 $US\t-\t31/08/2026 à 22:00:00 | "
+              "\tTake Profit\tSeuil215.00 $US\t\tProfit248.50 $US\t\t")
+
+    def _row(self, s):
+        return s.replace(" | ", "\n")
+
+    def test_le_rejet_est_lu(self):
+        import bourse_direct_reader as reader
+        o = reader._parse_order(self._row(self.REJETE))
+        assert o["statut"] == "Rejeté"
+        assert (o["qty_exec"], o["qty_total"]) == (0, 6)
+
+    def test_le_rejet_prime_sur_les_jambes_de_protection(self):
+        """Le bloc contient « Take Profit », « Seuil » et « Profit » : sans
+        priorité au rejet, un mot comme « en cours » sur une jambe suffirait à
+        faire passer l'ordre pour vivant."""
+        import bourse_direct_reader as reader
+        avec_jambes = self.REJETE.replace(
+            "Seuil215.00 $US\t\t", "Seuil215.00 $US\tEn cours\t")
+        assert reader._parse_order(self._row(avec_jambes))["statut"] == "Rejeté"
+
+    def test_un_ordre_vivant_reste_en_cours(self):
+        import bourse_direct_reader as reader
+        vivant = ("Bank of America Corporation(XNYS) | XNYS › BAC | 64.330 USD | +0.68 % |  |  | \t | "
+                  "Vente(CPT)\t\t0/12\t\t-\t31/08/2026 à 22:00:00 | "
+                  "\tTake Profit\tSeuil58.93 $US\tEn cours\tProfit67.53 $US\tEn cours\t")
+        assert reader._parse_order(self._row(vivant))["statut"] == "En cours"
+
+    def test_un_ordre_rejete_n_est_pas_compte_comme_actif(self):
+        """Le sync ne retient que « En cours » : un rejet ne doit jamais passer
+        pour une protection active."""
+        import bourse_direct_reader as reader
+        o = reader._parse_order(self._row(self.REJETE))
+        assert o["statut"] != "En cours"

@@ -731,6 +731,35 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-18 (4) — Un ordre rejeté par BD était invisible de bout en bout
+`/order/create` a répondu 200 pour RTX, avec un id et ses deux jambes de
+protection. Le bot a annoncé **« ✅ ORDRE AUTONOME PLACÉ SUR BD »**, crédité
+l'engagement au budget… puis Bourse Direct a **rejeté** l'ordre. Personne n'est
+revenu vérifier : le rejet a été découvert sur le téléphone, plusieurs heures
+après.
+
+Deux défauts se cumulaient :
+
+- **Le parseur ne connaissait pas « Rejeté ».** Aucune de ses branches (`en
+  cours`, `exécuté`, `annulé`) ne correspondait : le statut restait à `None`.
+  L'ordre n'était donc ni actif, ni annulé, ni rien — invisible du sync, du
+  trailing et de l'utilisateur.
+- **Rien ne revenait sur l'annonce.** Le sync post-ordre tourne 8 s plus tard,
+  mais il ne regarde que les positions ; un ordre refusé lui échappe. C'est la
+  même faute que l'alerte du watchdog qui ne revenait jamais sur son verdict —
+  annoncer un succès sans en contrôler l'issue.
+
+- **`schedule_order_verification`** relit le carnet 45 s après le placement (le
+  rejet n'est pas instantané) et alerte : *« ORDRE REJETÉ PAR BOURSE DIRECT —
+  aucun titre acheté, aucun euro engagé »*. Le budget est rendu, sinon
+  l'engagement gèlerait une place jusqu'à l'expiration.
+- **Le message prévient des jambes orphelines** : les deux protections peuvent
+  rester affichées « en cours » côté BD alors qu'elles n'ont aucun titre à
+  vendre — c'est précisément ce qui a dérouté.
+- **Aucune conclusion sur une lecture ratée** : onglet ordres illisible ou ordre
+  introuvable → on se tait, le sync tranchera. Même règle que le contrôle de
+  protection du 11/08.
+
 ### 2026-08-18 — Le bot disait sa plomberie au lieu de dire l'essentiel
 Trois lignes de STATUS sur six portaient *« ⚠️ cours Bourse Direct du 17/08
 22:35 — yfinance périmé (2026-08-14) »* — sur des cours qui étaient la dernière

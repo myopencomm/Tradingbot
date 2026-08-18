@@ -409,6 +409,9 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         try:
             import sync_engine
             sync_engine.schedule_post_order_sync()
+            # ...et on revient VÉRIFIER que BD n'a pas rejeté l'ordre après
+            # l'avoir accepté (cas RTX, 18/08/2026).
+            sync_engine.schedule_order_verification(order_id, ticker, send_fn)
         except Exception as e:
             print(f"[Auto] post-order sync : {e}")
         return True
