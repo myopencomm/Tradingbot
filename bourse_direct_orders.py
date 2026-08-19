@@ -235,14 +235,14 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
 
 
 def _round_to_tick(price: float, tick: float, direction: str) -> float:
-    """Arrondit un prix au pas de cotation. direction: 'up' | 'down' | 'nearest'."""
-    import math
-    steps = price / tick
-    if direction == "up":
-        return round(math.ceil(steps - 1e-9) * tick, 4)
-    if direction == "down":
-        return round(math.floor(steps + 1e-9) * tick, 4)
-    return round(round(steps) * tick, 4)
+    """Arrondit un prix au pas de cotation. direction: 'up' | 'down' | 'nearest'.
+
+    Délègue à `ticks` : la règle vit à UN endroit, partagé avec l'analyse qui
+    arrondit désormais à la source. Deux implémentations de l'arrondi, c'est
+    la garantie qu'elles divergeront un jour.
+    """
+    import ticks
+    return ticks.round_to_tick(price, tick, direction)
 
 
 def _extract_tick(raw: dict) -> float | None:
@@ -315,7 +315,8 @@ def create_order(page, ticker: str, side: str, qty: int,
     # ici. Le retry sur 400 reste en place pour les autres places, dont le pas
     # dépend du cours et que BD, lui, signale de façon fiable.
     if info["currency"] == "USD":
-        tick_us = 0.01 if (limit_price or 1) >= 1 else 0.0001
+        import ticks
+        tick_us = ticks.tick_for(limit_price, "USD")
         if limit_price is not None:
             arrondi = _round_to_tick(limit_price, tick_us,
                                      "down" if side == "buy" else "up")

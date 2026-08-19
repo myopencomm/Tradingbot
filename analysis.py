@@ -384,9 +384,17 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
         atr = tech.get("atr_pct")
         atr_line = (f"- ATR 14j : {atr}% du cours → SL technique ≈ -{min(max(ATR_SL_MULT * atr, MIN_SL_PCT), MAX_SL_PCT):.1f}%\n"
                     if atr else "")
+        # `{'N/A':+}` lève ValueError : un format signé ne s'applique pas à une
+        # chaîne. Le défaut textuel et le format signé ne peuvent donc PAS
+        # cohabiter — ici ça faisait planter toute la validation du candidat
+        # dès qu'un titre n'avait pas de momentum 1 mois (assez d'historique
+        # manquant, titre récemment listé). Les lignes voisines évitaient le
+        # piège en testant `is not None` ; celle-ci l'avait oublié.
+        m1 = tech.get("momentum_1m")
+        m1_txt = f"{m1:+}%" if m1 is not None else "N/A"
         tech_block = (f"\nINDICATEURS TECHNIQUES\n"
                       f"- RSI 14j : {tech.get('rsi', 'N/A')}\n"
-                      f"- Momentum 1 mois : {tech.get('momentum_1m', 'N/A'):+}%\n"
+                      f"- Momentum 1 mois : {m1_txt}\n"
                       f"{m121_line}{ma_line}{atr_line}"
                       f"- Volume ratio : {tech.get('vol_ratio', 'N/A')}x moyenne 20j\n"
                       f"{rel_line}{score_line}")
@@ -540,9 +548,21 @@ Si ACHAT : format exact (symbole {sym}, le titre cote en {cur}) :
         except Exception as _ce:
             print(f"[validate] cancel auto order {ticker}: {_ce}")
 
+    # ── Arrondi au pas de cotation, À LA SOURCE ─────────────────────────────
+    # Avant : le prix restait à quatre décimales jusqu'à l'envoi, où seul
+    # l'ordre était arrondi. Le message Telegram annonçait donc « Entrée
+    # 224.4312 » pour un ordre parti à 224.43 — trois chiffres pour un même
+    # achat, entre l'annonce, le contexte mémorisé et le carnet BD.
+    #
+    # Ici, le prix décidé EST le prix traitable : tout ce qui suit en hérite,
+    # et l'arrondi de l'envoi ne fait plus que confirmer. Le sens est
+    # conservateur (entrée et TP vers le bas, SL vers le haut) — cf. ticks.
+    import ticks
+    entry, sl_v, tp_v = ticks.round_levels(entry, sl_v, tp_v, cur)
+
     out.update({
         "verdict": verdict, "reason": reason, "raw": _validate_tickers(val),
-        "entry": round(entry, 4), "sl": sl_v, "tp": tp_v,
+        "entry": entry, "sl": sl_v, "tp": tp_v,
         "tp_pct": round((tp_v / entry - 1) * 100, 1) if (tp_v and entry) else None,
         "risk": risk_m.group(1).upper() if risk_m else "MEDIUM",
         "currency": cur, "sym": sym, "fx": fx,

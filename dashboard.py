@@ -145,10 +145,11 @@ def build_data() -> dict:
     # d'argent. Périmètre = ce que le bot pilote (les HOLD en sont exclus).
     try:
         import nav
-        nav_data = {"serie": nav.serie(), "resume": nav.resume(), "base": nav.BASE}
+        nav_data = {"serie": nav.serie(), "resume": nav.resume(),
+                    "perimetre": nav.perimetre(), "base": nav.BASE}
     except Exception as e:
         print(f"[dashboard] valeur de part indisponible : {e}")
-        nav_data = {"serie": [], "resume": {}, "base": 100.0}
+        nav_data = {"serie": [], "resume": {}, "perimetre": None, "base": 100.0}
 
     return {
         "trades":    cum,
@@ -281,13 +282,15 @@ button.on { border-color: #3fd583; color: #3fd583; }
   <div class="card"><div class="v @ROI_CLS@" id="c_roi">@AVG_ROI@%</div><div class="l" id="l_roi">ROI / cash engagé (moy. @AVG_INV@€/deal)</div></div>
   <div class="card"><div class="v" id="c_hold">—</div><div class="l" id="l_hold">Durée médiane d'un trade</div></div>
   <div class="card"><div class="v" id="c_perday">—</div><div class="l" id="l_perday">Meilleur gain par jour de détention</div></div>
-  <div class="card"><div class="v @NAV_CLS@">@NAV_PERF@%</div><div class="l">Valeur de la part : @NAV_PART@ (base 100) — hors période</div></div>
+  <div class="card"><div class="v @NAV_CLS@">@NAV_PERF@%</div><div class="l">Croissance de l'investissement — part à @NAV_PART@ (base 100), hors période</div></div>
+  <div class="card"><div class="v">@NAV_FONDS@€</div><div class="l">Valeur du fonds : cash + @NAV_NB@ position(s) gérée(s) — hors <em>hold</em></div></div>
 </div>
 
 
 <h2>Croissance de l'investissement <span class="muted">— valeur d'une part, base 100</span></h2>
 <div class="chartbox"><canvas id="nav"></canvas></div>
-<p class="muted" id="navnote" style="margin:-6px 0 22px;font-size:.8em"></p>
+<p class="muted" id="navcompo" style="margin:6px 0 2px;font-size:.85em"></p>
+<p class="muted" id="navnote" style="margin:2px 0 22px;font-size:.8em"></p>
 
 <h2>P&L cumulé <span class="muted">— taille du point ◉ = cash engagé</span></h2>
 <div class="chartbox"><canvas id="cum"></canvas></div>
@@ -541,6 +544,12 @@ function redrawCharts() {
   const nv = (D.nav && D.nav.serie) || [];
   const navBase = (D.nav && D.nav.base) || 100;
   const bascule = (D.nav && D.nav.resume && D.nav.resume.mesure_depuis) || null;
+  const navP = (D.nav && D.nav.perimetre) || null;
+  document.getElementById('navcompo').textContent = navP
+    ? `Fonds : ${navP.total.toFixed(2)}€ = ${navP.cash.toFixed(2)}€ de cash `
+      + `+ ${navP.positions.toFixed(2)}€ sur ${navP.lignes.length} position(s) `
+      + `gérée(s)${navP.lignes.length ? ' (' + navP.lignes.join(', ') + ')' : ''}.`
+    : '';
   document.getElementById('navnote').textContent = nv.length
     ? (bascule
         ? `Estimé (pointillé) jusqu'au ${jjmm(bascule)} — reconstitué à partir des seules ventes, `
@@ -763,6 +772,8 @@ def render_html() -> str:
         "@ROI_CLS@":    cls(d["avg_roi"]),
         "@AVG_INV@":    f"{d['avg_invested']:.0f}",
         "@NAV_PART@":   f"{d['nav']['resume'].get('part', 100):.2f}",
+        "@NAV_FONDS@":  f"{(d['nav']['perimetre'] or {}).get('total', 0):.2f}",
+        "@NAV_NB@":     str(len((d['nav']['perimetre'] or {}).get('lignes', []))),
         "@NAV_PERF@":   signed(d["nav"]["resume"].get("perf", 0)),
         "@NAV_CLS@":    cls(d["nav"]["resume"].get("perf", 0)),
         "@OPEN_ROWS@":  "".join(rows),

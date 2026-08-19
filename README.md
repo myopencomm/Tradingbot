@@ -199,6 +199,8 @@ CHAT_ID=***REMOVED***
 }
 ```
 
+> 💡 **Ce cash de départ est aussi la mise initiale du fonds** : c'est à partir de lui que se calcule la [valeur de la part](#valeur-de-la-part--la-croissance-de-linvestissement), donc la croissance de votre investissement en %. Ensuite, **chaque fois que vous virez ou retirez de l'argent, déclarez-le** avec `/nav depot 1000` ou `/nav retrait 500` — sinon le versement serait compté comme une performance du bot.
+
 ---
 
 ### Étape 5 — Lancez le bot
@@ -261,12 +263,14 @@ TradingBot/
 ├── commands.py              Table unique des commandes : dispatch + menu + /help en derivent
 ├── tg.py                    Transport Telegram (feuille) : envoyer, editer, telecharger
 ├── ttf.py                   Assujettissement a la TTF francaise + cache (feuille)
+├── ticks.py                 Pas de cotation : la regle d'arrondi, partagee analyse <-> envoi (feuille)
+├── nav.py                   Valeur liquidative par part : la croissance de l'investissement
 ├── history.py               Persistance des trades clotures, ecriture atomique (feuille)
 ├── sizing.py                Budget, capacite d'entree, taille de position
 ├── trailing.py              Trailing stop : les deux paliers
 ├── prompt_context.py        Briques de contexte injectees dans les prompts IA
 ├── docs/tuto/               Guide interactif /tuto (texte, hors code)
-├── tests/                   130 tests de caracterisation — ./bot.sh test
+├── tests/                   277 tests de caracterisation — ./bot.sh test
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome
@@ -292,6 +296,7 @@ TradingBot/
 │
 ├── positions.json             Votre portefeuille — ignoré par git ✅
 ├── bot_state.json             Mode actif (classic/playwright) — ignoré par git ✅
+├── nav_history.json           Historique de la valeur de la part — ignoré par git ✅
 ├── CLAUDE_TRADING_CONTEXT.md  Votre contexte personnel — ignoré par git ✅
 └── .env                       Vos secrets — ignoré par git ✅
 ```
@@ -399,7 +404,7 @@ TradingBot/
 >
 > **Format des tickers :** utilisez le format Yahoo Finance — `TTE.PA`, `ASML.AS`, `AAPL`, `BP.L`, `SAP.DE`. La conversion vers le format interne Bourse Direct est automatique, y compris la résolution du code marché des titres US (NASDAQ=XNGS, NYSE=XNYS, détectée dynamiquement).
 >
-> **Pas de cotation :** si BD rejette un prix hors pas de cotation, le bot ré-arrondit automatiquement (SL vers le haut, TP vers le bas, règle conservatrice) et retente.
+> **Pas de cotation :** le prix est arrondi **dès l'analyse**, au pas du marché (`ticks.py`) — le chiffre annoncé sur Telegram, celui mémorisé et celui envoyé à BD sont donc le même. L'arrondi est conservateur : entrée et TP vers le bas, SL vers le haut. Si BD rejette malgré tout un prix hors pas (tranches MiFID II, non déductibles d'un cours seul), le bot ré-arrondit et retente.
 >
 > **Flow :** `/ordre ...` → le bot affiche recap + montant prévisionnel → `/oui` pour envoyer, `/non` pour annuler (timeout 120s).
 
@@ -684,8 +689,8 @@ Un tableau de bord local est servi en permanence par le bot : **http://localhost
   - Le **P&L cumulé est recalculé** sur la période (il repart de 0), pas simplement tronqué
   - Le **€/jour** se base sur la durée réellement écoulée, bornée à aujourd'hui
   - **P&L latent et cash restent globaux** : ce sont des instantanés, pas des flux — le libellé le précise, et le « P&L total » ne les ajoute qu'en vue Global
-- **Cartes de synthèse** : P&L réalisé / latent / total, win rate, profit factor, cash, performance en €/jour, ROI sur cash engagé
-- **Croissance de l'investissement** : la valeur d'une part (base 100), en tête de page — la réponse à « de combien mon investissement a-t-il grossi ? ». Trait **pointillé** pour la partie reconstituée, **plein** pour la partie mesurée
+- **Cartes de synthèse** : P&L réalisé / latent / total, win rate, profit factor, cash, performance en €/jour, ROI sur cash engagé, **croissance de l'investissement en %** et **valeur du fonds**
+- **Croissance de l'investissement** : la valeur d'une part (base 100), en tête de page — la réponse à « de combien mon investissement a-t-il grossi ? ». Trait **pointillé** pour la partie reconstituée, **plein** pour la partie mesurée, ligne du **100** appuyée (la mise de départ). Sous le graphique, la **composition du fonds** : cash + positions gérées, nommées. Le bout de la courbe suit la valeur du fonds **en direct**, sans attendre le relevé du soir — la tuile et le graphique ne peuvent donc pas afficher deux chiffres différents
 - **Courbe du P&L cumulé** sur axe temporel réel — la taille de chaque point est proportionnelle au cash engagé sur le deal
 - **P&L par trade** : une barre par trade avec nom, date, cash engagé et résultat annoté
 - **Tableau des trades filtrable** (texte, WIN/LOSS) avec colonnes Investi et ROI
@@ -767,6 +772,36 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-08-19 (2) — Un seul prix, de l'annonce au carnet d'ordres
+Suite du rejet RTX. L'arrondi au pas de cotation n'existait qu'**à l'envoi** :
+le message Telegram annonçait « Entrée 224.4312 », le contexte mémorisé gardait
+la même valeur, et l'ordre partait à 224.43. Trois chiffres pour un seul achat.
+
+Rien n'était cassé — mais un bot qui annonce un prix et en envoie un autre
+n'inspire pas confiance, et l'écart aurait fini par fausser un calcul de PRU.
+
+- **Le prix est arrondi à la SOURCE**, dans `validate_candidate` : le prix
+  *décidé* est désormais le prix *traitable*, et tout ce qui suit en hérite.
+  L'arrondi de l'envoi ne fait plus que confirmer.
+- **`ticks.py`, module feuille** : la règle vit à UN endroit, partagé par
+  l'analyse (qui décide le prix) et l'envoi (qui le transmet). Deux
+  implémentations de l'arrondi, c'est la garantie qu'elles divergeront un jour
+  — un test vérifie qu'elles rendent le même résultat.
+- **Le pas européen se resserre avec le cours** (0,0001 sous 1 €, 0,001 sous
+  10 €, 0,01 au-delà). MiFID II fait dépendre le pas du cours *et* de la
+  liquidité : il n'est pas déductible d'un cours seul, donc on le devine —
+  volontairement trop **fin** plutôt que trop **grossier**. Trop fin coûte un
+  aller-retour avec BD, qui le signale par un 400 et que le code retente ; trop
+  grossier déplace le prix pour de bon. Arrondir au centime un titre à 0,15 €
+  le bougerait de plus de 3 % : un SL déplacé de 3 %, ce sont des euros réels.
+
+Trouvé en écrivant les tests, sans rapport avec l'arrondi : `{'N/A':+}` lève
+`ValueError: Sign not allowed in string format specifier`. La ligne « Momentum
+1 mois » du bloc technique combinait un défaut textuel et un format signé —
+elle faisait planter `validate_candidate` **en entier** pour tout titre sans
+assez d'historique. Les lignes voisines testaient `is not None` ; celle-là
+l'avait oublié. Corrigée, avec son test de non-régression.
+
 ### 2026-08-18 (5) — RTX : le NYSE a refusé un prix à trois décimales
 Le motif du rejet, que ni l'app ni l'API ne donnent, est écrit dans le carnet
 légal : **« Achat rejeté marché »**. Ce n'est pas Bourse Direct qui a refusé,
@@ -785,6 +820,7 @@ qu'une fois sur deux n'en est pas une.
 - **Les prix US sont arrondis au cent AVANT l'envoi**, sans attendre que BD
   s'en aperçoive. Achat vers le bas, vente vers le haut, SL vers le haut, TP
   vers le bas — on ne paie jamais plus cher ni ne protège moins que voulu.
+  *(Depuis le 19/08/2026 l'arrondi remonte encore plus haut : à l'analyse.)*
 - **Le retry sur 400 reste** pour les autres places, dont le pas dépend du cours
   (AIR : 0,05) et que BD signale de façon fiable.
 

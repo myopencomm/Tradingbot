@@ -166,3 +166,49 @@ class TestCapitalInitial:
                             lambda: [{"pnl_eur": 300.0}, {"pnl_eur": -50.0}])
         monkeypatch.setattr(nav, "perimetre", lambda: _fonds(1300.0, latent=50.0))
         assert nav.capital_initial() == 1000.0
+
+
+class TestCoherence:
+    """La tuile « valeur du fonds » et le bout de la courbe doivent dire le
+    MÊME chiffre. Sinon le dashboard affiche deux vérités pour une même chose,
+    et c'est toujours celle qu'on ne regarde pas qui a raison (19/08/2026 : la
+    tuile était calculée à l'affichage, la courbe figée au relevé de la veille).
+    """
+
+    def _amorcer(self, monkeypatch):
+        monkeypatch.setattr(nav, "reconstituer", lambda: [
+            {"date": "2026-01-01", "valeur": 1000.0, "parts": 10.0,
+             "part": 100.0, "source": "reconstitué"}])
+        monkeypatch.setattr(nav, "perimetre", lambda: _fonds(1000.0))
+        nav.relever()
+
+    def test_la_courbe_suit_le_fonds_sans_attendre_le_releve_du_soir(self, monkeypatch):
+        self._amorcer(monkeypatch)
+        monkeypatch.setattr(nav, "perimetre", lambda: _fonds(1100.0))
+        assert nav.serie()[-1]["valeur"] == 1100.0
+        assert nav.serie()[-1]["part"] == 110.0
+        assert nav.resume()["valeur"] == 1100.0
+
+    def test_le_rafraichissement_live_n_ecrit_rien(self, monkeypatch):
+        """Consulter le dashboard ne doit pas modifier l'historique — sinon
+        chaque visite créerait un point, et le relevé du soir n'aurait plus
+        aucun sens."""
+        self._amorcer(monkeypatch)
+        avant = nav.NAV_PATH.read_text(encoding="utf-8")
+        monkeypatch.setattr(nav, "perimetre", lambda: _fonds(1100.0))
+        nav.serie(); nav.serie(); nav.resume()
+        assert nav.NAV_PATH.read_text(encoding="utf-8") == avant
+
+    def test_le_live_ne_cree_jamais_de_part_supplementaire(self, monkeypatch):
+        """Le nombre de parts ne bouge QUE sur un versement ou un retrait."""
+        self._amorcer(monkeypatch)
+        monkeypatch.setattr(nav, "perimetre", lambda: _fonds(1500.0))
+        assert nav.parts_courantes() == 10.0
+        assert nav.serie()[-1]["parts"] == 10.0
+
+    def test_sans_live_la_courbe_reste_celle_des_releves(self, monkeypatch):
+        """`live=False` doit rendre l'historique brut — c'est ce qui permet de
+        vérifier ce qui a réellement été enregistré."""
+        self._amorcer(monkeypatch)
+        monkeypatch.setattr(nav, "perimetre", lambda: _fonds(1100.0))
+        assert nav.serie(live=False)[-1]["valeur"] == 1000.0

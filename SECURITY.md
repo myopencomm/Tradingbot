@@ -69,8 +69,8 @@ d'application Gmail, et les clés IA.
 
 **Correctif.** `bot.sh` force `chmod 600` sur les fichiers sensibles à chaque
 démarrage (`.env`, `positions.json`, `trades_history.json`,
-`CLAUDE_TRADING_CONTEXT.md`, `bot_state.json`) — lecture/écriture réservées au
-propriétaire.
+`CLAUDE_TRADING_CONTEXT.md`, `bot_state.json`, `nav_history.json`) —
+lecture/écriture réservées au propriétaire.
 
 ### 🟠 MOYEN — Dashboard exposé au réseau sans authentification
 
@@ -95,7 +95,7 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
 ### Secrets & identifiants
 - **Tout secret vit dans `.env`** (jamais dans le code) — chargé via `python-dotenv`.
 - `.env`, `positions.json`, `trades_history.json`, `CLAUDE_TRADING_CONTEXT.md`,
-  `*.log` sont dans `.gitignore` et **n'ont jamais été commités** (vérifié sur
+  `nav_history.json`, `*.log` sont dans `.gitignore` et **n'ont jamais été commités** (vérifié sur
   l'historique complet via `git log --all --diff-filter=A`).
 - `.env.example` ne contient que des placeholders — aucune vraie valeur.
 - Le démarrage n'imprime que des booléens de présence (`Telegram : OK`), jamais
@@ -115,7 +115,7 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
 ### Données & journaux
 - Fichiers créés en local : `positions.json`, `trades_history.json`,
   `bot_state.json`, `sentiment_cache.json`, `api_costs.json`,
-  `macro_summary_cache.json`, `tradingbot.log` — tous locaux,
+  `macro_summary_cache.json`, `nav_history.json`, `tradingbot.log` — tous locaux,
   aucun envoi vers un tiers hormis les API nécessaires.
 
 ### Clés API via Telegram (`/fallback`)

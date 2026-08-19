@@ -54,3 +54,26 @@ Autres commandes :
   ./bot.sh status   → tourne ou pas ?
   ./bot.sh logs     → logs en direct
   ./bot.sh stop     → arreter
+===== PAGE =====
+Installation — Etape 5 : mesurer la perf
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Le cash de depart que tu viens de saisir
+est la MISE INITIALE de ton fonds.
+
+/nav → la croissance de ton investissement
+en %, comme un fonds : la part vaut 100 au
+depart, "elle vaut 117" = +17%.
+
+UNE SEULE CHOSE A RETENIR :
+chaque fois que tu vires ou retires de
+l'argent, declare-le :
+  /nav depot 1000
+  /nav retrait 500
+
+Sinon ton virement serait compte comme une
+performance du bot. Il ne peut pas deviner :
+sur le solde, un virement et un gros gain
+se ressemblent.
+
+Le reste est automatique — releve chaque
+soir a 22h15, graphique dans /dashboard.

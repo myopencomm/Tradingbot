@@ -194,27 +194,59 @@ def relever(send_fn=None) -> dict:
     return point
 
 
-def serie() -> list[dict]:
-    """La courbe complète : reconstituée jusqu'au premier relevé, mesurée après."""
+def serie(live: bool = True) -> list[dict]:
+    """La courbe complète : reconstituée jusqu'au premier relevé, mesurée après.
+
+    `live` rafraîchit le DERNIER point avec la valeur du fonds à l'instant —
+    sans rien écrire. Sans ça, le dashboard affichait deux chiffres pour le
+    même fonds : la tuile « valeur du fonds », calculée à l'affichage, et le
+    bout de la courbe, figé au relevé de la veille au soir. Deux vérités pour
+    une même chose, c'est toujours celle qu'on ne regarde pas qui a raison.
+    """
     data = _load()
     mesures = [x for x in data["points"] if x.get("source") == "mesuré"]
     debut_mesure = mesures[0]["date"] if mesures else None
     recon = [x for x in reconstituer()
              if not debut_mesure or x["date"] < debut_mesure]
-    return recon + mesures
+    points = recon + mesures
+    if live and mesures:
+        try:
+            p = perimetre()
+            parts = mesures[-1]["parts"]
+            points = points[:-1] + [{**mesures[-1],
+                                     "date": datetime.now(PARIS).strftime("%Y-%m-%d"),
+                                     "valeur": p["total"],
+                                     "part": round(p["total"] / parts, 2) if parts else BASE}]
+        except Exception as e:
+            print(f"[nav] rafraîchissement live impossible : {e}")
+    return points
+
+
+def parts_courantes() -> float:
+    """Nombre de parts en circulation. Ne bouge QUE sur un versement/retrait."""
+    data = _load()
+    mesures = [x for x in data["points"] if x.get("source") == "mesuré"]
+    if mesures:
+        return mesures[-1]["parts"]
+    recon = reconstituer()
+    if recon:
+        return recon[-1]["parts"]
+    v0 = capital_initial()
+    return v0 / BASE if v0 > 0 else 1.0
 
 
 def resume() -> dict:
     """De quoi remplir une tuile : valeur de part, performance, provenance."""
     s = serie()
     if not s:
-        return {"part": BASE, "perf": 0.0, "points": 0, "depuis": None,
-                "mesure_depuis": None}
-    mesures = [x for x in s if x["source"] == "mesuré"]
+        return {"part": BASE, "perf": 0.0, "valeur": 0.0, "points": 0,
+                "depuis": None, "mesure_depuis": None}
+    mesures = [x for x in _load()["points"] if x.get("source") == "mesuré"]
     return {
         "part": s[-1]["part"],
         "perf": round((s[-1]["part"] / BASE - 1) * 100, 2),
         "valeur": s[-1]["valeur"],
+        "parts": round(parts_courantes(), 6),
         "points": len(s),
         "depuis": s[0]["date"],
         "mesure_depuis": mesures[0]["date"] if mesures else None,
