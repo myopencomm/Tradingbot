@@ -89,6 +89,11 @@ ALL = [
             help="bilan (win rate, P&L, profit factor)"),
     Command("dashboard", "cmd_dashboard", "Graphique P&L + resume visuel", "portefeuille",
             help="graphique P&L + resume visuel (lien web)"),
+    Command("nav", "cmd_nav", "Croissance de l'investissement (valeur de la part)",
+            "portefeuille", usage="[depot|retrait MONTANT]",
+            help="croissance en % de l'investissement, base 100",
+            extra=("   apres un virement : /nav depot 1000 (ou /nav retrait 500)\n"
+                   "   sinon le versement serait compte comme une performance",)),
 
     # ── Positions ──
     Command("add", "cmd_add", "Acheter (deduit le cash) — TICKER QTE PRU SL TP", "positions",

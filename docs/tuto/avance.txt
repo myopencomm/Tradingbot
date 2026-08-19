@@ -103,6 +103,31 @@ Acces distant via Tailscale :
   tailscale serve --bg 8642
   (ou DASHBOARD_BIND=0.0.0.0 dans .env)
 ===== PAGE =====
+Fonctions avancees — Valeur de la part
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Le P&L en euros ne dit pas si le bot est
+bon : verser 1000 EUR fait grimper le total
+sans qu'aucune decision n'ait ete prise.
+
+/nav → la croissance de TON investissement,
+comme un fonds : la part vaut 100 au depart.
+"Elle vaut 117" = +17%, point.
+
+Perimetre : cash + positions GEREES.
+Les positions /hold en sont exclues — leur
+sort ne mesure pas le bot.
+
+APRES UN VIREMENT, declare-le :
+  /nav depot 1000
+  /nav retrait 500
+Le mouvement achete ou rend des parts au
+cours du jour : la valeur de la part ne
+bouge pas. Sans ca, ton virement passerait
+pour une performance.
+
+Releve automatique chaque soir a 22h15,
+apres la cloture US.
+===== PAGE =====
 Fonctions avancees — Cloture & Gmail
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CLOTURE DE POSITIONS

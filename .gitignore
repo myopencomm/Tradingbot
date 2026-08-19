@@ -56,3 +56,6 @@ ttf_cache.json
 
 # Tests
 .pytest_cache/
+
+# Valeur liquidative — données personnelles
+nav_history.json

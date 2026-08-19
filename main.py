@@ -110,6 +110,16 @@ def _bounded(fn, name, timeout=None):
     return wrapped
 
 
+def _releve_nav():
+    """Relevé quotidien de la valeur liquidative du fonds « bot »."""
+    try:
+        import nav
+        p = nav.relever(send_fn=telegram_bot.send)
+        print(f"[nav] part {p['part']} — fonds {p['valeur']}€")
+    except Exception as e:
+        print(f"[nav] relevé impossible : {e}")
+
+
 def _refresh_market_universe():
     """Reconstruit l'univers US investissable (liste officielle Nasdaq Trader
     → filtre de liquidité → indicateurs), mis en cache pour le scan.
@@ -268,6 +278,12 @@ def run_scheduler():
         _bounded(_refresh_market_universe, "universe_refresh")
     )
     schedule.every().hour.at(":35").do(_bounded(_hourly_bd_sync, "hourly_bd_sync"))
+    # Valeur de part : un relevé par jour APRÈS la clôture US, quand toutes les
+    # lignes ont un cours de fin de séance. Silencieux — c'est une mesure, pas
+    # un événement ; il ne parle que s'il flaire un mouvement d'espèces non
+    # déclaré (voir nav.relever).
+    schedule.every().day.at("22:15").do(
+        _bounded(lambda: _releve_nav() if _market_day() else None, "nav"))
 
     # Séance US : les 4 CHECK_TIMES s'arrêtent à 17:00, mais Wall Street tourne
     # jusqu'à 22:00 Paris. On prolonge la surveillance (positions/ordres US

@@ -234,6 +234,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Sélection momentum validée** | Momentum 12 mois (hors dernier mois) + cours > MM200 + entrée sur repli sain (RSI 35-65) — voir [Stratégie](#stratégie-de-sélection--validée-par-la-recherche-académique) |
 | **Sizing par le risque** | Perte au SL = 1% du budget autonome, SL ≈ 2×ATR, taille réduite si volatilité élevée, série de pertes, ou corrélation forte avec une position déjà détenue (entrée bloquée au-delà de 0.85) |
 | **Mode gain réduit** (opt-in) | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) — désactivé par défaut (`SMALL_GAIN_MODE=on` pour l'activer) |
+| **Valeur de la part** | Croissance de l'investissement en %, base 100, insensible aux versements et retraits (`/nav` + graphique du dashboard) |
 | **Dashboard visuel** | http://localhost:8642 (accès Tailscale possible) + `/dashboard` Telegram : P&L cumulé, cash engagé, ROI, trades filtrables |
 | **Coûts API dans le bilan** | Chaque appel IA enregistre ses tokens réels ET **le modèle qui a réellement répondu** (`api_costs.json`) ; `/stats` et le dashboard affichent le coût cumulé, le modèle servi et le **P&L net après coûts IA** — bilan honnête de l'efficacité du bot |
 | **Instructions d'ordres** | Format Bourse Direct step-by-step, prêt à saisir sur mobile ou web |
@@ -323,6 +324,9 @@ TradingBot/
 | `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor, **coûts API IA et P&L net** |
 | `/fallback [provider] [clé]` | IA de secours : `/fallback gemini CLE_API` teste la clé, l'enregistre dans `.env`, **supprime le message du chat** et active la bascule auto si le provider principal échoue. `/fallback` = état, `/fallback off` = désactiver |
 | `/dashboard` | Graphique P&L cumulé + résumé visuel (image) — voir section [Dashboard](#dashboard-visuel) |
+| `/nav` | Croissance de l'investissement en % (valeur de la part, base 100) — voir [Valeur de la part](#valeur-de-la-part--la-croissance-de-linvestissement) |
+| `/nav depot 1000` | Déclare un versement — il achète des parts au lieu d'être compté comme une performance |
+| `/nav retrait 500` | Déclare un retrait — il rend des parts, la valeur de la part ne bouge pas |
 | `/lessons` | Ce que le bot a appris de ses trades passés + garde-fous actifs — voir section [Apprentissage](#boucle-dapprentissage) |
 
 ### Positions
@@ -681,12 +685,44 @@ Un tableau de bord local est servi en permanence par le bot : **http://localhost
   - Le **€/jour** se base sur la durée réellement écoulée, bornée à aujourd'hui
   - **P&L latent et cash restent globaux** : ce sont des instantanés, pas des flux — le libellé le précise, et le « P&L total » ne les ajoute qu'en vue Global
 - **Cartes de synthèse** : P&L réalisé / latent / total, win rate, profit factor, cash, performance en €/jour, ROI sur cash engagé
+- **Croissance de l'investissement** : la valeur d'une part (base 100), en tête de page — la réponse à « de combien mon investissement a-t-il grossi ? ». Trait **pointillé** pour la partie reconstituée, **plein** pour la partie mesurée
 - **Courbe du P&L cumulé** sur axe temporel réel — la taille de chaque point est proportionnelle au cash engagé sur le deal
 - **P&L par trade** : une barre par trade avec nom, date, cash engagé et résultat annoté
 - **Tableau des trades filtrable** (texte, WIN/LOSS) avec colonnes Investi et ROI
 - **Positions ouvertes** : **PRU en devise de cotation ET PRU en euros**, cours, variation, P&L latent, SL/TP, badge `auto` (mode autonome) ou `hors bot` (position `hold`). Le marqueur `ᴮᴰ` signale un chiffre relevé sur Bourse Direct au dernier sync plutôt qu'un cours live — c'est ce qui donne un **P&L aux titres que yfinance ne cote plus** (GVN, MCPHY : faillite, cotation suspendue). Les positions hors gestion affichent **⛔ en SL et TP** : ces seuils ne sont surveillés par personne
 
 La page se régénère à chaque visite — les données sont toujours fraîches. Sur Telegram, `/dashboard` envoie la même vue en image avec le résumé chiffré.
+
+### Valeur de la part — la croissance de l'investissement
+
+Le P&L en euros ne dit pas si le bot est bon : verser 1 000 € fait grimper le total sans qu'aucune décision n'ait été prise. Les fonds règlent ça avec des **parts** :
+
+- au lancement, la part vaut **100 €** et le capital de départ achète des parts ;
+- un **versement achète** des parts au cours du jour, un **retrait en rend** — le nombre de parts bouge, la valeur de la part non ;
+- seule la **performance** fait bouger la valeur de la part.
+
+« Ma part valait 100, elle vaut 117,52 » répond donc exactement à *combien mon investissement a-t-il grossi*, qu'on ait versé de l'argent en route ou pas. C'est la mesure qu'utilisent les fonds d'investissement (*time-weighted return*).
+
+**Périmètre — ce que le bot pilote.** Le fonds, c'est le **cash + les positions gérées**. Les positions `hold` (long terme) en sont exclues : leur sort ne mesure pas le bot. Décision du 19/08/2026 — la plus grosse ligne `hold` pèse à elle seule plus que tout le reste du périmètre et porte une lourde moins-value latente issue d'une décision *antérieure* au bot ; l'inclure noierait la performance du bot dans un pari qu'il n'a jamais pris.
+
+**Deux régimes, jamais mélangés en silence :**
+
+| Régime | Période | Comment | Trait |
+|---|---|---|---|
+| **Reconstitué** | du 1er trade au 19/08/2026 | bâti sur les seuls trades clôturés — juste aux dates de sortie, interpolé entre, **aveugle aux plus-values latentes de l'époque** | pointillé |
+| **Mesuré** | depuis le 19/08/2026 | relevé de la valeur réelle chaque soir à 22h15, après la clôture US | plein |
+
+Chaque point porte sa provenance, et le graphique la montre par la **forme du trait** — pas par la couleur, pour que la distinction survive au daltonisme et à l'impression.
+
+**Après un virement, déclarez-le :**
+
+```
+/nav depot 1000       (ou : /nav retrait 500)
+```
+
+Sans cette déclaration, l'argent versé serait compté comme une performance — exactement ce que la valeur de part existe pour empêcher. Le bot ne peut pas le deviner : un virement et un gros gain se ressemblent sur le solde. Il **prévient** en revanche dès qu'un relevé bouge de plus de 15 % en un jour, cas où un mouvement d'espèces non déclaré est plus probable qu'une performance réelle.
+
+La série vit dans `nav_history.json` (non commité — données personnelles).
 
 ### Accès à distance (Tailscale)
 

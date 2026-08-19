@@ -505,6 +505,65 @@ def _duree(jours: float | None) -> str:
     return f"{jours:.1f} j".replace(".0 j", " j")
 
 
+def cmd_nav(args, cid):
+    """Valeur de la part — la performance sans les mouvements d'argent.
+
+    `/nav depot 1000` et `/nav retrait 500` sont ce qui empêche un virement de
+    passer pour un gain : ils achètent ou rendent des parts, à la valeur du
+    jour. Sans eux, verser de l'argent ferait grimper la courbe sans qu'aucune
+    décision de trading n'ait été prise.
+    """
+    import nav
+    if args and args[0].lower() in ("depot", "dépôt", "retrait"):
+        if len(args) < 2:
+            send(f"Usage : /nav {args[0].lower()} MONTANT", cid)
+            return
+        try:
+            montant = abs(float(args[1].replace(",", ".")))
+        except ValueError:
+            send(f"Montant illisible : {args[1]}", cid)
+            return
+        if args[0].lower() == "retrait":
+            montant = -montant
+        nav.declarer_flux(montant, " ".join(args[2:]))
+        p = nav.relever()
+        send(f"Mouvement enregistre : {montant:+.2f} EUR\n"
+             f"Il achete ou rend des parts — la valeur de la part ne bouge pas.\n\n"
+             f"Valeur de la part : {p['part']:.2f} (base 100)\n"
+             f"Fonds             : {p['valeur']:.2f} EUR", cid)
+        return
+
+    def _jjmm(iso):
+        a, m, j = (iso or "").split("-") if iso and "-" in iso else ("", "", "")
+        return f"{j}/{m}/{a}" if a else (iso or "?")
+
+    r = nav.resume()
+    if not r.get("points"):
+        send("Pas encore de courbe — elle demarre au premier trade cloture.", cid)
+        return
+    p = nav.perimetre()
+    signe = "+" if r["perf"] >= 0 else ""
+    lines = [
+        "VALEUR DE LA PART — croissance de l'investissement",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"Part   : {r['part']:.2f}  (base 100 au depart)",
+        f"Soit   : {signe}{r['perf']:.2f}% depuis le {_jjmm(r['depuis'])}",
+        "",
+        f"Fonds  : {r['valeur']:.2f} EUR",
+        f"  cash      {p['cash']:.2f}",
+        f"  positions {p['positions']:.2f}  ({', '.join(p['lignes']) or 'aucune'})",
+        "",
+        "Perimetre : ce que le bot PILOTE. Les lignes en hold long",
+        "terme sont exclues — leur sort ne mesure pas le bot.",
+    ]
+    if r.get("mesure_depuis"):
+        lines.append(f"\nEstime jusqu'au {_jjmm(r['mesure_depuis'])}, "
+                     f"mesure chaque soir depuis.")
+    lines.append("\nApres un virement : /nav depot 1000  ou  /nav retrait 500")
+    send("\n".join(lines), cid)
+
+
 def cmd_stats(args, cid):
     send("Calcul des performances...", cid)
     s = stats.get_stats()

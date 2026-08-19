@@ -141,8 +141,18 @@ def build_data() -> dict:
         api_daily, api_top, api_models = {}, None, {}
         api_releves, api_couvert, api_fourn = 0.0, "", {}
 
+    # Valeur liquidative par part : la performance débarrassée des mouvements
+    # d'argent. Périmètre = ce que le bot pilote (les HOLD en sont exclus).
+    try:
+        import nav
+        nav_data = {"serie": nav.serie(), "resume": nav.resume(), "base": nav.BASE}
+    except Exception as e:
+        print(f"[dashboard] valeur de part indisponible : {e}")
+        nav_data = {"serie": [], "resume": {}, "base": 100.0}
+
     return {
         "trades":    cum,
+        "nav":       nav_data,
         "api_daily": api_daily,
         "api_top_model": api_top,
         "api_models":    api_models,
@@ -271,8 +281,13 @@ button.on { border-color: #3fd583; color: #3fd583; }
   <div class="card"><div class="v @ROI_CLS@" id="c_roi">@AVG_ROI@%</div><div class="l" id="l_roi">ROI / cash engagé (moy. @AVG_INV@€/deal)</div></div>
   <div class="card"><div class="v" id="c_hold">—</div><div class="l" id="l_hold">Durée médiane d'un trade</div></div>
   <div class="card"><div class="v" id="c_perday">—</div><div class="l" id="l_perday">Meilleur gain par jour de détention</div></div>
+  <div class="card"><div class="v @NAV_CLS@">@NAV_PERF@%</div><div class="l">Valeur de la part : @NAV_PART@ (base 100) — hors période</div></div>
 </div>
 
+
+<h2>Croissance de l'investissement <span class="muted">— valeur d'une part, base 100</span></h2>
+<div class="chartbox"><canvas id="nav"></canvas></div>
+<p class="muted" id="navnote" style="margin:-6px 0 22px;font-size:.8em"></p>
 
 <h2>P&L cumulé <span class="muted">— taille du point ◉ = cash engagé</span></h2>
 <div class="chartbox"><canvas id="cum"></canvas></div>
@@ -359,6 +374,7 @@ function periodTrades() {
 }
 
 function fmt(v, d = 2) { return (v >= 0 ? '+' : '') + v.toFixed(d); }
+function jjmm(iso) { const [a, m, j] = (iso || '').split('-'); return `${j}/${m}/${a}`; }
 // Sous la journée on passe aux heures : un aller-retour intraday est le trade
 // le plus rapide qui soit, « 0 j » le confondrait avec une durée manquante.
 function duree(j) {
@@ -493,7 +509,7 @@ const timeScale = {
   ticks: { maxRotation: 0 }
 };
 
-let cumChart = null, barsChart = null, speedChart = null;
+let cumChart = null, barsChart = null, speedChart = null, navChart = null;
 
 function redrawCharts() {
   const ts = periodTrades();
@@ -511,6 +527,67 @@ function redrawCharts() {
   const invs = ts.map(t => t.invested);
   const iMin = Math.min(...invs), iMax = Math.max(...invs);
   const radius = i => 4 + (iMax > iMin ? 10 * (invs[i] - iMin) / (iMax - iMin) : 4);
+
+  // ── Valeur de la part ──────────────────────────────────────────────────
+  // Une évolution dans le temps → courbe. UNE seule série (la part), donc
+  // aucune boîte de légende : le titre la nomme. Ce qui a besoin d'être
+  // distingué, ce sont les deux PROVENANCES — estimé avant le premier relevé,
+  // mesuré après — et c'est le TRAIT qui le dit (pointillé vs plein), pas la
+  // couleur : la distinction survit au daltonisme, au noir et blanc et à
+  // l'impression.
+  //
+  // La ligne du 100 est appuyée : c'est la mise de départ, la seule graduation
+  // qui sépare « j'ai gagné » de « j'ai perdu ».
+  const nv = (D.nav && D.nav.serie) || [];
+  const navBase = (D.nav && D.nav.base) || 100;
+  const bascule = (D.nav && D.nav.resume && D.nav.resume.mesure_depuis) || null;
+  document.getElementById('navnote').textContent = nv.length
+    ? (bascule
+        ? `Estimé (pointillé) jusqu'au ${jjmm(bascule)} — reconstitué à partir des seules ventes, `
+          + `les plus-values latentes de l'époque y sont invisibles. Mesuré (trait plein) ensuite, `
+          + `relevé chaque soir. Un versement ou un retrait achète ou rend des parts : il ne compte jamais comme une performance.`
+        : "Courbe reconstituée à partir des ventes — le relevé quotidien prend le relais ce soir.")
+    : "Pas encore de courbe — elle démarre au premier trade clôturé.";
+  if (navChart) navChart.destroy();
+  navChart = new Chart(document.getElementById('nav'), {
+    type: 'line',
+    data: { datasets: [{
+      label: 'Valeur de la part',
+      data: nv.map(p => ({ x: p.date, y: p.part, p })),
+      borderColor: '#7a9bd4', backgroundColor: 'rgba(122,155,212,.10)',
+      fill: { target: { value: navBase } }, tension: .2,
+      borderWidth: 2, pointRadius: 3, pointHoverRadius: 7,
+      pointBackgroundColor: c => (nv[c.dataIndex] || {}).source === 'mesuré' ? '#7a9bd4' : '#151923',
+      pointBorderColor: '#7a9bd4', pointBorderWidth: 2,
+      segment: {
+        borderDash: c => (nv[c.p1DataIndex] || {}).source === 'mesuré' ? undefined : [5, 4],
+      },
+    }] },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: timeScale,
+        y: { ticks: { color: '#7c8695' }, grace: '10%',
+             grid: { color: c => c.tick.value === navBase ? '#4a5364' : '#212836',
+                     lineWidth: c => c.tick.value === navBase ? 2 : 1 } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          title: c => jjmm(nv[c[0].dataIndex].date),
+          label: c => {
+            const p = nv[c.dataIndex];
+            const perf = (p.part / navBase - 1) * 100;
+            return `part ${p.part.toFixed(2)} (${fmt(perf)}%) · fonds ${p.valeur.toFixed(0)}€`;
+          },
+          afterLabel: c => nv[c.dataIndex].source === 'mesuré'
+            ? 'relevé du soir — exact'
+            : "estimé d'après les ventes",
+        } },
+      },
+    },
+  });
 
   if (cumChart) cumChart.destroy();
   cumChart = new Chart(document.getElementById('cum'), {
@@ -685,6 +762,9 @@ def render_html() -> str:
         "@AVG_ROI@":    signed(d["avg_roi"]),
         "@ROI_CLS@":    cls(d["avg_roi"]),
         "@AVG_INV@":    f"{d['avg_invested']:.0f}",
+        "@NAV_PART@":   f"{d['nav']['resume'].get('part', 100):.2f}",
+        "@NAV_PERF@":   signed(d["nav"]["resume"].get("perf", 0)),
+        "@NAV_CLS@":    cls(d["nav"]["resume"].get("perf", 0)),
         "@OPEN_ROWS@":  "".join(rows),
         "@DATA_JSON@":  json.dumps(d, ensure_ascii=False),
     }
