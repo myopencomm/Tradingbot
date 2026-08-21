@@ -34,6 +34,11 @@ JOB_TIMEOUTS = {
     "weekly_swap":      900,    # compare chaque position à des candidats
     "monthly_breach":   600,
     "universe_refresh": 2400,   # ~2500 valeurs, 2 ans d'historique
+    # Le cycle horaire enchaîne sync + annulations + trailing + entrées. Une
+    # fois par mois il porte en plus la repose des protections expirées, qui
+    # exige DEUX lectures du carnet (voir protection_renewal) : le budget serré
+    # des checks ne suffit plus ce jour-là.
+    "hourly_bd_sync":   420,
 }
 JOB_TIMEOUT_DEFAUT = 240        # checks SL/TP, sync BD : pas d'IA, quelques secondes
 
@@ -204,6 +209,15 @@ def _hourly_bd_sync():
         autonomous_engine.cancel_stale_entry_orders(telegram_bot.send)
     except Exception as e:
         print(f"[hourly cancel stale] {e}")
+    # Protections expirées : BD borne toute validité (fin de mois hors Euronext,
+    # 31/12 dessus). Une protection arrivée à échéance a disparu du carnet et la
+    # position est nue — on la repose dès que le mois a basculé. Placé APRÈS le
+    # sync : c'est lui qui vient de rafraîchir les échéances lues au carnet.
+    try:
+        import protection_renewal
+        protection_renewal.renew_cycle(telegram_bot.send)
+    except Exception as e:
+        print(f"[hourly renouvellement protections] {e}")
     # Trailing stop : remonte les SL au PRU sur BD (positions auto +3%,
     # manuelles +5%) — uniquement celles protégées par un Expert actif.
     try:

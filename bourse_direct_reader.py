@@ -748,6 +748,26 @@ def _parse_order(text: str) -> dict | None:
         order["qty_exec"] = int(m_qty.group(1))
         order["qty_total"] = int(m_qty.group(2))
 
+    # ── Échéance de l'ordre ("31/08/2026 à 22:00:00") ────────────────────────
+    # BD borne TOUTE validité (voir bd_orders.parse_validity) : fin de mois hors
+    # Euronext, 31/12 dessus. Cette date était lue par un humain sur le carnet
+    # et par personne d'autre — c'est ainsi que les protections de BAC ont pu
+    # expirer le 31/07 à 22h sans que rien ne le voie venir (découvert le 05/08,
+    # après 5 séances à nu). Elle est désormais capturée à chaque sync, et
+    # `protection_renewal` s'en sert pour reposer la protection au mois suivant.
+    #
+    # DERNIER match : un bloc consolidé peut contenir l'ordre d'ACHAT exécuté
+    # (sa date à lui) puis la protection encore active — c'est celle-ci qui nous
+    # intéresse, exactement comme pour `sens`.
+    dates = re.findall(r'(\d{2}/\d{2}/\d{4})(?:\s*\S{0,2}\s*(\d{2}:\d{2}(?::\d{2})?))?', flat)
+    if dates:
+        d, h = dates[-1]
+        j, mo, an = d.split("/")
+        order["validite"] = d
+        order["validite_iso"] = f"{an}-{mo}-{j}"
+        if h:
+            order["validite_heure"] = h
+
     # ── Prix réel d'exécution — formats RÉELS observés sur BD (logs bruts) :
     #   volet TP déclenché : "Profit206.00 € Profit Exé. 208.00 €"
     #   volet SL déclenché : "Seuil57.20 € Seuil Exé. 57.20 €"

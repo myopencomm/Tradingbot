@@ -505,6 +505,23 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     protected_bases, protected_names, trailable_bases, trailable_names = \
         _protection_sets(orders)
 
+    def _protection_order(cfg, order_list):
+        """L'ordre ACTIF portant le seuil de cette position, ou None.
+
+        Sert uniquement à en lire l'ÉCHÉANCE : `_protection_sets` répond
+        « protégée ou non », pas « jusqu'à quand ».
+        """
+        base = _local_base(cfg)
+        bdn  = (cfg.get("bd_name") or "").upper()
+        for o in order_list:
+            if o.get("statut") != "En cours" or not o.get("seuil"):
+                continue
+            if (o.get("bd_ticker") or "").upper().split(".")[0] == base:
+                return o
+            if bdn and (o.get("name") or "").upper() == bdn:
+                return o
+        return None
+
     def _is_protected(cfg):
         base = _local_base(cfg)
         bdn = (cfg.get("bd_name") or "").upper()
@@ -553,6 +570,19 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
             if cfg.get("trailable") is not trail:
                 cfg["trailable"] = trail
                 meta_changed = True
+            # ── Échéance de la protection ────────────────────────────────
+            # Mémorisée TANT QU'ELLE EST VISIBLE : une fois l'ordre expiré il
+            # a disparu du carnet, et avec lui la seule trace de la date. Sans
+            # cette date, `protection_renewal` refuse d'agir (il ne peut plus
+            # prouver que reposer allongerait quelque chose) et on retombe sur
+            # la simple alerte.
+            if ok:
+                po = (_protection_order(cfg, orders)
+                      or (_protection_order(cfg, bd2.get("orders", [])) if bd2 else None))
+                iso = (po or {}).get("validite_iso")
+                if iso and cfg.get("protection_expires_at") != iso:
+                    cfg["protection_expires_at"] = iso
+                    meta_changed = True
             if not ok:
                 naked.append((name, cfg, was is not False))   # was: 1re détection ?
 

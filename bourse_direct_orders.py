@@ -183,7 +183,8 @@ def _api_post(page, endpoint: str, payload: dict) -> dict | None:
 
 # ── Étape 1 : créer l'ordre (validation + calcul des frais) ──────────────────
 
-def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
+def parse_validity(validity_str: str, mic: str,
+                   now: "datetime | None" = None) -> tuple[str, str | None]:
     """
     Convertit la saisie utilisateur en (validity, validityDate) pour l'API BD.
 
@@ -193,6 +194,9 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
       "revocation"   → GTC (bonne pour annulation)
       "DD/MM/YYYY"   → date précise (type "date")
       autres         → transmis tels quels (end_of_year, day…)
+
+    `now` (injectable) sert au calcul de l'échéance : c'est la SEULE façon de
+    tester `max_validity_deadline` sans attendre le 31 du mois.
 
     Retourne (validity_api, validityDate_iso | None).
     """
@@ -208,7 +212,7 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
     # "revocation" avec date de FIN DE MOIS — payload réel du site BD confirmé
     # par capture réseau (07/2026) : validityDate n'est jamais null.
     import calendar
-    now = datetime.now()
+    now = now or datetime.now()
     last_day = calendar.monthrange(now.year, now.month)[1]
     end_of_month = f"{now.year}-{now.month:02d}-{last_day:02d}T00:00:00.000Z"
 
@@ -227,11 +231,38 @@ def parse_validity(validity_str: str, mic: str) -> tuple[str, str | None]:
     if s == "end_of_year":
         if mic not in EURONEXT_MICS:
             return "revocation", None
-        return "end_of_year", f"{datetime.now().year}-12-31T00:00:00.000Z"
+        return "end_of_year", f"{now.year}-12-31T00:00:00.000Z"
     if s == "day":
-        from datetime import datetime
-        return "day", datetime.now().strftime("%Y-%m-%dT00:00:00.000Z")
+        return "day", now.strftime("%Y-%m-%dT00:00:00.000Z")
     return s, None
+
+
+def max_validity_deadline(ticker: str, now=None):
+    """Jour où expire une protection posée en validité « max » sur ce titre.
+
+    BD n'accepte JAMAIS un `validityDate` nul : la validité la plus longue
+    qu'il propose est bornée, et la borne dépend du marché (voir
+    `parse_validity`) — 31/12 sur Euronext, FIN DU MOIS COURANT partout
+    ailleurs, US compris.
+
+    Conséquence, contre-intuitive et coûteuse : une protection US ne peut PAS
+    être prolongée à l'avance. Reposée le 21/08, elle expirerait encore le
+    31/08 — « max » se recalcule depuis le jour de la pose. Le seul moment où
+    la reposer allonge quelque chose est APRÈS la bascule du mois. D'où
+    `protection_renewal`, qui attend que cette fonction renvoie une date
+    postérieure à l'échéance en cours.
+
+    L'expiration tombe à la CLÔTURE du marché concerné (22:00 Paris pour le
+    NYSE, 17:35 pour Euronext) : le trou de protection qui suit est donc
+    entièrement hors séance.
+
+    Retourne un `datetime.date`.
+    """
+    from datetime import datetime
+    import market
+    mic = "XPAR" if market.is_euronext(ticker) else "XNYS"
+    _api, iso = parse_validity("max", mic, now=now)
+    return datetime.strptime(iso[:10], "%Y-%m-%d").date()
 
 
 def _round_to_tick(price: float, tick: float, direction: str) -> float:

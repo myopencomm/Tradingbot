@@ -74,6 +74,48 @@ le detail de chaque position (le cycle
 auto reste silencieux s'il n'a rien a
 faire ; /trailing repond toujours).
 ===== PAGE =====
+Fonctions avancees — Protections expirees
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BD borne TOUTE validite d'ordre :
+→ Euronext        : 31/12
+→ US et le reste  : FIN DU MOIS COURANT
+
+A l'echeance, l'ordre Expert disparait du
+carnet et emporte le SL ET le TP avec lui.
+La position se retrouve sans protection
+sans qu'aucun message ne l'annonce. C'est
+arrive du 31/07 au 05/08/2026 : 5 seances
+a nu, decouvertes par hasard.
+
+CE QUE FAIT LE BOT
+→ il lit l'echeance au carnet a chaque
+  sync et la memorise
+→ des que le mois a bascule, il repose le
+  SL/TP a l'identique, valables jusqu'a la
+  nouvelle echeance max
+→ il te previent quand c'est fait
+
+POURQUOI PAS AVANT L'ECHEANCE ?
+Sur un titre US, "max" se recalcule depuis
+le jour de la pose : reposer le 21/08 rend
+encore le 31/08. Reposer plus tot n'allonge
+RIEN et ouvre une fenetre sans protection
+pour rien. La seule repose utile est celle
+faite apres la bascule du mois.
+
+Ce n'est pas un trou de marche : l'echeance
+tombe a la CLOTURE (22h Paris pour le NYSE),
+et la repose a lieu au cycle suivant, marche
+encore ferme.
+
+DEUX PREUVES AVANT D'AGIR
+Le bot ne repose que si (1) l'echeance
+memorisee est depassee ET (2) deux lectures
+du carnet ne montrent aucun ordre a seuil.
+Reposer sur une lecture ratee creerait un
+DOUBLON DE VENTE sur des titres deja engages.
+
+===== PAGE =====
 Fonctions avancees — HOLD long terme
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 /hold TICKER → sort une position du

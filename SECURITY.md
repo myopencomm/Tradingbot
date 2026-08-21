@@ -111,6 +111,15 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
   convertis via `float()`/`int()` sous `try/except`.
 - Les ordres réels exigent une **double confirmation** (`/ordre …` → récap →
   `/oui`) avec expiration à 120 s.
+- Trois chemins passent des ordres **sans confirmation** — par construction,
+  puisqu'ils s'exécutent sans utilisateur devant l'écran : le mode autonome
+  (entrées), le trailing (remontée du SL) et le renouvellement des protections
+  (`protection_renewal`, repose d'un SL/TP expiré). Tous trois sont bornés au
+  périmètre du portefeuille existant : ils ne peuvent que **protéger ou solder**
+  une position déjà détenue, ou entrer dans la limite du budget autonome. Le
+  renouvellement, en particulier, exige deux preuves concordantes (échéance
+  dépassée **et** deux lectures du carnet sans ordre à seuil) avant de reposer
+  quoi que ce soit — reposer sur une lecture ratée créerait un doublon de vente.
 
 ### Données & journaux
 - Fichiers créés en local : `positions.json`, `trades_history.json`,

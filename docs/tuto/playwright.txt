@@ -43,8 +43,15 @@ SYNTAXE (validite optionnelle en dernier)
 
 VALIDITE (defaut : max)
   seance         → expire fin de seance
-  max            → jusqu'a fin d'annee
+  max            → le plus loin que BD accepte :
+                   31/12 sur Euronext, mais FIN DU
+                   MOIS COURANT sur les US
   JJ/MM/AAAA     → date precise
+
+BD n'accepte jamais d'ordre sans echeance.
+Une protection US expire donc a la cloture
+du dernier jour du mois — le bot la repose
+tout seul des le mois suivant (/tuto avance).
 
 EXEMPLES
   /ordre acheter TTE.PA 3 expert 54.2 49.0 61.0
