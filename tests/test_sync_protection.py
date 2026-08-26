@@ -100,6 +100,41 @@ class TestRelectureDeConfirmation:
         assert saved["positions"]["AIR"]["protected"] is False
 
 
+class TestMarqueurDeTrou:
+    """`naked_since` : depuis quand la position est-elle à nu ?
+
+    C'est la preuve de PERSISTANCE sur laquelle `protection_renewal` se décide
+    à reposer. Elle n'existait pas quand JNJ a perdu sa protection six jours
+    avant son échéance (26/08/2026) : le bot n'avait aucun moyen de distinguer
+    « lecture douteuse » de « trou qui dure ».
+    """
+
+    def test_trou_confirme_le_marqueur_est_pose(self, sync):
+        _msg, saved = sync([bd([], True), bd([], True)])
+        assert saved["positions"]["AIR"]["naked_since"]
+
+    def test_lecture_ratee_aucun_marqueur(self, sync):
+        """Sinon une page illisible armerait une repose d'ordre réel."""
+        _msg, saved = sync([bd([], orders_read=False)])
+        assert "naked_since" not in saved["positions"]["AIR"]
+
+    def test_relecture_qui_retrouve_la_protection_aucun_marqueur(self, sync):
+        _msg, saved = sync([bd([], True), bd([ORDRE_AIR], True)])
+        assert "naked_since" not in saved["positions"]["AIR"]
+
+    def test_protection_revue_le_marqueur_est_leve(self, monkeypatch, sync):
+        """Un trou qui clignote ne doit jamais s'accumuler."""
+        avec_marqueur = copy.deepcopy(LOCAL)
+        avec_marqueur["AIR"]["protected"] = False
+        avec_marqueur["AIR"]["naked_since"] = "2026-08-26T12:35:00"
+        monkeypatch.setattr(portfolio, "load", lambda: {
+            "cash_available": 244.13, "positions": avec_marqueur,
+            "auto_pending_orders": {}})
+        _msg, saved = sync([bd([ORDRE_AIR], True)])
+        assert "naked_since" not in saved["positions"]["AIR"]
+        assert saved["positions"]["AIR"]["protected"] is True
+
+
 class TestNominal:
     def test_ordre_lu_du_premier_coup(self, sync):
         msg, _ = sync([bd([ORDRE_AIR], True)], silent=False)

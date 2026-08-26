@@ -12,6 +12,13 @@ Ces tests figent les quatre règles du correctif :
   3. sans échéance mémorisée, pas de repose (on retombe sur l'alerte du sync) ;
   4. une protection encore présente au carnet interdit la repose — un doublon de
      vente sur des titres déjà engagés est pire que le trou qu'on répare.
+
+Puis le 26/08 JNJ a perdu la sienne SIX JOURS avant l'échéance, autour de son
+détachement de dividende du 25/08 : le bot n'attendait le trou que le 31 et
+s'est contenté de le signaler. D'où le second déclencheur, qui ne regarde plus
+la cause mais la DURÉE (`naked_since`), et sa règle propre :
+  5. un trou doit TENIR NAKED_CONFIRM_MINUTES avant d'être réparé — un trou qui
+     clignote est une lecture ratée, pas une position à nu.
 """
 from datetime import date, datetime
 
@@ -79,40 +86,81 @@ class TestLectureEcheance:
         assert o["validite_heure"] == "17:35:00"
 
 
-class TestPreuveDeDate:
+class TestDeclencheurEcheance:
     """`needs_renewal` est la moitié LOCALE de la décision — pure et testable."""
 
     def test_protection_encore_valide_on_ne_touche_a_rien(self):
         ok, why = pr.needs_renewal(
-            _pos(protection_expires_at="2026-08-31"), date(2026, 8, 21))
+            _pos(protection_expires_at="2026-08-31"), datetime(2026, 8, 21, 10, 0))
         assert not ok and "valide jusqu'au 31/08/2026" in why
 
     def test_le_jour_meme_de_l_echeance_on_attend_la_cloture(self):
         """L'ordre court jusqu'à 22h : le 31/08, il protège encore."""
         ok, _why = pr.needs_renewal(
-            _pos(protection_expires_at="2026-08-31"), date(2026, 8, 31))
+            _pos(protection_expires_at="2026-08-31"), datetime(2026, 8, 31, 10, 0))
         assert not ok
 
     def test_le_lendemain_on_repose(self):
         ok, why = pr.needs_renewal(
-            _pos(protection_expires_at="2026-08-31"), date(2026, 9, 1))
+            _pos(protection_expires_at="2026-08-31"), datetime(2026, 9, 1, 10, 0))
         assert ok and "30/09/2026" in why
 
     def test_sans_echeance_memorisee_on_s_abstient(self):
         """Rien ne prouve qu'une repose allongerait quoi que ce soit."""
-        ok, why = pr.needs_renewal(_pos(), date(2026, 9, 1))
-        assert not ok and "inconnue" in why
+        ok, why = pr.needs_renewal(_pos(), datetime(2026, 9, 1, 10, 0))
+        assert not ok and "aucun trou constaté" in why
 
     def test_position_hold_hors_gestion_bot(self):
         ok, _why = pr.needs_renewal(
-            _pos(hold=True, protection_expires_at="2026-08-31"), date(2026, 9, 1))
+            _pos(hold=True, protection_expires_at="2026-08-31"),
+            datetime(2026, 9, 1, 10, 0))
         assert not ok
 
     def test_sans_seuils_il_n_y_a_rien_a_reposer(self):
         ok, why = pr.needs_renewal(
             _pos(target_low=0, target_high=0,
-                 protection_expires_at="2026-08-31"), date(2026, 9, 1))
+                 protection_expires_at="2026-08-31"), datetime(2026, 9, 1, 10, 0))
         assert not ok and "seuils" in why
+
+
+class TestDeclencheurTrouQuiDure:
+    """Le cas JNJ : protection disparue AVANT l'échéance (dividende du 25/08)."""
+
+    def test_un_trou_frais_ne_declenche_rien(self):
+        """Une lecture ratée ne doit jamais faire reposer un ordre."""
+        ok, why = pr.needs_renewal(
+            _pos(protection_expires_at="2026-08-31",
+                 naked_since="2026-08-26T12:35:00"),
+            datetime(2026, 8, 26, 12, 40))
+        assert not ok and "confirmation attendue" in why
+
+    def test_un_trou_qui_tient_est_repare(self):
+        ok, why = pr.needs_renewal(
+            _pos(protection_expires_at="2026-08-31",
+                 naked_since="2026-08-26T12:35:00"),
+            datetime(2026, 8, 26, 13, 40))
+        assert ok and "depuis" in why
+
+    def test_l_echeance_encore_lointaine_n_empeche_pas_la_reparation(self):
+        """C'est tout le bug : le bot attendait le 31 alors que le trou était là."""
+        ok, _why = pr.needs_renewal(
+            _pos(protection_expires_at="2026-12-31",
+                 naked_since="2026-08-26T12:35:00"),
+            datetime(2026, 8, 26, 14, 0))
+        assert ok
+
+    def test_une_protection_revue_efface_le_marqueur(self):
+        """`sync_engine` retire `naked_since` dès qu'il revoit la protection :
+        sans marqueur, plus de déclencheur."""
+        ok, _why = pr.needs_renewal(
+            _pos(protection_expires_at="2026-08-31"), datetime(2026, 8, 26, 14, 0))
+        assert not ok
+
+    def test_un_trou_sur_position_hold_reste_ignore(self):
+        ok, _why = pr.needs_renewal(
+            _pos(hold=True, naked_since="2026-08-26T12:35:00"),
+            datetime(2026, 8, 26, 14, 0))
+        assert not ok
 
 
 class TestPreuveDeCarnet:
@@ -163,12 +211,14 @@ class TestCycleComplet:
             pr, "_lecture_carnet",
             lambda: {"orders": orders, "orders_read": orders_read})
 
-    def _run(self, monkeypatch, bot, jour):
+    def _run(self, monkeypatch, bot, quand):
         # playwright_session.run exécute juste le lambda : les appels BD
         # eux-mêmes sont déjà remplacés.
         monkeypatch.setattr(pr.playwright_session, "run",
                             lambda fn, timeout=None: fn(None))
-        pr.renew_cycle(bot["envois"].append, today=jour)
+        if isinstance(quand, date) and not isinstance(quand, datetime):
+            quand = datetime.combine(quand, datetime.min.time().replace(hour=10))
+        pr.renew_cycle(bot["envois"].append, now=quand)
 
     def test_repose_apres_la_bascule_du_mois(self, monkeypatch, bot):
         self._carnet(monkeypatch, [])

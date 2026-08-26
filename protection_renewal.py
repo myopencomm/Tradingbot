@@ -1,5 +1,14 @@
 """
-Renouvellement des protections expirées — repose le SL/TP au mois suivant.
+Repose des protections perdues — par échéance BD, ou disparues en cours de route.
+
+DEUX FAÇONS DE PERDRE UN STOP, UNE SEULE REPOSE
+-----------------------------------------------
+  · l'ÉCHÉANCE, prévisible et datée (ci-dessous) ;
+  · la DISPARITION en cours de route, imprévisible : BD annule les ordres à
+    seuil sur événement du titre. JNJ a perdu la sienne autour de son
+    détachement de dividende du 25/08/2026, SIX JOURS avant son échéance — et
+    le bot, qui n'attendait le trou que le 31, n'a fait que le signaler.
+    Le deuxième déclencheur ne cherche pas la cause : il constate la durée.
 
 LE PROBLÈME
 -----------
@@ -33,27 +42,37 @@ L'échéance tombe à la CLÔTURE du marché concerné (22:00 Paris pour le NYSE
 séance suivante, le marché est fermé : aucun ordre n'aurait pu s'exécuter de
 toute façon. Le trou est calendaire, pas boursier.
 
-POURQUOI ON NE REPOSE PAS SUR LA SEULE DÉTECTION « À NU »
----------------------------------------------------------
-Parce qu'une lecture partielle du carnet rend une position protégée comme
-« sans protection » (fausse alerte du 11/08/2026, trois positions d'un coup) et
-que reposer un Expert de VENTE sur cette base créerait un DOUBLON DE VENTE sur
-des titres déjà engagés. Il faut donc deux preuves indépendantes :
+DEUX PREUVES, TOUJOURS
+----------------------
+Une lecture partielle du carnet rend une position protégée comme « sans
+protection » (fausse alerte du 11/08/2026, trois positions d'un coup), et
+reposer un Expert de VENTE là-dessus créerait un DOUBLON DE VENTE sur des
+titres déjà engagés. Rien ne se repose donc sur une seule preuve :
 
-  1. une preuve de DATE, locale et déterministe — l'échéance mémorisée est
-     dépassée, et une repose aujourd'hui donnerait une date plus lointaine ;
-  2. une preuve de CARNET — deux lectures abouties, aucune ne montrant d'ordre
-     actif à seuil sur ce titre.
+  1. une preuve de PERSISTANCE, locale — soit l'échéance mémorisée est
+     dépassée et une repose donnerait une date plus lointaine, soit le sync
+     voit la position à nu SANS INTERRUPTION depuis plus de
+     `NAKED_CONFIRM_MINUTES` (`naked_since`, posé par `sync_engine`). Une
+     protection revue entre-temps efface le marqueur : un trou qui dure est un
+     trou réel, un trou qui clignote est une lecture douteuse.
+  2. une preuve de CARNET — deux lectures abouties faites ici même, aucune ne
+     montrant d'ordre actif à seuil sur ce titre.
 
-Sans échéance mémorisée (position jamais vue protégée par le sync), on ne
-renouvelle PAS : on retombe sur l'alerte de `sync_engine`.
+Sans échéance mémorisée NI trou persistant, on ne repose PAS : on retombe sur
+l'alerte de `sync_engine`.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import bourse_direct_orders as bd_orders
 import bourse_direct_reader as reader
 import playwright_session
 import portfolio
+
+# Durée pendant laquelle un trou doit TENIR avant qu'on le répare. Le sync
+# tourne toutes les heures : un trou vu à deux cycles consécutifs n'est plus une
+# lecture ratée, c'est un fait. Assez court pour reposer dans la séance, assez
+# long pour qu'une page à moitié rendue ne déclenche jamais rien.
+NAKED_CONFIRM_MINUTES = 45
 
 # Une repose échouée par position et par jour : BD peut refuser l'ordre (marché
 # fermé, pas de cotation, quantité engagée) et le cycle horaire repasse toutes
@@ -68,11 +87,25 @@ def _iso_to_date(iso: str | None) -> date | None:
         return None
 
 
-def needs_renewal(pos: dict, today: date) -> tuple[bool, str]:
-    """Cette position doit-elle voir sa protection reposée aujourd'hui ?
+def _iso_to_dt(iso: str | None) -> datetime | None:
+    try:
+        return datetime.fromisoformat(iso) if iso else None
+    except (ValueError, TypeError):
+        return None
 
-    Fonction PURE (aucun navigateur) : c'est la preuve de DATE, celle qui se
-    teste sans BD. La preuve de carnet est faite par `renew_cycle`.
+
+def needs_renewal(pos: dict, now: datetime) -> tuple[bool, str]:
+    """Cette position doit-elle voir sa protection reposée maintenant ?
+
+    Fonction PURE (aucun navigateur) : c'est la preuve de PERSISTANCE, celle
+    qui se teste sans BD. La preuve de carnet est faite par `renew_cycle`.
+
+    Deux déclencheurs, l'un prévisible et l'autre pas :
+      · l'échéance BD est passée, et reposer aujourd'hui donnerait une date
+        plus lointaine (bascule du mois) ;
+      · le sync voit la position à nu depuis plus de NAKED_CONFIRM_MINUTES
+        sans interruption — la protection a disparu avant l'heure, peu importe
+        pourquoi.
 
     Retourne (oui/non, raison lisible).
     """
@@ -82,23 +115,35 @@ def needs_renewal(pos: dict, today: date) -> tuple[bool, str]:
     if not sl or not tp:
         return False, "pas de seuils SL/TP à reposer"
 
-    echeance = _iso_to_date(pos.get("protection_expires_at"))
-    if not echeance:
-        return False, ("échéance de protection inconnue — jamais vue au carnet, "
-                       "repose impossible à justifier")
-    if today <= echeance:
-        return False, f"protection valide jusqu'au {echeance:%d/%m/%Y}"
+    today = now.date()
 
-    nouvelle = bd_orders.max_validity_deadline(pos["ticker"],
-                                               datetime.combine(today, datetime.min.time()))
-    if nouvelle <= echeance:
+    # ── Déclencheur 1 : échéance BD dépassée ─────────────────────────────
+    echeance = _iso_to_date(pos.get("protection_expires_at"))
+    if echeance and today > echeance:
+        nouvelle = bd_orders.max_validity_deadline(pos["ticker"], now)
+        if nouvelle > echeance:
+            return True, (f"protection expirée le {echeance:%d/%m/%Y} — une "
+                          f"repose tiendrait jusqu'au {nouvelle:%d/%m/%Y}")
         # Cas réel sur un titre US en cours de mois : « max » rendrait la même
-        # fin de mois. Reposer n'allongerait rien et ouvrirait une fenêtre.
-        return False, (f"une repose aujourd'hui expirerait le "
-                       f"{nouvelle:%d/%m/%Y} — pas plus loin que l'échéance "
-                       f"actuelle ({echeance:%d/%m/%Y})")
-    return True, (f"protection expirée le {echeance:%d/%m/%Y} — une repose "
-                  f"tiendrait jusqu'au {nouvelle:%d/%m/%Y}")
+        # fin de mois. Reposer n'allongerait rien — sauf si la position est
+        # RÉELLEMENT à nu, ce que tranche le déclencheur suivant.
+
+    # ── Déclencheur 2 : trou constaté qui dure ───────────────────────────
+    depuis = _iso_to_dt(pos.get("naked_since"))
+    if depuis:
+        age_min = int((now - depuis).total_seconds() // 60)
+        if age_min >= NAKED_CONFIRM_MINUTES:
+            return True, (f"aucune protection au carnet depuis "
+                          f"{depuis:%d/%m %H:%M} ({age_min} min, confirmé sur "
+                          f"plusieurs cycles de sync)")
+        return False, (f"vue sans protection il y a {age_min} min — "
+                       f"confirmation attendue à {NAKED_CONFIRM_MINUTES} min "
+                       f"(une lecture ratée ne doit jamais déclencher de repose)")
+
+    if echeance:
+        return False, f"protection valide jusqu'au {echeance:%d/%m/%Y}"
+    return False, ("échéance inconnue et aucun trou constaté — rien qui "
+                   "justifie une repose")
 
 
 def _has_live_protection(orders: list[dict], pos: dict) -> bool:
@@ -128,25 +173,27 @@ def _lecture_carnet() -> dict | None:
         return None
 
 
-def renew_cycle(send_fn, verbose: bool = False, today: date | None = None) -> None:
-    """Repose sur BD les protections dont l'échéance est passée.
+def renew_cycle(send_fn, verbose: bool = False, now: datetime | None = None) -> None:
+    """Repose sur BD les protections perdues — échéance atteinte ou trou qui dure.
 
     Appelé par le cycle horaire (`main._hourly_bd_sync`), donc jusqu'à 13 fois
     par jour de marché : tout ce qui n'a pas lieu d'agir doit sortir en
     silence, sans message ni lecture de page.
     """
-    today = today or date.today()
+    now = now or datetime.now()
+    today = now.date()
     data = portfolio.load()
 
     candidats, ecartes = [], []
     for name, pos in (data.get("positions") or {}).items():
-        ok, pourquoi = needs_renewal(pos, today)
+        ok, pourquoi = needs_renewal(pos, now)
         (candidats if ok else ecartes).append((name, pos, pourquoi))
 
     if verbose:
-        head = ["🔄 RENOUVELLEMENT DES PROTECTIONS",
-                "BD borne toute validité : fin de mois hors Euronext, 31/12 "
-                "dessus. Une protection expirée se repose au mois suivant."]
+        head = ["🔄 REPOSE DES PROTECTIONS",
+                "Deux cas : échéance BD atteinte (fin de mois hors Euronext, "
+                "31/12 dessus), ou protection disparue avant l'heure et "
+                f"absente du carnet depuis plus de {NAKED_CONFIRM_MINUTES} min."]
         for n, _p, why in ecartes:
             head.append(f"  ⏳ {n} : {why}")
         if not candidats:
@@ -220,8 +267,7 @@ def renew_cycle(send_fn, verbose: bool = False, today: date | None = None) -> No
         adj      = (od.get("_adjusted") or {})
         sl_final = adj.get("stop_loss") or sl
         tp_final = adj.get("take_profit") or tp
-        echeance = bd_orders.max_validity_deadline(
-            ticker, datetime.combine(today, datetime.min.time()))
+        echeance = bd_orders.max_validity_deadline(ticker, now)
 
         d = portfolio.load()
         if name in d.get("positions", {}):
@@ -231,6 +277,7 @@ def renew_cycle(send_fn, verbose: bool = False, today: date | None = None) -> No
             p["protected"]   = True
             p["protection_ids"] = [c for c in (od.get("children") or []) if c]
             p["protection_expires_at"] = echeance.isoformat()
+            p.pop("naked_since", None)
             portfolio.save(d)
         _notified_failure.pop(name, None)
         send_fn(

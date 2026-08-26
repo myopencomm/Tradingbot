@@ -229,7 +229,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Dashboard filtrable par période** | Menu ☰ : Global / ce mois / mois dernier / cette année / année dernière. Cartes, graphiques et tableau recalculés sur la période ; P&L latent et cash restent des instantanés globaux, signalés comme tels |
 | **Trailing en 2 paliers** | **1.** À +5% (manuel) / +6% (autonome), le SL monte au PRU — perte impossible. **2.** Passé 60% du chemin vers le TP, le SL monte **au-dessus du PRU** et verrouille une part croissante du gain (50% → 80% au contact du TP). L'ordre Expert est remplacé sur BD à chaque palier |
 | **Contrôle de protection** | À chaque sync, toute position gérée est comparée au carnet BD. Sans ordre SL/TP actif → alerte (même en sync silencieux), marquage `🚨 non protégé` dans `/status` et le dashboard, commande de replacement fournie. Un stop calculé mais non posé sur BD est affiché comme tel, jamais comme actif. **L'alerte exige deux lectures abouties et concordantes** : un onglet ordres illisible suspend le contrôle au lieu de conclure « aucune protection » (fausse alerte du 11/08/2026) |
-| **Renouvellement des protections** | BD borne toute validité : **fin du mois courant hors Euronext** (US compris), 31/12 dessus. Une protection arrivée à échéance disparaît du carnet et la position se retrouve nue — c'est arrivé du 31/07 au 05/08/2026. Le bot mémorise l'échéance lue au carnet et **repose le SL/TP dès la bascule du mois** (impossible avant : « max » rendrait la même date). Deux preuves exigées avant d'agir — échéance dépassée *et* deux lectures du carnet sans ordre à seuil — sinon on reposerait un doublon de vente |
+| **Repose automatique des protections** | Un stop se perd de deux façons. **(1) Échéance** : BD borne toute validité — fin du mois courant hors Euronext (US compris), 31/12 dessus. Le bot mémorise l'échéance lue au carnet et repose le SL/TP **dès la bascule du mois** (impossible avant : « max » rendrait la même date ; et l'échéance tombant à la clôture, le trou est hors séance). **(2) Disparition avant l'heure** : BD annule les ordres à seuil sur événement du titre — JNJ a perdu la sienne à son détachement de dividende, 6 jours avant échéance. Le bot ne cherche pas la cause, il mesure la durée (`naked_since`) et repose dès que le trou tient **45 min**. Dans les deux cas, **deux preuves avant d'agir** — persistance locale *et* deux lectures du carnet sans ordre à seuil — sinon on reposerait un doublon de vente sur des titres déjà engagés |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA. L'échéance tombe à la **clôture** du marché (22h Paris pour le NYSE, 17h35 sur Euronext) — le trou de protection qui suit est donc hors séance, et refermé au cycle suivant |
 | **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +6% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
@@ -269,10 +269,10 @@ TradingBot/
 ├── history.py               Persistance des trades clotures, ecriture atomique (feuille)
 ├── sizing.py                Budget, capacite d'entree, taille de position
 ├── trailing.py              Trailing stop : les deux paliers
-├── protection_renewal.py    Repose les protections expirées (echeance BD bornee au mois)
+├── protection_renewal.py    Repose les protections perdues (echeance BD, ou trou qui dure)
 ├── prompt_context.py        Briques de contexte injectees dans les prompts IA
 ├── docs/tuto/               Guide interactif /tuto (texte, hors code)
-├── tests/                   303 tests de caracterisation — ./bot.sh test
+├── tests/                   312 tests de caracterisation — ./bot.sh test
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome

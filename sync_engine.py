@@ -2,6 +2,8 @@
 Synchronisation Bourse Direct → positions.json
 Appelé par /sync. Met à jour cash + détecte les écarts de positions.
 """
+from datetime import datetime
+
 import market
 import portfolio
 import bourse_direct_reader as reader
@@ -583,7 +585,19 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                 if iso and cfg.get("protection_expires_at") != iso:
                     cfg["protection_expires_at"] = iso
                     meta_changed = True
+            # ── Depuis QUAND cette position est-elle à nu ? ─────────────
+            # Une protection peut disparaître AVANT son échéance : BD annule
+            # les ordres à seuil sur événement du titre — JNJ a perdu la
+            # sienne autour de son détachement de dividende du 25/08/2026,
+            # 6 jours avant l'échéance. La cause importe peu, la durée si :
+            # c'est elle qui distingue un vrai trou d'une lecture douteuse, et
+            # c'est sur elle que `protection_renewal` se décide à reposer.
+            if ok and cfg.pop("naked_since", None) is not None:
+                meta_changed = True
             if not ok:
+                if not cfg.get("naked_since"):
+                    cfg["naked_since"] = datetime.now().isoformat(timespec="seconds")
+                    meta_changed = True
                 naked.append((name, cfg, was is not False))   # was: 1re détection ?
 
     # ── Protections hors carnet : remontables ou vraiment soudées ? ──────

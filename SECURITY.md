@@ -117,9 +117,11 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
   (`protection_renewal`, repose d'un SL/TP expiré). Tous trois sont bornés au
   périmètre du portefeuille existant : ils ne peuvent que **protéger ou solder**
   une position déjà détenue, ou entrer dans la limite du budget autonome. Le
-  renouvellement, en particulier, exige deux preuves concordantes (échéance
-  dépassée **et** deux lectures du carnet sans ordre à seuil) avant de reposer
-  quoi que ce soit — reposer sur une lecture ratée créerait un doublon de vente.
+  renouvellement, en particulier, exige deux preuves concordantes avant de
+  reposer quoi que ce soit — une preuve de **persistance** (échéance BD dépassée,
+  ou trou constaté sans interruption depuis 45 min) **et** deux lectures du
+  carnet sans ordre à seuil. Reposer sur une lecture ratée créerait un doublon
+  de vente sur des titres déjà engagés.
 
 ### Données & journaux
 - Fichiers créés en local : `positions.json`, `trades_history.json`,

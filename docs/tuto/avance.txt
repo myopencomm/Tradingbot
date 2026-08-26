@@ -74,7 +74,25 @@ le detail de chaque position (le cycle
 auto reste silencieux s'il n'a rien a
 faire ; /trailing repond toujours).
 ===== PAGE =====
-Fonctions avancees — Protections expirees
+Fonctions avancees — Protections perdues
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Un stop se perd de DEUX facons :
+
+1. SON ECHEANCE ARRIVE (prevu, date)
+2. IL DISPARAIT AVANT L'HEURE (imprevu)
+   BD annule les ordres a seuil sur
+   evenement du titre. JNJ a perdu le
+   sien a son detachement de dividende,
+   6 jours avant l'echeance.
+
+Le bot repose dans les deux cas. Pour le
+2e il ne cherche pas la cause : il mesure
+la DUREE du trou. Vu sans protection a
+deux cycles de sync d'affilee (45 min),
+il repose le SL/TP. Un trou qui clignote
+= une lecture ratee, on ne touche a rien.
+
+CAS 1 — L'ECHEANCE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BD borne TOUTE validite d'ordre :
 → Euronext        : 31/12
