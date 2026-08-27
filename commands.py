@@ -151,6 +151,8 @@ ALL = [
             help="lire portefeuille + ordres reels depuis BD", playwright=True),
     Command("trailing", "cmd_trailing", "Verifier le trailing stop (SL au PRU) maintenant", "playwright",
             help="verifier le trailing stop maintenant", playwright=True),
+    Command("stagnation", "cmd_stagnation", "Positions trop lentes : verdict et vitesse",
+            "playwright", help="verifier les positions qui stagnent", playwright=True),
     Command("ordre", "cmd_ordre", "Passer un ordre reel sur BD — acheter|vendre TICKER QTE ...",
             "playwright", help="passer un ordre REEL sur BD (syntaxe ci-dessous)",
             playwright=True),

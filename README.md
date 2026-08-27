@@ -233,8 +233,9 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA. L'échéance tombe à la **clôture** du marché (22h Paris pour le NYSE, 17h35 sur Euronext) — le trou de protection qui suit est donc hors séance, et refermé au cycle suivant |
 | **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +6% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
+| **Sortie sur stagnation** | Le KPI n'est pas le gain, c'est le gain **par jour** — sur les trades clos, les 3 gagnants les plus rapides rendent 70,6 / 13,3 / 12,6 €/jour quand tout ce qui dépasse 17 jours tombe sous 5 €/jour. À **J+25 jours de bourse**, une position doit avoir parcouru **33 %** du chemin PRU→TP ; sinon elle est vendue et le capital repart. **Jamais à perte** : la vente exige un cours au-dessus du PRU + frais de sortie (`breakeven_price`) — une position stagnante mais rouge est signalée, pas vendue. ⚠️ **Backtestée 2023→2026, cette règle monte le taux de réussite (35 %→47 %) et BAISSE le P&L** : elle coupe les lentes qui finissaient par payer. C'est un arbitrage vitesse/rendement assumé, livré au réglage le moins coûteux mesuré. `STALE_EXIT=off` pour la couper |
 | **Positions HOLD long terme** | `/hold TICKER` : sortie du périmètre bot (pas d'alertes, hors P&L trading, jamais proposée à la vente) |
-| **Sélection momentum validée** | Momentum 12 mois (hors dernier mois) + cours > MM200 + entrée sur repli sain (RSI 35-65) — voir [Stratégie](#stratégie-de-sélection--validée-par-la-recherche-académique) |
+| **Sélection momentum validée** | Momentum 12 mois (hors dernier mois) + cours > MM200 + entrée sur repli sain (RSI 35-65) + **momentum 1 mois ≥ -5 %** (`ENTRY_MIN_MOM_1M` — on n'achète plus ce qui s'effrite : Carrefour est entré à -2,5 % et n'a fait que dériver). Seuil **backtesté** : -5 bat -12 (la règle d'origine) sur le P&L comme sur le drawdown, tandis qu'exiger ≥ 0 dégrade tout — filtrer l'effritement aide, exiger une hausse déjà installée fait rater les replis qui paient — voir [Stratégie](#stratégie-de-sélection--validée-par-la-recherche-académique) |
 | **Sizing par le risque** | Perte au SL = 1% du budget autonome, SL ≈ 2×ATR, taille réduite si volatilité élevée, série de pertes, ou corrélation forte avec une position déjà détenue (entrée bloquée au-delà de 0.85) |
 | **Mode gain réduit** (opt-in) | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) — désactivé par défaut (`SMALL_GAIN_MODE=on` pour l'activer) |
 | **Valeur de la part** | Croissance de l'investissement en %, base 100, insensible aux versements et retraits (`/nav` + graphique du dashboard) |
@@ -269,10 +270,11 @@ TradingBot/
 ├── history.py               Persistance des trades clotures, ecriture atomique (feuille)
 ├── sizing.py                Budget, capacite d'entree, taille de position
 ├── trailing.py              Trailing stop : les deux paliers
+├── stale_exit.py            Sortie sur stagnation : le capital doit tourner, jamais a perte
 ├── protection_renewal.py    Repose les protections perdues (echeance BD, ou trou qui dure)
 ├── prompt_context.py        Briques de contexte injectees dans les prompts IA
 ├── docs/tuto/               Guide interactif /tuto (texte, hors code)
-├── tests/                   312 tests de caracterisation — ./bot.sh test
+├── tests/                   334 tests de caracterisation — ./bot.sh test
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome
@@ -383,6 +385,7 @@ TradingBot/
 | `/disconnect` | Fermer la session Playwright et revenir en mode Classic |
 | `/sync` | Synchroniser le portefeuille depuis Bourse Direct — détecte et clôture automatiquement les ventes exécutées (TP/SL touchés), ajoute les positions issues d'achats exécutés. Les messages d'étape sont **éphémères** (supprimés dès que le résultat s'affiche) ; ils ne restent que si le sync échoue |
 | `/trailing` | Forcer une vérification du trailing stop (SL au PRU) **maintenant**, avec le détail de chaque position et la raison d'un non-déclenchement. Le cycle automatique tourne chaque heure à **:35** (jours de marché, 9h-22h, session BD connectée) et dès qu'une position franchit son seuil aux checks 9h/12h/15h/17h — mais il reste silencieux s'il n'a rien à faire, contrairement à `/trailing` qui répond toujours |
+| `/stagnation` | Verdict de **vitesse** sur chaque position : âge, part du chemin PRU→TP parcourue, jalon applicable, et pour une position bloquée le cours qu'il lui faudrait pour sortir sans perte. Le cycle automatique tourne chaque heure à **:35** et reste muet quand il n'a rien à libérer ; `/stagnation` répond toujours |
 | `/testordre TICKER` | Diagnostic : teste 5 variantes de payload d'ordre contre l'API BD (validation seule, rien n'est envoyé au marché) |
 | `/capture` | Diagnostic générique : trace dans le log toutes les requêtes API que le site BD envoie. Lancer `/capture`, **puis refaire à la main l'action que le bot rate** (passer un ordre, annuler, modifier un SL/TP…) **dans la fenêtre Chromium du bot**. Une action faite sur téléphone ou dans un autre navigateur n'est pas capturée |
 

@@ -1359,7 +1359,9 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
       - mom_12_1 > 0 (formation momentum positive)
       - RSI dans [RSI_ENTRY_MIN, RSI_ENTRY_MAX] : on achète le PULLBACK dans
         la tendance, pas la surchauffe
-      - momentum 1 mois > -12% (le repli est OK, l'effondrement non)
+      - momentum 1 mois ≥ ENTRY_MIN_MOM_1M (défaut 0 : on n'achète pas ce
+        qui stagne — le KPI est la vitesse du gain) et jamais sous
+        ENTRY_CRASH_MOM_1M (-12% : le repli est OK, l'effondrement non)
 
     BULL       : score = mom_12_1 (plafonné à 80 pour écarter les loteries).
     NEUTRAL    : idem + force relative > 0 exigée. Score = 0.5×mom_12_1 + 0.5×rel.
@@ -1367,7 +1369,8 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
                  Score = rel. Fallback si 0 candidats : force_relative > -3%.
     CRISIS     : retourne [] immédiatement, aucun trade.
     """
-    from config import RSI_ENTRY_MIN, RSI_ENTRY_MAX, ATR_SL_MULT, MAX_SL_PCT
+    from config import (RSI_ENTRY_MIN, RSI_ENTRY_MAX, ATR_SL_MULT, MAX_SL_PCT,
+                        ENTRY_MIN_MOM_1M, ENTRY_CRASH_MOM_1M)
 
     if regime == "CRISIS":
         return []
@@ -1412,7 +1415,12 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
             return None
         if not (RSI_ENTRY_MIN <= rsi <= RSI_ENTRY_MAX):
             return None
-        if mom < -12:
+        # Momentum 1 mois : DEUX seuils, pas un. L'effondrement est un veto dur
+        # (le repli est OK, la chute non) ; le plancher, lui, sert la VITESSE —
+        # un titre plat depuis un mois peut finir gagnant, mais lentement, et le
+        # capital dort pendant ce temps. Carrefour, entré le 19/08/2026 à -2.5%
+        # de momentum 1 mois, n'avait rien fait 8 jours plus tard.
+        if mom < ENTRY_CRASH_MOM_1M or mom < ENTRY_MIN_MOM_1M:
             return None
         # VETO VOLATILITÉ, appliqué DÈS LE SCREEN (29/07/2026). validate_candidate
         # rejette déjà tout titre dont le SL technique (ATR_SL_MULT × ATR)

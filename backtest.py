@@ -108,8 +108,19 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              risk_pct: float = 1.0, max_pos: int = 2,
              max_cost_pct: float = 30.0, be_trail: bool = True,
              tp_mult_r: float | None = None, fee: float = FEE,
-             cadence: str = "weekly", max_ext_atr: float | None = None) -> dict:
-    """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR)."""
+             cadence: str = "weekly", max_ext_atr: float | None = None,
+             stale: tuple | None = None,
+             min_mom1m: float | None = None) -> dict:
+    """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
+
+    `stale` = ((j1, p1), (j2, p2)) — jalons de la sortie sur stagnation : à j1
+    jours de bourse, la position doit avoir parcouru p1 % du chemin entrée→TP.
+    La sortie n'a lieu QUE si le cours couvre l'entrée + les frais A/R : la
+    règle produit, par construction, zéro trade perdant de son fait.
+
+    `min_mom1m` = plancher de momentum 1 mois à l'entrée (None = règle
+    d'origine, qui ne rejetait que l'effondrement sous -12%).
+    """
     positions = []   # {ticker, entry, sl, tp, qty, entry_date, be_done}
     closed = []
     equity = BUDGET
@@ -139,6 +150,21 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                 exit_price, why = p["tp"], "TP"
             elif days_held >= MAX_HOLD_DAYS:
                 exit_price, why = row["close"], "TIME"
+            elif stale:
+                # Jalons de progression vers le TP. Le prix de sortie doit
+                # couvrir les frais aller-retour, sinon on ne vend pas : la
+                # contrainte « jamais à perte » fait partie de la règle testée.
+                exige = None
+                for j, pct in stale:
+                    if days_held >= j:
+                        exige = pct if exige is None else max(exige, pct)
+                if exige is not None:
+                    parcouru = ((row["close"] - p["entry"])
+                                / (p["tp"] - p["entry"]) * 100)
+                    pt_mort = p["entry"] + _fee_pair(
+                        p["ticker"], fee, p["entry"] * p["qty"]) / p["qty"]
+                    if parcouru < exige and row["close"] > pt_mort:
+                        exit_price, why = row["close"], "STALE"
             if exit_price is not None:
                 pnl = (exit_price - p["entry"]) * p["qty"] - _fee_pair(
                     p["ticker"], fee, p["entry"] * p["qty"])
@@ -174,7 +200,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
             else:
                 if (np.isnan(r["mom_12_1"]) or r["mom_12_1"] <= 0
                         or np.isnan(r["ma200"]) or r["close"] <= r["ma200"]
-                        or not (35 <= r["rsi"] <= 65) or r["mom_1m"] < -12
+                        or not (35 <= r["rsi"] <= 65)
+                        or r["mom_1m"] < (-12 if min_mom1m is None else min_mom1m)
                         or np.isnan(r["atr_pct"]) or 2 * r["atr_pct"] > 10):
                     continue
                 # Veto d'extension : le titre a-t-il déjà couru sur 5 séances ?

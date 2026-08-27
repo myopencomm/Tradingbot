@@ -1356,6 +1356,34 @@ def cmd_trailing(args, cid):
     _run_long(cid, _do_trailing)
 
 
+def cmd_stagnation(args, cid):
+    """/stagnation — verdict de vitesse sur chaque position, à la demande.
+
+    Le cycle automatique tourne chaque heure à :35 et reste muet quand il n'a
+    rien à libérer. Ici on rend compte de CHAQUE position : âge, chemin
+    parcouru vers le TP, jalon applicable, et pour une position bloquée le
+    cours qu'il lui faudrait pour sortir sans perte.
+    """
+    if not bot_mode.is_playwright():
+        send("Le mode Playwright n'est pas actif. /connect pour l'activer.", cid)
+        return
+    if not playwright_session.is_connected():
+        send("Session Playwright non connectee. /connect pour relancer.", cid)
+        return
+    import stale_exit
+
+    def _do_stagnation():
+        try:
+            # L'utilisateur demande un état : il doit tout recevoir, même ce
+            # qui a déjà été signalé par un cycle automatique.
+            stale_exit.rearm()
+            stale_exit.stale_exit_cycle(lambda m: send(m, cid), verbose=True)
+        except Exception as e:
+            send(f"Erreur stagnation : {e}", cid)
+
+    _run_long(cid, _do_stagnation)
+
+
 # ─── Ordres Playwright ──────────────────────────────────────────────────────
 
 _pending_order: dict | None = None  # {"order_id", "is_expert", "ticker", "summary", "expires"}

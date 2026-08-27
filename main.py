@@ -218,6 +218,14 @@ def _hourly_bd_sync():
         protection_renewal.renew_cycle(telegram_bot.send)
     except Exception as e:
         print(f"[hourly renouvellement protections] {e}")
+    # Sortie sur stagnation : une position qui n'avance pas vers son TP
+    # immobilise du capital. Placée APRÈS le trailing serait trop tard — le
+    # trailing pourrait remonter le SL d'une ligne qu'on s'apprête à vendre.
+    try:
+        import stale_exit
+        stale_exit.stale_exit_cycle(telegram_bot.send)
+    except Exception as e:
+        print(f"[hourly stagnation] {e}")
     # Trailing stop : remonte les SL au PRU sur BD (positions auto +3%,
     # manuelles +5%) — uniquement celles protégées par un Expert actif.
     try:

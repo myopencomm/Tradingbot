@@ -54,6 +54,66 @@ RSI_ENTRY_MIN = float(os.getenv("RSI_ENTRY_MIN", "35"))   # zone d'entrée saine
 RSI_ENTRY_MAX = float(os.getenv("RSI_ENTRY_MAX", "65"))   # > 65 = on attend le repli
 RSI_HARD_MAX  = float(os.getenv("RSI_HARD_MAX", "70"))    # veto dur à l'achat
 
+# Plancher de momentum 1 MOIS à l'entrée (27/08/2026). Le screen ne rejetait
+# qu'un effondrement (< -12%) : Carrefour est entré le 19/08 avec un momentum
+# 1 mois de -2.5% et un volume à 0.57× la moyenne, et n'a fait que dériver.
+# Un titre plat depuis un mois ne produit pas un gain RAPIDE — et la vitesse
+# est le KPI (voir stale_exit).
+#
+# Ce plancher est en TENSION avec la doctrine « on achète le PULLBACK » : un
+# repli sain affiche souvent un momentum 1 mois légèrement négatif. Le mettre à
+# 0 revient à n'acheter que ce qui monte déjà — et c'est PIRE, mesuré.
+#
+# Backtest 2023→2026, univers Euronext+US (137 titres), 3 positions, risque 1% :
+#     plancher   P&L      profit factor   max DD    j/trade
+#     -12 (réf) -1047 €       0.56        -1212 €     12.1
+#      -5        -706 €       0.66         -918 €     13.4   ← meilleur
+#      -3        -812 €       0.64        -1036 €     13.3
+#       0       -1091 €       0.55        -1318 €     13.8   ← pire que la réf
+# Courbe en cloche : filtrer les titres qui s'effritent aide, exiger une hausse
+# déjà installée fait rater les pullbacks qui paient. -5 est l'optimum testé.
+# (P&L négatif partout : le moteur QUANT SEUL n'a pas d'edge sur la période —
+# c'est l'étage IA/régime qui porte la stratégie, non simulable ici. Seule la
+# COMPARAISON entre variantes est exploitable.)
+ENTRY_MIN_MOM_1M = float(os.getenv("ENTRY_MIN_MOM_1M", "-5"))
+# Effondrement : veto dur, quel que soit le plancher ci-dessus.
+ENTRY_CRASH_MOM_1M = float(os.getenv("ENTRY_CRASH_MOM_1M", "-12"))
+
+# ── Sortie sur STAGNATION — le capital doit tourner ──────────────────────────
+# KPI de l'utilisateur : la VITESSE du gain, pas seulement le gain. Mesuré sur
+# les 15 trades clos : les 3 gagnants les plus rapides rapportent 70.6, 13.3 et
+# 12.6 €/jour ; tout ce qui dépasse 17 jours de détention tombe à 5.1, 4.7, 3.4
+# et 1.8 €/jour. La durée était MESURÉE partout (/stats, dashboard, €/jour) et
+# n'entrait dans AUCUNE décision : une position sans catalyseur dormait jusqu'au
+# SL ou au TP, c'est-à-dire indéfiniment.
+#
+# Règle : à J+N JOURS DE BOURSE, la position doit avoir parcouru au moins X% du
+# chemin PRU→TP. Sinon elle est stagnante et le capital repart ailleurs.
+#
+# ⚠️ CE QUE DIT LE BACKTEST, et il ne dit pas ce qu'on espérait. Mêmes
+# conditions que ci-dessus, plancher de momentum fixé à -3 :
+#     jalons                     P&L     PF     max DD   j/trade   win%
+#     aucun (réf)               -812 €  0.64   -1036 €     13.3    35.1
+#     J+25 → 33%                -852 €  0.62   -1014 €     12.7    38.4
+#     J+15 → 25%, J+25 → 50%    -943 €  0.60   -1052 €     11.5    41.8
+#     J+10 → 25%, J+15 → 50%    -949 €  0.58   -1060 €     10.6    47.2
+# Plus les jalons serrent, plus le taux de réussite MONTE et plus le P&L
+# BAISSE : la règle coupe les positions lentes qui finissaient par payer. Le
+# gain par jour de capital ne s'améliore pas non plus (-0.42 €/j au mieux
+# contre -0.40 sans jalon). La sortie sur stagnation achète de la vitesse et de
+# la régularité avec du rendement — c'est un arbitrage, pas un gain net.
+#
+# Choix retenu (27/08/2026) : la règle est demandée, on la livre au réglage le
+# MOINS coûteux mesuré — un jalon unique à J+25 / 33%. Le second jalon existe
+# mais est désactivé par défaut (STALE_DAYS_2=0). STALE_EXIT=off pour tout
+# couper.
+STALE_EXIT = os.getenv("STALE_EXIT", "on").strip().lower() not in ("off", "false", "0", "no")
+STALE_DAYS_1     = float(os.getenv("STALE_DAYS_1", "25"))
+STALE_PROGRESS_1 = float(os.getenv("STALE_PROGRESS_1", "33"))
+# Second jalon, désactivé par défaut : 0 = pas de jalon.
+STALE_DAYS_2     = float(os.getenv("STALE_DAYS_2", "0"))
+STALE_PROGRESS_2 = float(os.getenv("STALE_PROGRESS_2", "60"))
+
 # Stops adaptés à la volatilité du titre (Kaminski & Lo 2014 : les stops
 # aident les stratégies momentum) : distance SL ≈ ATR_SL_MULT × ATR14,
 # bornée [MIN_SL_PCT, MAX_SL_PCT]. TP ≥ MIN_RR × distance SL.
@@ -297,6 +357,34 @@ MIN_NET_GAIN_FEE_RATIO = float(os.getenv("MIN_NET_GAIN_FEE_RATIO", "5"))
 # position d'environ 920€ (voir min_viable_amount()).
 MIN_NET_GAIN_FEE_RATIO_US = float(os.getenv("MIN_NET_GAIN_FEE_RATIO_US",
                                             str(MIN_NET_GAIN_FEE_RATIO)))
+
+
+def breakeven_price(ticker: str, entry_price: float, qty: int,
+                    fx_to_eur: float = 1.0) -> float:
+    """Cours à partir duquel la revente ne perd RIEN, frais de sortie compris.
+
+    Le PRU de BD inclut déjà TOUS les frais d'achat (courtage + TTF + change) —
+    vérifié au centime sur nos ordres exécutés, voir le barème ci-dessus. Il ne
+    reste donc à couvrir que la SORTIE : courtage de vente, plus la commission
+    de change si le titre est en devise.
+
+    Résolu par itération et non par formule : le courtage est un barème par
+    tranches (une marche peut être franchie en cours de route), les autres
+    composantes sont proportionnelles. Trois tours suffisent à converger.
+
+    `fx_to_eur` convertit la devise du titre en euros — les frais sont un
+    barème en EUROS, les appliquer à un montant en dollars les surestimerait.
+
+    Retourne un cours dans la DEVISE DU TITRE, comme `entry_price`.
+    """
+    if not entry_price or not qty or fx_to_eur <= 0:
+        return float(entry_price or 0)
+    price = float(entry_price)
+    for _ in range(4):
+        montant_eur = qty * price * fx_to_eur
+        frais_ccy = order_fees(ticker, montant_eur, "sell") / fx_to_eur
+        price = entry_price + frais_ccy / qty
+    return round(price, 4)
 
 
 def min_gain_fee_ratio(ticker: str = "") -> float:

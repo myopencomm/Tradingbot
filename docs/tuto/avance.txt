@@ -74,6 +74,42 @@ le detail de chaque position (le cycle
 auto reste silencieux s'il n'a rien a
 faire ; /trailing repond toujours).
 ===== PAGE =====
+Fonctions avancees — Sortie sur stagnation
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Le KPI n'est pas le gain, c'est le gain
+PAR JOUR. Sur tes trades clos : les 3
+gagnants les plus rapides rendent 70.6,
+13.3 et 12.6 EUR/jour ; tout ce qui passe
+17 jours tombe sous 5 EUR/jour.
+
+LA REGLE
+A J+25 JOURS DE BOURSE, une position doit
+avoir parcouru 33% du chemin PRU -> TP.
+Sinon elle stagne : le bot la vend au
+marche et le capital repart ailleurs.
+
+JAMAIS A PERTE
+La vente n'a lieu QUE si le cours couvre
+le PRU + les frais de sortie (courtage,
+et commission de change sur un titre en
+devise). Une position stagnante mais dans
+le rouge n'est PAS vendue : elle est
+signalee une fois par jour, et elle
+continue de bloquer son capital.
+
+CE QUE CA COUTE — A SAVOIR
+Backtestee sur 2023-2026, cette regle
+FAIT MONTER le taux de reussite (35% ->
+47%) et BAISSER le P&L : elle coupe les
+positions lentes qui finissaient par
+payer. C'est un arbitrage vitesse contre
+rendement, pas un gain net. Le reglage
+livre est le moins couteux mesure.
+
+/stagnation → verdict de chaque position
+STALE_EXIT=off dans .env → tout couper
+
+===== PAGE =====
 Fonctions avancees — Protections perdues
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Un stop se perd de DEUX facons :
