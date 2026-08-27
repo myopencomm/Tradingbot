@@ -108,6 +108,15 @@ donc bloquee de toute facon.
 
 /stagnation → vitesse de chaque position
 
+CE QUI A ETE GARDE : LE FILTRE D'ENTREE
+Le bot n'achete plus un titre dont le
+momentum 1 mois est sous -5%. C'est la
+seule des deux regles que le backtest
+valide : moins de pertes, drawdown plus
+faible. Mieux vaut ne pas acheter ce qui
+s'effrite que devoir le revendre vite.
+(ENTRY_MIN_MOM_1M dans .env)
+
 ===== PAGE =====
 Fonctions avancees — Protections perdues
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -111,7 +111,7 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
   convertis via `float()`/`int()` sous `try/except`.
 - Les ordres réels exigent une **double confirmation** (`/ordre …` → récap →
   `/oui`) avec expiration à 120 s.
-- Trois chemins passent des ordres **sans confirmation** — par construction,
+- Quatre chemins peuvent passer des ordres **sans confirmation** — par construction,
   puisqu'ils s'exécutent sans utilisateur devant l'écran : le mode autonome
   (entrées), le trailing (remontée du SL) et le renouvellement des protections
   (`protection_renewal`, repose d'un SL/TP expiré). Tous trois sont bornés au
@@ -122,6 +122,13 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
   ou trou constaté sans interruption depuis 45 min) **et** deux lectures du
   carnet sans ordre à seuil. Reposer sur une lecture ratée créerait un doublon
   de vente sur des titres déjà engagés.
+- Le quatrième, la **vente sur stagnation** (`stale_exit`), est le seul qui
+  puisse SOLDER une position de sa propre initiative. Il est **désactivé par
+  défaut** (`STALE_EXIT=off`, rollback du 27/08/2026) : le module calcule et
+  affiche un verdict de vitesse, sans jamais vendre. Réactivé, il reste borné —
+  vente au marché uniquement, jamais sous le prix de revient frais compris, et
+  seulement après annulation VÉRIFIÉE des protections (vendre par-dessus un
+  ordre de protection actif engagerait deux fois les mêmes titres).
 
 ### Données & journaux
 - Fichiers créés en local : `positions.json`, `trades_history.json`,

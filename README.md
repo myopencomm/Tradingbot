@@ -1752,6 +1752,8 @@ ATR_SL_MULT=2.0           # distance SL = 2×ATR 14j
 MIN_SL_PCT=3              # SL jamais plus serré (bruit du titre)
 MAX_SL_PCT=10             # au-delà : titre trop volatil → exclu
 MIN_RR=1.5                # TP ≥ 1.5× la distance du SL
+ENTRY_MIN_MOM_1M=-5       # plancher de momentum 1 mois à l'entrée (backtesté : -5 > -12 > 0)
+ENTRY_CRASH_MOM_1M=-12    # veto dur : un effondrement n'est jamais un repli
 EARNINGS_VETO_DAYS=6      # EXCLUS si résultats < N jours (gap non couvert par le SL) ; au-delà, non bloquant
 RISK_PER_TRADE_PCT=1.0    # perte au SL en % du budget autonome
 MAX_POSITION_PCT=30       # coût max d'une position en % du budget autonome
@@ -1761,6 +1763,12 @@ BROKERAGE_FEE_US=8.50     # courtage BD par ordre US (le barème Euronext est en
 TTF_RATE=0.004            # taxe transactions financières FR, à l'achat (0.4%)
 MIN_NET_GAIN_FEE_RATIO_US=5  # seuil de rentabilité côté étranger
 MIN_NET_GAIN_FEE_RATIO=5  # gain brut au TP requis : au moins N× les frais A/R
+
+STALE_EXIT=off            # vente auto des positions lentes — DÉSACTIVÉE (baisse le P&L, cf. rollback 27/08/2026)
+STALE_DAYS_1=25           # jalon en jours de BOURSE (constat affiché par /stagnation)
+STALE_PROGRESS_1=33       # % du chemin PRU→TP exigé à ce jalon
+STALE_DAYS_2=0            # second jalon, 0 = désactivé
+STALE_PROGRESS_2=60
 
 SMALL_GAIN_MODE=off       # trades courts forcés quand rien ne passe (déconseillé)
 FALLBACK_TP_MIN_PCT=3     # mode gain réduit : TP minimum des trades courts
