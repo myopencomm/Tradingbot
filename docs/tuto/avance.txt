@@ -74,7 +74,7 @@ le detail de chaque position (le cycle
 auto reste silencieux s'il n'a rien a
 faire ; /trailing repond toujours).
 ===== PAGE =====
-Fonctions avancees — Sortie sur stagnation
+Fonctions avancees — Vitesse des positions
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Le KPI n'est pas le gain, c'est le gain
 PAR JOUR. Sur tes trades clos : les 3
@@ -82,32 +82,31 @@ gagnants les plus rapides rendent 70.6,
 13.3 et 12.6 EUR/jour ; tout ce qui passe
 17 jours tombe sous 5 EUR/jour.
 
-LA REGLE
-A J+25 JOURS DE BOURSE, une position doit
-avoir parcouru 33% du chemin PRU -> TP.
-Sinon elle stagne : le bot la vend au
-marche et le capital repart ailleurs.
+CE QUE FAIT LE BOT
+A J+25 JOURS DE BOURSE, il regarde si la
+position a parcouru 33% du chemin
+PRU -> TP. Sinon il te le DIT.
 
-JAMAIS A PERTE
-La vente n'a lieu QUE si le cours couvre
-le PRU + les frais de sortie (courtage,
-et commission de change sur un titre en
-devise). Une position stagnante mais dans
-le rouge n'est PAS vendue : elle est
-signalee une fois par jour, et elle
-continue de bloquer son capital.
+Il ne vend PAS. La vente automatique a
+ete testee puis retiree le 27/08/2026 :
+sur 149 puis 608 titres, elle fait monter
+le taux de reussite et BAISSER le gain.
+Elle coupait les positions lentes qui
+finissaient par payer, et l'argent libere
+rachetait moins bien. Le bon levier est
+d'avoir PLUS de positions en parallele
+(/auto positions N), pas de couper les
+lentes.
 
-CE QUE CA COUTE — A SAVOIR
-Backtestee sur 2023-2026, cette regle
-FAIT MONTER le taux de reussite (35% ->
-47%) et BAISSER le P&L : elle coupe les
-positions lentes qui finissaient par
-payer. C'est un arbitrage vitesse contre
-rendement, pas un gain net. Le reglage
-livre est le moins couteux mesure.
+SI TU LA REACTIVES (STALE_EXIT=on)
+La vente n'aurait lieu QUE si le cours
+couvre le PRU + les frais de sortie
+(courtage, et commission de change sur un
+titre en devise) : jamais a perte. Une
+position stagnante mais rouge resterait
+donc bloquee de toute facon.
 
-/stagnation → verdict de chaque position
-STALE_EXIT=off dans .env → tout couper
+/stagnation → vitesse de chaque position
 
 ===== PAGE =====
 Fonctions avancees — Protections perdues

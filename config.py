@@ -103,11 +103,22 @@ ENTRY_CRASH_MOM_1M = float(os.getenv("ENTRY_CRASH_MOM_1M", "-12"))
 # contre -0.40 sans jalon). La sortie sur stagnation achète de la vitesse et de
 # la régularité avec du rendement — c'est un arbitrage, pas un gain net.
 #
-# Choix retenu (27/08/2026) : la règle est demandée, on la livre au réglage le
-# MOINS coûteux mesuré — un jalon unique à J+25 / 33%. Le second jalon existe
-# mais est désactivé par défaut (STALE_DAYS_2=0). STALE_EXIT=off pour tout
-# couper.
-STALE_EXIT = os.getenv("STALE_EXIT", "on").strip().lower() not in ("off", "false", "0", "no")
+# Vérifié une seconde fois sur l'univers RÉEL du bot (608 titres, soit ce que
+# le scan hebdomadaire couvre vraiment, et non les 149 listes en dur) : même
+# forme, aucune amélioration. -1602 € sans jalon, -1651 € à J+25/33%,
+# -1856 € avec les jalons serrés. L'hypothèse « il suffirait de plus de
+# candidats pour que l'argent libéré trouve mieux » est donc fausse : le
+# capital EST réinvesti (+3 à +20 trades), simplement dans des trades qui ne
+# valent pas celui qu'on vient de couper.
+#
+# DÉCISION (27/08/2026, utilisateur) : ROLLBACK. La règle ne s'exécute plus.
+# Elle reste en place, mesurée et testée, mais en OBSERVATION seule : elle
+# n'agit que si STALE_EXIT=on. `/stagnation` continue de dire quelles
+# positions traînent — l'information est utile, la vente automatique non.
+# Le levier choisi à la place : plus de capital et plus de positions
+# simultanées (/auto positions N), pour ne plus dépendre d'une seule ligne
+# lente.
+STALE_EXIT = os.getenv("STALE_EXIT", "off").strip().lower() not in ("off", "false", "0", "no")
 STALE_DAYS_1     = float(os.getenv("STALE_DAYS_1", "25"))
 STALE_PROGRESS_1 = float(os.getenv("STALE_PROGRESS_1", "33"))
 # Second jalon, désactivé par défaut : 0 = pas de jalon.

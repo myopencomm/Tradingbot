@@ -29,16 +29,26 @@ capital repart ailleurs.
 Ce n'est pas un stop de plus : le SL protège du RISQUE, ce jalon-ci protège du
 TEMPS. Les deux se lisent sur des axes différents.
 
-CE QUE COÛTE CETTE RÈGLE — À SAVOIR
-------------------------------------
-Backtestée (27/08/2026, 2023→2026, 137 titres), elle FAIT BAISSER le P&L :
-plus les jalons serrent, plus le taux de réussite monte (35% → 47%) et plus le
-résultat baisse (-812 € → -949 €). Elle coupe les positions lentes qui
-finissaient par payer, et le gain par jour de capital ne s'améliore pas non
-plus. Livrée quand même, à la demande explicite de l'utilisateur et au réglage
-le moins coûteux mesuré (jalon unique J+25 / 33%) : c'est un arbitrage assumé
-entre vitesse et rendement, pas un gain net. Le détail des mesures est dans
-`config.py`, à côté des paramètres. STALE_EXIT=off pour tout couper.
+⚠️ CETTE RÈGLE NE VEND PLUS RIEN — OBSERVATION SEULE
+----------------------------------------------------
+Backtestée deux fois (27/08/2026), elle FAIT BAISSER le P&L. Plus les jalons
+serrent, plus le taux de réussite monte et plus le résultat baisse :
+
+    univers 137 titres     sans jalon  -812 €   →  J+10/25%+J+15/50%  -949 €
+    univers 608 titres    sans jalon -1602 €   →  J+10/25%+J+15/50% -1856 €
+
+Elle coupe les positions lentes qui finissaient par payer — une seule fenêtre
+(mars→oct. 2024) perd 534 € parce qu'un titre vendu à 33% de son chemin a
+continué sans nous. L'argument « le capital libéré rachètera mieux » a été
+testé et ne tient pas : le capital EST réinvesti (jusqu'à +20 trades), dans
+des trades qui ne valent pas celui qu'on vient de couper. Élargir l'univers
+au périmètre réel du scan ne change rien non plus.
+
+ROLLBACK décidé le 27/08/2026 : `STALE_EXIT` vaut **off** par défaut. Le
+module reste — il calcule et affiche toujours le verdict de vitesse, que
+`/stagnation` expose, parce que savoir quelles lignes traînent est utile. Ce
+qui a été retiré, c'est la VENTE automatique. Passer STALE_EXIT=on la
+réactive, en connaissance de cause.
 
 LA CONTRAINTE : NE JAMAIS VENDRE À PERTE
 ----------------------------------------
@@ -126,8 +136,9 @@ def verdict(pos: dict, price: float, now: datetime,
       "bloquee" — stagnante mais dans le rouge : on signale, on ne vend pas
       "garder"  — dans les temps, ou hors périmètre
     """
-    if not config.STALE_EXIT:
-        return "garder", "sortie sur stagnation désactivée (STALE_EXIT=off)"
+    # Le verdict de VITESSE se calcule toujours, même règle désactivée : c'est
+    # ce que `/stagnation` affiche. Seule l'exécution est conditionnée à
+    # STALE_EXIT, et c'est `stale_exit_cycle` qui la garde.
     if pos.get("hold") or not pos.get("qty"):
         return "garder", "hors gestion bot"
     entry = pos.get("entry_price")
@@ -247,6 +258,10 @@ def stale_exit_cycle(send_fn, verbose: bool = False,
     """
     now = now or datetime.now(timezone.utc)
     aujourd_hui = now.date().isoformat()
+    # Règle désactivée : aucun cours n'est interrogé et rien n'est envoyé. Sauf
+    # demande explicite (`/stagnation`), qui veut le constat sans la vente.
+    if not config.STALE_EXIT and not verbose:
+        return
     data = portfolio.load()
 
     lignes = []
@@ -262,11 +277,14 @@ def stale_exit_cycle(send_fn, verbose: bool = False,
         lignes.append((name, pos, price, action, raison))
 
     if verbose:
-        head = ["⏱️ SORTIE SUR STAGNATION",
-                f"Jalons : {config.STALE_PROGRESS_1:.0f}% du chemin PRU→TP à "
-                f"J+{config.STALE_DAYS_1:.0f}, {config.STALE_PROGRESS_2:.0f}% à "
-                f"J+{config.STALE_DAYS_2:.0f}.",
-                "Jamais à perte : la vente exige un cours au-dessus du PRU + frais."]
+        etat = ("VENTE AUTOMATIQUE ACTIVE" if config.STALE_EXIT else
+                "observation seule — aucune vente (STALE_EXIT=off)")
+        head = [f"⏱️ VITESSE DES POSITIONS — {etat}",
+                f"Jalon : {config.STALE_PROGRESS_1:.0f}% du chemin PRU→TP à "
+                f"J+{config.STALE_DAYS_1:.0f} jours de bourse."]
+        if not config.STALE_EXIT:
+            head.append("Rollback du 27/08/2026 : la vente sur stagnation coûtait "
+                        "du rendement au backtest. Le constat reste, l'action non.")
         for n, _p, _pr, a, r in lignes:
             icone = {"vendre": "💰", "bloquee": "🔒"}.get(a, "✅")
             head.append(f"  {icone} {n} : {r}")
@@ -274,6 +292,8 @@ def stale_exit_cycle(send_fn, verbose: bool = False,
             head.append("\n✅ Rien à libérer.")
         send_fn("\n".join(head))
 
+    if not config.STALE_EXIT:
+        return          # /stagnation a rendu son constat, on ne vend rien
     for name, pos, price, action, raison in lignes:
         if action == "bloquee":
             if _notified_stuck.get(name) != aujourd_hui:

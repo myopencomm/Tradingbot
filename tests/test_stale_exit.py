@@ -112,10 +112,47 @@ class TestVerdict:
         action, why = stale_exit.verdict(p, 102.0, NOW)
         assert action == "garder" and "TP manquant" in why
 
-    def test_interrupteur_off(self, monkeypatch):
+    def test_le_verdict_se_calcule_meme_regle_desactivee(self, monkeypatch):
+        """Rollback du 27/08 : la VENTE est coupée, pas le constat. `/stagnation`
+        doit continuer de dire quelles lignes traînent."""
         monkeypatch.setattr(config, "STALE_EXIT", False)
-        action, why = stale_exit.verdict(_pos(jours=40), 102.0, NOW)
-        assert action == "garder" and "désactivée" in why
+        action, _why = stale_exit.verdict(_pos(jours=40), 102.0, NOW)
+        assert action == "vendre"
+
+
+class TestRollback:
+    """La règle est livrée DÉSACTIVÉE : elle coûtait du rendement au backtest.
+
+    137 titres  : -812 € sans jalon  → -949 € avec les jalons serrés
+    608 titres  : -1602 € sans jalon → -1856 € avec les jalons serrés
+    Et le capital libéré EST réinvesti — dans de moins bons trades.
+    """
+
+    def test_la_vente_automatique_est_coupee_par_defaut(self):
+        assert config.STALE_EXIT is False
+
+    def test_le_cycle_ne_touche_a_rien_quand_la_regle_est_off(self, monkeypatch):
+        """Ni vente, ni message, ni même un appel de cours."""
+        appels, envois = [], []
+        monkeypatch.setattr(config, "STALE_EXIT", False)
+        monkeypatch.setattr(stale_exit.portfolio, "load",
+                            lambda: appels.append("load") or {"positions": {}})
+        stale_exit.stale_exit_cycle(envois.append, now=NOW)
+        assert appels == [] and envois == []
+
+    def test_stagnation_repond_quand_meme(self, monkeypatch):
+        """L'utilisateur qui demande l'état doit l'obtenir, vente ou pas."""
+        envois = []
+        monkeypatch.setattr(config, "STALE_EXIT", False)
+        monkeypatch.setattr(stale_exit.portfolio, "load",
+                            lambda: {"positions": {"X": _pos(jours=40)}})
+        monkeypatch.setattr(stale_exit.prices, "get_quote", lambda t: {})
+        monkeypatch.setattr(stale_exit.portfolio, "best_price",
+                            lambda p, q: {"price": 102.0})
+        monkeypatch.setattr(stale_exit.prices, "fx_to_eur", lambda c: 1.0)
+        stale_exit.stale_exit_cycle(envois.append, verbose=True, now=NOW)
+        txt = "\n".join(envois)
+        assert "observation seule" in txt and "X" in txt
 
 
 class TestPointMortReel:
