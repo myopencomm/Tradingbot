@@ -227,6 +227,12 @@ def renew_cycle(send_fn, verbose: bool = False, now: datetime | None = None) -> 
         qty = abs(int(pos.get("qty") or 0))
         sl, tp = pos["target_low"], pos["target_high"]
         ticker = pos["ticker"]
+        # On TENTE même marché fermé : BD accepte souvent un ordre hors séance,
+        # et la protection est alors active dès l'ouverture — ce qui vaut mieux
+        # que d'attendre 15h35 pour un titre US. Mais un refus dans ce cas n'est
+        # pas une panne : il ne doit pas déclencher l'alerte rouge.
+        import market
+        marche_ouvert = market.is_open_now(ticker)
         send_fn(f"🔄 {name} : {pourquoi}\nRepose de la protection sur BD "
                 f"(SL {sl} / TP {tp}, {qty} titres)…")
 
@@ -251,6 +257,13 @@ def renew_cycle(send_fn, verbose: bool = False, now: datetime | None = None) -> 
         if not conf:
             # Rien n'a été annulé pour en arriver là : l'échec laisse la
             # position dans l'état où elle était (à nu), pas dans un état pire.
+            if not marche_ouvert:
+                print(f"[Renouvellement] {name} : refus BD hors séance — "
+                      f"nouvelle tentative à l'ouverture")
+                if verbose:
+                    send_fn(f"⏳ {name} : marché fermé, BD a refusé la repose. "
+                            f"Nouvelle tentative à l'ouverture.")
+                continue
             if _notified_failure.get(name) == today:
                 print(f"[Renouvellement] {name} : nouvel échec (déjà signalé aujourd'hui)")
                 continue

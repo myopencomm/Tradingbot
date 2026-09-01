@@ -1323,6 +1323,22 @@ def cmd_sync(args, cid):
             )
         except Exception as e:
             send(f"Erreur sync : {e}", cid)
+            return
+        # Le sync vient peut-être d'annoncer « POSITION SANS PROTECTION ».
+        # Le constater sans rien tenter n'a aucun sens quand la réparation
+        # existe : elle tournait jusqu'ici uniquement sur le cycle horaire, si
+        # bien qu'un /sync à 7h49 le 01/09 affichait deux positions à nu et
+        # attendait 9h35 pour agir (constaté ce jour-là sur BAC et JNJ).
+        #
+        # ⚠️ APRÈS le run, jamais dedans : `playwright_session.run` poste dans
+        # une file servie par UN worker et attend le résultat. Appelé depuis
+        # une tâche déjà en cours, il attendrait un thread occupé à l'attendre
+        # — interblocage garanti.
+        try:
+            import protection_renewal
+            protection_renewal.renew_cycle(lambda m: send(m, cid))
+        except Exception as e:
+            print(f"[/sync repose protections] {e}")
 
     _run_long(cid, _do_sync)
 

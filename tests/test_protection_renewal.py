@@ -250,10 +250,27 @@ class TestCycleComplet:
         self._run(monkeypatch, bot, date(2026, 9, 1))
         assert bot["poses"] == []
 
+    def test_refus_hors_seance_ne_declenche_pas_l_alerte_rouge(self, monkeypatch, bot):
+        """BD refuse souvent un ordre marché fermé. Ce n'est pas une panne : on
+        retentera à l'ouverture, sans réveiller l'utilisateur pour rien."""
+        self._carnet(monkeypatch, [])
+        monkeypatch.setattr(pr.bd_orders, "create_expert_order", lambda *a, **k: None)
+        monkeypatch.setattr("market.is_open_now", lambda t, now=None: False)
+        self._run(monkeypatch, bot, date(2026, 9, 1))
+        assert not [m for m in bot["envois"] if "ÉCHOUÉE" in m]
+
+    def test_refus_en_pleine_seance_reste_une_alerte(self, monkeypatch, bot):
+        self._carnet(monkeypatch, [])
+        monkeypatch.setattr(pr.bd_orders, "create_expert_order", lambda *a, **k: None)
+        monkeypatch.setattr("market.is_open_now", lambda t, now=None: True)
+        self._run(monkeypatch, bot, date(2026, 9, 1))
+        assert [m for m in bot["envois"] if "ÉCHOUÉE" in m]
+
     def test_echec_de_repose_alerte_une_seule_fois_par_jour(self, monkeypatch, bot):
         self._carnet(monkeypatch, [])
         monkeypatch.setattr(pr.bd_orders, "create_expert_order",
                             lambda *a, **k: None)
+        monkeypatch.setattr("market.is_open_now", lambda t, now=None: True)
         self._run(monkeypatch, bot, date(2026, 9, 1))
         self._run(monkeypatch, bot, date(2026, 9, 1))
         alertes = [m for m in bot["envois"] if "ÉCHOUÉE" in m]
@@ -261,3 +278,42 @@ class TestCycleComplet:
         # L'échec ne dégrade rien : aucune protection n'a été annulée pour
         # tenter la repose.
         assert bot["data"]["positions"]["BAC"]["protection_expires_at"] == "2026-08-31"
+
+
+class TestSyncManuelRepare:
+    """Le 01/09/2026 à 7h49, `/sync` a annoncé BAC et JNJ « SANS PROTECTION »
+    et n'a rien tenté : la repose ne tournait que sur le cycle horaire, dont la
+    première fenêtre était 9h35. Constater sans réparer quand la réparation
+    existe est un défaut, pas une prudence.
+    """
+
+    def test_le_sync_manuel_declenche_la_repose(self, monkeypatch):
+        import telegram_bot as tb
+
+        appels = []
+        monkeypatch.setattr(tb.bot_mode, "is_playwright", lambda: True)
+        monkeypatch.setattr(tb.playwright_session, "is_connected", lambda: True)
+        monkeypatch.setattr(tb.playwright_session, "run",
+                            lambda fn, timeout=None: appels.append("sync"))
+        monkeypatch.setattr(tb, "_run_long", lambda cid, fn, *a: fn(*a))
+        monkeypatch.setattr(tb, "send", lambda *a, **k: None)
+        monkeypatch.setattr(tb, "send_editable", lambda *a, **k: None)
+        monkeypatch.setattr(pr, "renew_cycle",
+                            lambda send_fn, **k: appels.append("repose"))
+
+        tb.cmd_sync([], 1)
+        assert appels == ["sync", "repose"]
+
+    def test_la_repose_est_appelee_APRES_le_run_pas_dedans(self):
+        """`playwright_session.run` attend un worker unique : l'appeler depuis
+        une tâche déjà en cours attendrait un thread occupé à s'attendre
+        lui-même. La repose doit donc rester HORS du lambda du sync."""
+        import inspect
+        import telegram_bot as tb
+        src = inspect.getsource(tb.cmd_sync)
+        avant_run = src.index("playwright_session.run")
+        apres_run = src.index("protection_renewal")
+        assert apres_run > avant_run
+        # et pas à l'intérieur du lambda passé à run()
+        lam = src[avant_run:src.index("timeout=90")]
+        assert "protection_renewal" not in lam
