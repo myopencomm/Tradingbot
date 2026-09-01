@@ -157,6 +157,13 @@ CE QUE FAIT LE BOT
   nouvelle echeance max
 → il te previent quand c'est fait
 
+QUAND ?
+→ chaque heure a :35 (9h-22h, jours de
+  marche, session BD connectee)
+→ et tout de suite apres un /sync manuel
+Marche ferme, BD peut refuser : le bot
+retente a l'ouverture, sans t'alerter.
+
 POURQUOI PAS AVANT L'ECHEANCE ?
 Sur un titre US, "max" se recalcule depuis
 le jour de la pose : reposer le 21/08 rend
