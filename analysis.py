@@ -658,6 +658,64 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
     return opps, rejected
 
 
+# Verdicts acceptés dans le briefing court, du plus calme au plus urgent.
+# L'icône est posée par le CODE et non par l'IA : le format d'un message
+# quotidien ne doit pas dépendre de l'humeur d'un modèle.
+_VERDICT_ICONES = {
+    "MAINTENIR":   "✅",
+    "SURVEILLER":  "👀",
+    "ALLEGER":     "⚠️",
+    "ALLÉGER":     "⚠️",
+    "VENDRE":      "🔴",
+    "ARBITRER":    "🔴",
+}
+
+
+def briefing_lines(analyse: str, noms: list[str], max_mots: int = 14) -> list[str]:
+    """Une ligne par position gérée, quoi qu'ait répondu l'IA.
+
+    Le briefing envoyait 30 lignes dont 20 de contexte (snapshot, bloc HOLD,
+    risque global, capacité, mode d'emploi) pour 3 lignes de décision. Demandé
+    le 09/09/2026 : « est-ce que mes positions sont sur la bonne lancée, ou
+    y a-t-il des arbitrages à faire ? Le reste c'est du bruit. »
+
+    Fonction PURE et défensive : une position que l'IA aurait oubliée sort
+    quand même, avec un verdict neutre. Mieux vaut une ligne pauvre qu'une
+    position absente du seul message quotidien.
+    """
+    lignes = []
+    for nom in noms:
+        trouvee = None
+        for l in analyse.splitlines():
+            l = l.strip().lstrip("-•* ").strip()
+            if not l:
+                continue
+            tete = l.split(":")[0].split("(")[0].strip().upper()
+            if tete == nom.upper() or tete.startswith(nom.upper() + " "):
+                trouvee = l
+                break
+        if not trouvee:
+            lignes.append(f"⬜ {nom} — pas d'avis rendu ce matin")
+            continue
+        corps = trouvee.split(":", 1)[1].strip() if ":" in trouvee else trouvee
+        icone, verdict = "⬜", None
+        for mot, ic in _VERDICT_ICONES.items():
+            if corps.upper().startswith(mot):
+                icone, verdict = ic, mot
+                corps = corps[len(mot):].lstrip(" .:—-").strip()
+                break
+        if verdict is None:
+            for mot, ic in _VERDICT_ICONES.items():
+                if mot in corps.upper():
+                    icone = ic
+                    break
+        mots = corps.split()
+        if len(mots) > max_mots:
+            corps = " ".join(mots[:max_mots]).rstrip(",;") + "…"
+        lignes.append(f"{icone} {nom} — {corps}" if corps else f"{icone} {nom}")
+    return lignes
+
+
 def morning_briefing(send_fn) -> None:
     """
     Briefing quotidien 9h05.
@@ -711,7 +769,6 @@ def morning_briefing(send_fn) -> None:
         if hunt:
             catalysts = research.market_catalysts()
             opps_mission = f"""
-2. Risque global portefeuille : LOW / MEDIUM / HIGH
 
 Puis écris EXACTEMENT cette ligne séparatrice seule : ===CANDIDATS===
 Et APRÈS cette ligne uniquement, identifie 6 à 10 tickers CANDIDATS de deux types
@@ -727,7 +784,7 @@ Et APRÈS cette ligne uniquement, identifie 6 à 10 tickers CANDIDATS de deux ty
         else:
             catalysts = ""
             why = auto_block or f"Cash {cash}€ insuffisant pour nouvelles positions"
-            opps_mission = f"\n2. Risque global : LOW / MEDIUM / HIGH\n({why})"
+            opps_mission = ""
 
         macro_ctx = _macro_context() if hunt else ""
         prompt1 = f"""{TRADER_SYSTEM}
@@ -746,8 +803,14 @@ CONTEXTE MARCHÉ
 {f"CATALYSEURS — TOUS MARCHÉS{chr(10)}{catalysts}" if catalysts else ""}
 
 MISSION
-1. Pour chaque position : MAINTENIR / SURVEILLER / VENDRE + commentaire bref.
-{opps_mission}"""
+Pour CHAQUE position active, écris UNE seule ligne, exactement :
+TICKER : VERDICT — justification de 14 mots MAXIMUM
+VERDICT vaut MAINTENIR, SURVEILLER, ALLEGER ou VENDRE.
+La justification dit ce qui CHANGE la décision (niveau franchi, catalyseur,
+rupture de tendance), jamais le rappel du cours, du PRU ou des seuils : ils
+sont déjà sous les yeux du lecteur.
+N'écris RIEN d'autre : ni titre de section, ni synthèse, ni conseil général,
+ni ligne sur les positions HOLD.{opps_mission}"""
 
         pass1 = _strip_markdown(ai.complete(prompt1, max_tokens=600))
 
@@ -840,27 +903,29 @@ MISSION
         ).strip()
 
         date = datetime.now(PARIS).strftime("%d/%m/%Y")
-        msg  = f"🌅 BRIEFING — {date}\n\n{snapshot}\n\n{portfolio_analysis}"
+
+        # ── Message COURT : une ligne par position, puis l'arbitrage ──────
+        # Le snapshot reste la source de vérité DU PROMPT, il n'a jamais eu
+        # sa place dans le message : le lecteur a déjà ses chiffres dans
+        # /status et le dashboard. Idem pour le bloc HOLD (par définition
+        # hors décision), le risque global (que personne ne lisait, et que
+        # rien dans le code ne consommait) et le mode d'emploi du /scan.
+        geres = [n for n, c in portfolio.load().get("positions", {}).items()
+                 if not c.get("hold") and c.get("qty")]
+        lignes = briefing_lines(portfolio_analysis, geres)
+        msg = f"🌅 BRIEFING — {date}\n\n" + "\n".join(lignes)
+
         if opportunities:
-            msg += "\n\nOPPORTUNITÉS VALIDÉES\n" + "\n\n".join(opportunities)
-            if rejected_morning:
-                msg += "\n\nAnalysés et écartés :\n" + "\n".join(rejected_morning)
+            msg += "\n\n💡 ARBITRAGE POSSIBLE\n" + "\n\n".join(opportunities)
+        elif small_opps:
+            msg += ("\n\n⚡ ARBITRAGE COURT TERME (gain réduit, 1-5 jours)\n"
+                    + "\n\n".join(small_opps))
         elif hunt:
-            no_opp = f"Aucun candidat validé à +{_TP}% aujourd'hui."
-            if small_opps:
-                no_opp += ("\n\n⚡ OPPORTUNITÉS COURT TERME (gain réduit, 1-5 jours)\n"
-                           + "\n\n".join(small_opps))
-            if rejected_morning:
-                no_opp += f"\n\nAnalysés et écartés (+{_TP}%) :\n" + "\n".join(rejected_morning)
-            if small_rejected:
-                no_opp += "\n\nÉcartés en gain réduit :\n" + "\n".join(small_rejected)
-            if not small_opps:
-                no_opp += "\n\n→ /scan pour relancer | /research TICKER pour un avis ciblé."
-            msg += "\n\n" + no_opp
+            msg += "\n\nAucun arbitrage à faire aujourd'hui."
+        # Capacité saturée : une ligne, pas un paragraphe. Le détail des
+        # candidats écartés reste disponible à la demande via /scan.
         elif auto_block:
-            msg += (f"\n\nPas de recherche d'opportunités ce matin : {auto_block}\n"
-                    f"Aucune validation IA lancée — elle ne pourrait déboucher sur "
-                    f"aucun achat.\n→ /scan pour en forcer une quand même.")
+            msg += f"\n\nAucun arbitrage possible : {auto_block}"
         send_fn(msg)
 
         # Mode autonome : si actif + Playwright connecté + opportunités trouvées

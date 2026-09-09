@@ -221,7 +221,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 
 | | |
 |---|---|
-| **Briefing matinal 9h05** | Analyse IA : état des positions + contexte macro + top opportunités |
+| **Briefing matinal 9h05** | **Une ligne par position** : ✅ sur la bonne lancée / 👀 à surveiller / ⚠️ alléger / 🔴 vendre, suivie de ce qui CHANGE la décision (14 mots max), puis l'arbitrage du jour s'il y en a un. Rien d'autre — le snapshot du portefeuille reste la source de vérité du *prompt*, pas du message (ces chiffres sont déjà dans `/status` et le dashboard), et le bloc HOLD, le « risque global » et le mode d'emploi du `/scan` ont été retirés : 35 lignes → 7. L'icône et la longueur sont posées par le code (`briefing_lines`), jamais par l'IA — un message quotidien ne change pas de forme parce que le modèle a été bavard |
 | **Surveillance 4×/jour + sync horaire** | Checks 9h / 12h / 15h / 17h (alertes SL/TP) + sync BD silencieux chaque heure : détection automatique des exécutions |
 | **Séance US prolongée** | Wall Street tournant jusqu'à 22h Paris, le bot prolonge la surveillance des positions US (checks 18h / 20h / 21h40, alertes seules) et lance un **scan US** à 16h — plus seulement au briefing de 9h05 (`US_EXTENDED_HOURS`) |
 | **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
@@ -274,7 +274,7 @@ TradingBot/
 ├── protection_renewal.py    Repose les protections perdues (echeance BD, ou trou qui dure)
 ├── prompt_context.py        Briques de contexte injectees dans les prompts IA
 ├── docs/tuto/               Guide interactif /tuto (texte, hors code)
-├── tests/                   341 tests de caracterisation — ./bot.sh test
+├── tests/                   352 tests de caracterisation — ./bot.sh test
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome

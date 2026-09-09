@@ -21,7 +21,17 @@ Cash disponible : /cash 1500
 Mode Classic — Workflow quotidien
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AUTOMATIQUE
-  9h05  → briefing IA (macro + positions)
+  9h05  → briefing IA (1 ligne/position)
+
+Le briefing repond a UNE question : est-ce
+que tes positions sont sur la bonne lancee,
+ou y a-t-il un arbitrage a faire ?
+  ✅ sur la bonne lancee
+  👀 a surveiller
+  ⚠️ alleger   🔴 vendre
+Puis l'arbitrage du jour s'il y en a un.
+Les chiffres detailles sont dans /status
+et le dashboard, pas dans le briefing.
   9/12/15/17h → check SL/TP, alertes
   16h → scan US · 18/20/21h40 → check positions US
   Lundi 9h10 → analyse de rotation
