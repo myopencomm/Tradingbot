@@ -30,6 +30,14 @@ Mode Playwright — Connexion
 
 Le bot demarre toujours en mode Classic.
 /connect requis apres chaque redemarrage.
+
+SESSION EXPIREE (~30 min d'inactivite)
+Le bot te previent et FERME le navigateur.
+Le /connect suivant repart donc propre et
+marche du premier coup. (Avant le
+13/09/2026 il fallait s'y reprendre a deux
+fois : la 1re tentative tombait sur une
+page BD morte.)
 ===== PAGE =====
 Mode Playwright — Ordres
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

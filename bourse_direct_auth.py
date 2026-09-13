@@ -28,6 +28,22 @@ def set_otp(code: str):
     _otp_event.set()
 
 
+def _champ_identifiant(page, timeout_ms: int = 12000):
+    """Le champ « Identifiant », ou None s'il n'apparaît pas.
+
+    Attendre explicitement plutôt que de cliquer à l'aveugle : un `click()` sur
+    un locator absent lève au bout de 30 s (défaut Playwright) et le message
+    d'erreur brut partait tel quel sur Telegram — « Locator.click: Timeout
+    30000ms exceeded » n'apprend rien à qui lit son téléphone.
+    """
+    champ = page.locator('input[placeholder="Identifiant"]')
+    try:
+        champ.wait_for(state="visible", timeout=timeout_ms)
+        return champ
+    except Exception:
+        return None
+
+
 def login(page, send_fn) -> bool:
     """
     Exécute le flow de connexion sur `page`.
@@ -58,7 +74,26 @@ def login(page, send_fn) -> bool:
         _dismiss_popups(page)
 
         # ── Remplissage credentials ──────────────────────────────────────────
-        login_field = page.locator('input[placeholder="Identifiant"]')
+        # Le formulaire peut ne PAS être rendu si la page porte encore des
+        # cookies BD périmés : BD sert alors sa redirection de session au lieu
+        # du login. Le keepalive ferme désormais le navigateur en cas
+        # d'expiration, mais une session peut mourir ENTRE deux pings — ce
+        # filet rattrape ce cas au lieu de laisser un `click()` expirer en 30 s.
+        login_field = _champ_identifiant(page)
+        if login_field is None:
+            print("[BD Auth] formulaire absent — purge des cookies et 2e essai")
+            try:
+                page.context.clear_cookies()
+            except Exception:
+                pass
+            page.goto(BD_URL, wait_until="domcontentloaded", timeout=20000)
+            time.sleep(1)
+            _dismiss_popups(page)
+            login_field = _champ_identifiant(page)
+        if login_field is None:
+            send_fn("Page de connexion BD illisible (formulaire absent apres "
+                    "purge des cookies). Reessaie /connect dans un instant.")
+            return False
         login_field.click()
         login_field.type(BD_LOGIN, delay=50)
 

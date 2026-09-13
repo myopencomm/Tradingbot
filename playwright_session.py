@@ -178,10 +178,30 @@ def _keepalive_loop():
                 with _lock:
                     _connected_at = None
                 print("[Playwright keepalive] session BD expirée — /connect requis")
+                # ── Fermer le NAVIGATEUR, pas seulement le drapeau ───────────
+                # Marquer « déconnecté » laissait Chromium ouvert sur la page
+                # de redirection BD, avec ses cookies périmés. Le /connect
+                # suivant réutilisait cette page : le formulaire de login n'y
+                # est pas rendu, et `input[placeholder="Identifiant"]` expirait
+                # au bout de 30 s. La DEUXIÈME tentative marchait, parce que la
+                # première avait fini par poser le navigateur sur la vraie page
+                # de login. Un échec systématique sur deux, signalé le
+                # 13/09/2026.
+                #
+                # stop() est appelé HORS du `with _lock` ci-dessus : il prend le
+                # même verrou. Et depuis le thread keepalive, jamais depuis le
+                # worker — c'est lui qu'on attend.
+                try:
+                    stop()
+                    print("[Playwright keepalive] navigateur fermé — "
+                          "le prochain /connect repartira d'une session vierge")
+                except Exception as e:
+                    print(f"[Playwright keepalive] fermeture navigateur : {e}")
                 # Notification Telegram si possible
                 try:
                     from tg import send      # transport seul : aucun cycle
-                    send("⚠️ Session Bourse Direct expirée.\nRelance /connect pour reprendre le mode Playwright.")
+                    send("⚠️ Session Bourse Direct expirée.\nNavigateur fermé — "
+                         "/connect repart d'une session propre.")
                 except Exception:
                     pass
                 break
