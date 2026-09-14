@@ -322,14 +322,39 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         if not order_data:
             raw    = bd_orders._last_raw
             status = raw.get("status", "?")
-            detail = ""
+            data   = raw.get("data", {}) or {}
+            # BD renvoie son motif dans `message` — et c'est SOUVENT la seule
+            # chose utile. On ne lisait que `fields`, si bien que « Cette valeur
+            # n'est plus négociable sur les US et CANADA » restait dans le log
+            # pendant que Telegram affichait un « HTTP 403 » nu (DSGN,
+            # 14/09/2026 : rejet incompréhensible côté utilisateur).
+            message = (data.get("message") or "").strip()
+            detail  = f" — {message}" if message else ""
             try:
-                fields = raw.get("data", {}).get("fields") or {}
+                fields = data.get("fields") or {}
                 if fields:
-                    detail = " — " + "; ".join(f"{k}: {v[0] if isinstance(v, list) else v}"
-                                                for k, v in fields.items())
+                    detail += " — " + "; ".join(
+                        f"{k}: {v[0] if isinstance(v, list) else v}"
+                        for k, v in fields.items())
             except Exception:
                 pass
+            # Valeur retirée du périmètre BD : la mémoriser, sinon elle
+            # remonte au scan suivant et repaie une validation IA complète
+            # pour se faire refuser à l'identique.
+            bloquee = False
+            try:
+                import bd_blocklist
+                bloquee = bd_blocklist.ajouter(ticker, message)
+            except Exception as e:
+                print(f"[Auto] blocklist {ticker} : {e}")
+            if bloquee:
+                send_fn(
+                    f"🚫 {ticker} : refusé par BD — {message}\n"
+                    f"Valeur retirée des prochains scans "
+                    f"({bd_blocklist.DUREE_JOURS} j). Le cycle continue sur le "
+                    f"candidat suivant."
+                )
+                return False
             send_fn(
                 f"⚠️ {ticker} : ordre rejeté par BD (HTTP {status}){detail}\n"
                 f"Commande manuelle :\n"

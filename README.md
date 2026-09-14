@@ -234,6 +234,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Validité des ordres** | Par séance, max (fin d'année Euronext / fin de mois US), ou date précise JJ/MM/AAAA. L'échéance tombe à la **clôture** du marché (22h Paris pour le NYSE, 17h35 sur Euronext) — le trou de protection qui suit est donc hors séance, et refermé au cycle suivant |
 | **Reconnexion BD propre** | À l'expiration de la session, le bot **ferme le navigateur** au lieu de poser un simple drapeau. Chromium restait ouvert sur la page de redirection BD avec ses cookies périmés ; le `/connect` suivant réutilisait cette page, où le formulaire n'est pas rendu, et échouait sur `Locator.click: Timeout 30000ms` — un échec systématique sur deux. Second filet dans `login()` : si le champ Identifiant manque quand même (session morte entre deux pings), les cookies sont purgés et la page rechargée une fois, avec un message lisible au lieu de l'erreur Playwright brute |
 | **Réinvestissement immédiat après une vente** | Une vente libère un emplacement → le bot enchaîne aussitôt : cycle d'entrée (consomme les opportunités déjà validées), puis **vrai scan du marché OUVERT** s'il reste de la place — US en soirée, Euronext en journée. Sans ça le capital dormait jusqu'au briefing du lendemain : emplacements pleins ⇒ briefing et scan US sautés ⇒ file d'opportunités vide ⇒ la vente rouvrait une place que rien n'allait remplir (constaté le 14/09/2026, 919€ libérés en séance US pour « Aucune opportunité exploitable »). Un seul scan par 30 min |
+| **Valeurs refusées par BD mémorisées** | Un refus d'ordre dont le motif dit que la valeur n'est **plus négociable** (DSGN, 14/09/2026 : `HTTP 403 — Cette valeur n'est plus négociable sur les US et CANADA`) retire le titre des scans suivants pendant 180 jours, au lieu de le laisser remonter et repayer une validation IA complète à chaque tour. C'est le **motif** qui bloque, jamais le code HTTP : un 403 peut aussi être une session expirée, et bannir sur le statut mettrait au ban des titres sains. Le blocage expire — une valeur réadmise par le courtier doit pouvoir revenir. Le motif de BD est désormais affiché sur Telegram (il ne partait que dans le log) |
 | **Mode Autonome** | Budget isolé géré en totale autonomie : scan → entrée → SL au PRU à +6% → sortie détectée → réinvestissement. Ordres d'entrée non exécutés à la clôture : annulés auto (anti-sélection) |
 | **Vitesse des positions (observation)** | Le KPI n'est pas le gain, c'est le gain **par jour** — sur les trades clos, les 3 gagnants les plus rapides rendent 70,6 / 13,3 / 12,6 €/jour quand tout ce qui dépasse 17 jours tombe sous 5 €/jour. Le bot mesure cette vitesse pour chaque position (`/stagnation` : âge en jours de bourse, part du chemin PRU→TP parcourue, et pour une ligne bloquée le cours qu'il lui faudrait pour sortir sans perte). ⚠️ **La vente automatique est DÉSACTIVÉE** (`STALE_EXIT=off`, rollback du 27/08/2026) : backtestée sur 149 puis 608 titres, elle monte le taux de réussite et **baisse le P&L** — elle coupe les lentes qui finissaient par payer, et le capital libéré se réinvestit dans de moins bons trades. Le constat de vitesse reste, l'action non |
 | **Positions HOLD long terme** | `/hold TICKER` : sortie du périmètre bot (pas d'alertes, hors P&L trading, jamais proposée à la vente) |
@@ -268,6 +269,7 @@ TradingBot/
 ├── tg.py                    Transport Telegram (feuille) : envoyer, editer, telecharger
 ├── ttf.py                   Assujettissement a la TTF francaise + cache (feuille)
 ├── ticks.py                 Pas de cotation : la regle d'arrondi, partagee analyse <-> envoi (feuille)
+├── bd_blocklist.py          Valeurs que BD refuse de negocier (cache local, expire a 180 j)
 ├── nav.py                   Valeur liquidative par part : la croissance de l'investissement
 ├── history.py               Persistance des trades clotures, ecriture atomique (feuille)
 ├── sizing.py                Budget, capacite d'entree, taille de position
@@ -276,7 +278,7 @@ TradingBot/
 ├── protection_renewal.py    Repose les protections perdues (echeance BD, ou trou qui dure)
 ├── prompt_context.py        Briques de contexte injectees dans les prompts IA
 ├── docs/tuto/               Guide interactif /tuto (texte, hors code)
-├── tests/                   369 tests de caracterisation — ./bot.sh test
+├── tests/                   389 tests de caracterisation — ./bot.sh test
 ├── telegram_bot.py          Polling Telegram, routing des commandes, buffer photo
 ├── analysis.py              Prompts IA : briefing, scan, indicateurs techniques, catalyseurs
 ├── monitor.py               Vérification SL/TP 4×/jour, envoi des alertes, cycle autonome

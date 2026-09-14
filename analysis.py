@@ -1460,6 +1460,19 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
         return []
 
     candidates = [t for t in universe if t.upper() not in held_tickers]
+    # Valeurs que BD a déclarées non négociables : les classer coûterait une
+    # validation IA complète pour un ordre qu'il refusera à l'identique.
+    try:
+        import bd_blocklist
+        bloques = bd_blocklist.tickers_bloques()
+        if bloques:
+            avant = len(candidates)
+            candidates = [t for t in candidates if t.upper() not in bloques]
+            if avant != len(candidates):
+                print(f"[screen] {avant - len(candidates)} valeur(s) écartée(s) "
+                      f"— non négociables chez BD")
+    except Exception as e:
+        print(f"[screen] blocklist indisponible : {e}")
     precomputed = precomputed or {}
 
     def fetch_one(ticker):
