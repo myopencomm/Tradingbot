@@ -115,15 +115,34 @@ _regime_instructions = prompt_context._regime_instructions
 # autonome n'est simplement pas là pour réagir.
 _hook_entry_cycle = None      # callable(send_fn) — entrer maintenant
 _hook_order_rejected = None   # callable(ticker, raison) — thèse contredite
+_hook_after_sale = None       # callable(send_fn) — une vente a libéré du budget
 
 
-def register_autonomous(entry_cycle=None, order_rejected=None) -> None:
-    """Appelé par `autonomous_engine` au moment de son import."""
-    global _hook_entry_cycle, _hook_order_rejected
+def register_autonomous(entry_cycle=None, order_rejected=None,
+                        after_sale=None) -> None:
+    """Appelé par `autonomous_engine` au moment de son import.
+
+    Cette indirection n'est pas de la décoration : `autonomous_engine` importe
+    `sync_engine`, donc `sync_engine` ne peut pas l'importer en retour — le
+    graphe d'imports est vérifié sans cycle par les tests. Le hook est le seul
+    chemin praticable dans ce sens.
+    """
+    global _hook_entry_cycle, _hook_order_rejected, _hook_after_sale
     if entry_cycle:
         _hook_entry_cycle = entry_cycle
     if order_rejected:
         _hook_order_rejected = order_rejected
+    if after_sale:
+        _hook_after_sale = after_sale
+
+
+def _trigger_after_sale(send_fn) -> None:
+    """Une vente vient d'être détectée : réinvestir sans attendre le briefing."""
+    try:
+        if _hook_after_sale:
+            _hook_after_sale(send_fn)
+    except Exception as e:
+        print(f"[Auto après vente] {e}")
 
 
 def _trigger_autonomous(send_fn) -> None:

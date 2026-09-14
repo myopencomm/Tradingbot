@@ -74,6 +74,33 @@ le detail de chaque position (le cycle
 auto reste silencieux s'il n'a rien a
 faire ; /trailing repond toujours).
 ===== PAGE =====
+Fonctions avancees — Apres une vente
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Une vente libere un emplacement ET du
+cash. Le bot enchaine tout de suite :
+
+1. il regarde les opportunites deja
+   validees (gratuit)
+2. s'il reste de la place, il SCANNE le
+   marche ouvert a cet instant :
+   → soiree  = Wall Street
+   → journee = Euronext
+   → tout ferme = il attend le prochain
+     scan planifie
+
+Pourquoi : tant que tes 3 emplacements
+sont pris, le briefing et le scan US sont
+sautes (inutile de bruler des analyses IA
+pour des achats impossibles). La file
+d'opportunites est donc VIDE au moment ou
+une vente libere une place. Sans ce
+rattrapage, le capital dormait jusqu'au
+briefing du lendemain 9h05.
+
+Un seul scan toutes les 30 min, meme si
+plusieurs ventes tombent coup sur coup.
+
+===== PAGE =====
 Fonctions avancees — Vitesse des positions
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Le KPI n'est pas le gain, c'est le gain

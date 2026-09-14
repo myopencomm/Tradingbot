@@ -704,10 +704,19 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     # (s'il est actif) pour chercher où réinvestir sans attendre le prochain check.
     if sold_keys:
         try:
-            from analysis import _trigger_autonomous
-            _trigger_autonomous(send_fn)
+            # Pas seulement le cycle d'entrée : il ne consomme qu'une file
+            # d'opportunités que la saturation des emplacements avait empêché
+            # de remplir. Le hook enchaîne sur un vrai scan du marché ouvert
+            # s'il reste de la place, sur un thread à part — on est ici DANS le
+            # worker Playwright.
+            #
+            # Via `analysis` et pas par un import direct d'`autonomous_engine` :
+            # celui-ci importe déjà `sync_engine`, et le graphe d'imports est
+            # tenu sans cycle (test_market.TestGrapheDeDependances).
+            from analysis import _trigger_after_sale
+            _trigger_after_sale(send_fn)
         except Exception as e:
-            print(f"[sync] trigger autonome après vente : {e}")
+            print(f"[sync] relance autonome après vente : {e}")
 
     return True
 

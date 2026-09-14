@@ -815,6 +815,80 @@ def check_autonomous_positions(send_fn) -> None:
 # opportunité qu'il vient de valider, et annuler un ordre d'entrée dont la
 # thèse est contredite. Il ne nous importe pas pour autant — c'est nous qui
 # venons nous déclarer, ce qui supprime le dernier cycle d'import du projet.
+# Une vente vient de libérer du budget : on ne relance pas un scan complet plus
+# souvent que ça (chaque scan coûte ~8 validations IA).
+_RESCAN_COOLDOWN = 30 * 60
+_last_rescan_ts = 0.0
+
+
+def relancer_apres_vente(send_fn) -> None:
+    """Une vente libère du budget — chercher où le remettre, tout de suite.
+
+    Le sync appelait déjà le cycle d'entrée après une vente, mais celui-ci ne
+    fait que CONSOMMER la file d'opportunités déjà validées. Or cette file est
+    vide précisément dans ce cas : tant que les 3 emplacements sont pris, le
+    briefing et le scan US sont SAUTÉS (`entry_capacity_block`) pour ne pas
+    brûler des validations IA inachetables. Une vente rouvrait donc une place
+    que rien n'allait remplir avant le briefing du lendemain 9h05.
+
+    Constaté le 14/09/2026 : BAC vendu en séance US, 919€ de cash libérés,
+    2 emplacements sur 3 occupés — et le moteur a répondu « Aucune opportunité
+    exploitable ». Il n'avait simplement rien à examiner.
+
+    Deux temps, du moins cher au plus cher :
+      1. le cycle d'entrée (gratuit : il vide la file si elle contient
+         quelque chose) ;
+      2. s'il reste de la place APRÈS, un vrai scan sur le marché OUVERT —
+         US en soirée, Euronext en journée.
+    """
+    if not (is_enabled() and bot_mode.is_playwright()
+            and playwright_session.is_connected()):
+        return
+    threading.Thread(target=_chercher_apres_vente, args=(send_fn,),
+                     daemon=True).start()
+
+
+def _chercher_apres_vente(send_fn) -> None:
+    global _last_rescan_ts
+    try:
+        run_entry_cycle(send_fn)
+    except Exception as e:
+        print(f"[Auto] cycle d'entrée après vente : {e}")
+
+    # A-t-on encore de la place ? C'est l'ÉTAT qui répond, pas la valeur de
+    # retour du cycle : s'il vient d'acheter, la capacité est reprise et il n'y
+    # a plus rien à chercher.
+    try:
+        import sizing
+        bloque = sizing.entry_capacity_block()
+    except Exception as e:
+        print(f"[Auto] capacité indisponible après vente : {e}")
+        return
+    if bloque:
+        print(f"[Auto] après vente — pas de recherche : {bloque}")
+        return
+
+    if time.time() - _last_rescan_ts < _RESCAN_COOLDOWN:
+        print("[Auto] après vente — scan déjà relancé récemment, on attend")
+        return
+
+    # Chercher là où l'on peut ACHETER maintenant. Scanner Euronext à 21h
+    # produirait des candidats dont le marché rouvre demain : le cycle
+    # d'entrée les écarterait un par un (`market_open_for`), ce qui est
+    # exactement ce qui s'est passé le 14/09.
+    import analysis
+    if market.is_open_now("NVDA"):              # sonde : séance de Wall Street
+        _last_rescan_ts = time.time()
+        send_fn("💰 Vente encaissée — recherche d'un remplaçant sur le marché US…")
+        analysis.scan_us_opportunities(send_fn)
+    elif market.is_open_now("AIR.PA"):          # sonde : séance Euronext
+        _last_rescan_ts = time.time()
+        send_fn("💰 Vente encaissée — recherche d'un remplaçant sur Euronext…")
+        analysis.scan_opportunities(send_fn)
+    else:
+        print("[Auto] après vente — aucun marché ouvert, le scan planifié prendra le relais")
+
+
 def _entrer_maintenant(send_fn) -> None:
     """Entre tout de suite si le mode autonome est actif ET Playwright connecté.
     Sans ça, une opportunité validée attend le prochain check planifié."""
@@ -827,4 +901,5 @@ def _entrer_maintenant(send_fn) -> None:
 analysis.register_autonomous(
     entry_cycle=_entrer_maintenant,
     order_rejected=cancel_auto_order_if_rejected,
+    after_sale=relancer_apres_vente,
 )
