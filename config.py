@@ -419,13 +419,51 @@ FALLBACK_TP_MAX_PCT = float(os.getenv("FALLBACK_TP_MAX_PCT", "8"))
 # qui laissent courir les gagnants sur avis IA
 TP_ALERTS = os.getenv("TP_ALERTS", "on").strip().lower() not in ("off", "false", "0", "no")
 
-# Trailing stop : seuil % au-dessus du PRU pour déclencher le relevé du SL au PRU
+# Trailing stop des positions MANUELLES : seuil % au-dessus du PRU pour
+# déclencher le relevé du SL au PRU.
+# ⚠️ Le backtest du 15/09/2026 (voir AUTO_BREAKEVEN_PCT ci-dessous) place +4%
+# dans la zone franchement défavorable : -1039 € contre -736 € à +6%, win rate
+# 29.7% contre 35.8%. Le défaut est à 5 ; un .env qui descend à 4 applique aux
+# positions manuelles un réglage que la mesure déconseille.
 BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "5"))
 
 # Seuil breakeven des positions AUTONOMES. Backtest 2023-2026 (backtest.py) :
 # à +3% le trail transformait les futurs gagnants en sorties à zéro (win rate
 # 27% → 34%, P&L +34€ → +320€ en passant à +6%). Le SL remonte au PRU
 # seulement une fois le trade réellement installé.
+#
+# ── RE-MESURÉ LE 15/09/2026 — question posée : « +4% ne serait-il pas plus
+#    judicieux sur une valeur peu volatile comme Carrefour ? » Réponse : non,
+#    et l'écart n'est pas marginal (137 titres, 2023→2026, risque 1%) :
+#
+#      seuil           P&L      PF     max DD   win%   j/trade
+#      aucun (témoin) -831 €   0.61   -1030 €   39.3     15.5
+#      +8%            -713 €   0.66    -878 €   38.0     14.4
+#      +6% (actuel)   -736 €   0.65    -918 €   35.8     13.4
+#      +5%            -709 €   0.66    -890 €   34.6     13.2
+#      +4%           -1039 €   0.55   -1145 €   29.7     11.8
+#      +3%           -1283 €   0.48   -1399 €   25.7     10.6
+#
+#    Le taux de réussite s'effondre à mesure qu'on serre (39% → 26%) : c'est la
+#    signature d'un stop qu'on vient coller sous le cours et qui se fait sortir
+#    par le bruit AVANT que le trade travaille. Remonter tôt ne sécurise pas un
+#    gain, ça annule un gain futur.
+#
+# ── ET LE SEUIL PERSONNALISÉ PAR TITRE ? Testé aussi, car un % fixe ne veut
+#    pas dire la même chose selon la volatilité (+6% = 3.5×ATR sur Carrefour,
+#    1.7×ATR sur une valeur à 3.4% d'ATR) :
+#
+#      1.5×ATR -1134 €   2.0×ATR -874 €   2.5×ATR -805 €
+#      3.0×ATR  -804 €   4.0×ATR -835 €
+#
+#    Le raisonnement est juste, le gain ne suit pas : le meilleur réglage ATR
+#    (-804 €) reste DERRIÈRE les seuils fixes +5% et +8% (-709/-713 €). Une
+#    règle plus fine n'est pas une règle meilleure. Statu quo décidé.
+#
+#    (P&L négatif partout : le moteur quant seul n'a pas d'edge sur la période,
+#    c'est l'étage IA/régime qui porte la stratégie et il n'est pas simulable.
+#    Seule la COMPARAISON entre lignes est exploitable. Écarts de ±30 € sur
+#    ~150 trades = bruit : +5%, +6% et +8% sont à égalité.)
 AUTO_BREAKEVEN_PCT = float(os.getenv("AUTO_BREAKEVEN_PCT", "6"))
 
 # ── Palier 2 du trailing : SÉCURISATION DU GAIN ─────────────────────────────

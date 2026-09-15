@@ -110,7 +110,9 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              tp_mult_r: float | None = None, fee: float = FEE,
              cadence: str = "weekly", max_ext_atr: float | None = None,
              stale: tuple | None = None,
-             min_mom1m: float | None = None) -> dict:
+             min_mom1m: float | None = None,
+             be_pct: float | None = None,
+             be_atr: float | None = None) -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
 
     `stale` = ((j1, p1), (j2, p2)) — jalons de la sortie sur stagnation : à j1
@@ -120,6 +122,12 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
 
     `min_mom1m` = plancher de momentum 1 mois à l'entrée (None = règle
     d'origine, qui ne rejetait que l'effondrement sous -12%).
+
+    `be_pct` = seuil de remontée du SL au PRU, en % (None = AUTO_BREAKEVEN_PCT).
+    `be_atr` = le MÊME seuil exprimé en multiples d'ATR d'entrée ; prime sur
+    `be_pct` quand il est fourni. Un seuil en % fixe ne veut pas dire la même
+    chose sur un titre à 1.7% d'ATR et sur un à 3.4% : +6% vaut 3.5 ATR pour le
+    premier (jamais atteint) et 1.7 ATR pour le second (atteint sur du bruit).
     """
     positions = []   # {ticker, entry, sl, tp, qty, entry_date, be_done}
     closed = []
@@ -174,9 +182,15 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                 equity += pnl
                 continue
             # Trailing breakeven (optionnel — testé avec/sans)
-            if be_trail and not p["be_done"] and row["close"] >= p["entry"] * (1 + BREAKEVEN_PCT / 100):
-                p["sl"] = max(p["sl"], p["entry"])
-                p["be_done"] = True
+            if be_trail and not p["be_done"]:
+                if be_atr is not None:
+                    seuil = p["entry"] * (1 + be_atr * p["atr_entry"] / 100)
+                else:
+                    seuil = p["entry"] * (1 + (BREAKEVEN_PCT if be_pct is None
+                                               else be_pct) / 100)
+                if row["close"] >= seuil:
+                    p["sl"] = max(p["sl"], p["entry"])
+                    p["be_done"] = True
             still.append(p)
         positions = still
 
@@ -240,8 +254,12 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                     qty = int(cost_cap / entry)
             if qty < 1:
                 continue
+            atr_entry = float(df.loc[d, "atr_pct"]) if "atr_pct" in df.columns else 2.0
+            if np.isnan(atr_entry) or atr_entry <= 0:
+                atr_entry = 2.0
             positions.append({"ticker": t, "entry": entry, "sl": sl, "tp": tp,
-                              "qty": qty, "entry_date": e_day, "be_done": False})
+                              "qty": qty, "entry_date": e_day, "be_done": False,
+                              "atr_entry": atr_entry})
 
     # Clôture des positions restantes au dernier cours
     for p in positions:
