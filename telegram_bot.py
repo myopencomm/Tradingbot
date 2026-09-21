@@ -1428,11 +1428,18 @@ def cmd_lessons(args, cid):
             "La boucle d'apprentissage démarre : chaque nouveau trade enregistre "
             "sa thèse et ses indicateurs d'entrée."
         ]
+        from config import (ENTRY_QUALITY_VETO, ENTRY_MIN_VOL_RATIO,
+                            ENTRY_MAX_MOM_1M)
+        qualite = (
+            f"- Qualité d'entrée : refus si volume < {ENTRY_MIN_VOL_RATIO}× "
+            f"sa moyenne 20 j ou momentum 1 mois > +{ENTRY_MAX_MOM_1M:.0f}%"
+        ) if ENTRY_QUALITY_VETO else "- Qualité d'entrée : veto DÉSACTIVÉ"
         parts.append(
             f"\nGARDE-FOUS ACTIFS\n"
             f"- Série de pertes en cours : {streak}\n"
             f"- Taille des prochaines entrées : {int(factor*100)}% du budget\n"
-            f"- Cooldown : pas de re-entrée sur un titre perdu depuis < 10 jours"
+            f"- Cooldown : pas de re-entrée sur un titre perdu depuis < 10 jours\n"
+            f"{qualite}"
         )
         send("🧠 APPRENTISSAGE DU BOT\n\n" + "\n".join(parts), cid)
     except Exception as e:
@@ -1688,21 +1695,14 @@ def cmd_ordre(args, cid):
                 # Boucle d'apprentissage : mémorise le contexte d'entrée. Si le
                 # titre vient d'un scan/briefing, un contexte riche existe déjà
                 # (on ne l'écrase pas) ; sinon on capte au moins RSI/momentum.
-                if order_data and not portfolio.get_entry_context(ticker):
-                    try:
-                        tech = prices.get_technicals(ticker) or {}
-                        pctx = prices.get_price_context(ticker) or {}
-                        portfolio.set_entry_context(ticker, {
-                            "source": "manuel", "entry": entree,
-                            "rsi": tech.get("rsi"), "momentum_1m": tech.get("momentum_1m"),
-                            "vol_ratio": tech.get("vol_ratio"),
-                            "perf_1y": pctx.get("perf_1y"),
-                            "from_52w_low": pctx.get("from_52w_low"),
-                            "tp_pct": round((tp - entree) / entree * 100, 1) if entree else None,
-                            "thesis": "ordre manuel",
-                        })
-                    except Exception:
-                        pass
+                # Un contexte de scan est complété (pas écrasé) avec les
+                # distances SL/TP réelles : `sl_pct` est ce qui évite au
+                # post-mortem de confondre stop touché et gap.
+                if order_data:
+                    import lessons as _lessons
+                    _lessons.capture_entry_context(
+                        ticker, source="manuel", thesis="ordre manuel",
+                        entry=entree, sl=sl, tp=tp)
             elif type_arg == "limite":
                 if len(args) < 5:
                     send("Limite requiert un prix : /ordre acheter TICKER QTE limite PRIX [validite]", cid)

@@ -232,9 +232,23 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     `available` est en EUR ; `entry/sl/tp` sont dans la devise du titre —
     conversion FX appliquée pour le sizing et la rentabilité.
     """
+    import lessons
     quote_cur = prices._ticker_currency(ticker)
     fx  = prices.fx_to_eur(quote_cur)      # 1 unité devise → EUR
     sym = prices.currency_symbol(quote_cur)
+
+    # ── Veto QUALITÉ D'ENTRÉE — les leçons appliquées, pas seulement lues ────
+    # Dernier point de passage commun aux deux chemins d'entrée : c'est ici que
+    # les défauts que le post-mortem sait nommer après la perte (volume sous la
+    # moyenne, achat après une envolée d'un mois) doivent bloquer l'ordre.
+    # Un rappel dans le prompt ne suffit pas — AGRO est passé avec les deux.
+    tech_sizing = prices.get_technicals(ticker) or {}
+    veto_quality = lessons.entry_quality_veto(tech_sizing)
+    if veto_quality:
+        send_fn(f"🚫 {ticker} : achat auto annulé — {veto_quality}.\n"
+                f"Garde-fou qualité d'entrée (leçons des trades passés).")
+        print(f"[Auto] {ticker} : veto qualité d'entrée — {veto_quality}")
+        return False
 
     plan = compute_position_size(ticker, entry, sl, available, send_fn=send_fn)
     if plan["veto"]:
@@ -275,25 +289,14 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     # sans contexte d'entrée mémorisé. Si aucun chemin amont ne l'a capturé,
     # on enregistre au minimum les indicateurs techniques du moment — sinon le
     # post-mortem à la clôture est aveugle ("perte sans signal d'alerte" à tort).
-    if not portfolio.get_entry_context(ticker):
-        try:
-            pctx = prices.get_price_context(ticker) or {}
-            portfolio.set_entry_context(ticker, {
-                "source":      "autonome (capture filet de sécurité)",
-                "thesis":      (reason or "")[:150],
-                "rsi":         tech_sizing.get("rsi"),
-                "momentum_1m": tech_sizing.get("momentum_1m"),
-                "mom_12_1":    tech_sizing.get("mom_12_1"),
-                "above_ma200": tech_sizing.get("above_ma200"),
-                "atr_pct":     tech_sizing.get("atr_pct"),
-                "vol_ratio":   tech_sizing.get("vol_ratio"),
-                "perf_1y":     pctx.get("perf_1y"),
-                "from_52w_low": pctx.get("from_52w_low"),
-                "entry":       round(entry, 4),
-                "tp_pct":      round((tp - entry) / entry * 100, 1) if entry else None,
-            })
-        except Exception as _cx:
-            print(f"[Auto] capture contexte filet {ticker}: {_cx}")
+    # `tech_sizing` n'était défini NULLE PART dans cette fonction : chaque
+    # passage levait un NameError avalé par l'except, donc le filet ne capturait
+    # jamais rien (BAC, clos le 14/09/2026 : « leçon inexploitable »).
+    # `capture_entry_context` complète aussi un contexte de scan avec la
+    # distance SL réelle, inconnue au moment de la décision.
+    lessons.capture_entry_context(
+        ticker, source="autonome (capture filet de sécurité)",
+        thesis=(reason or "")[:150], entry=entry, sl=sl, tp=tp)
 
     fx_note = f" (≈{cost_eur:.0f}€ au taux {sym}→€ {fx:.3f})" if quote_cur != "EUR" else ""
     print(f"[Auto] Entrée : {ticker} {qty}t @ {entry}{sym} SL={sl} TP={tp} ({quote_cur}, coût {cost_eur:.0f}€)")

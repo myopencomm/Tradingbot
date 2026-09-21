@@ -675,11 +675,13 @@ GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
 
 Un LLM n'apprend pas par entraînement ici, mais le bot **accumule et réutilise** l'expérience de ses trades en trois temps :
 
-1. **Capture** — à chaque décision d'achat (scan, briefing, gain réduit, ordre manuel), le *pourquoi* est mémorisé : thèse, régime de marché, RSI/momentum/volume à l'entrée, source. Le contrôle pré-achat autonome rafraîchit ce contexte au moment réel de l'achat, et un **filet de sécurité** dans le passage d'ordre capture a minima les indicateurs techniques si aucun chemin amont ne l'a fait — aucun trade ne se clôture plus avec un contexte vide.
-2. **Post-mortem** — à la clôture, le bot croise le contexte d'entrée avec le résultat et tague automatiquement le défaut (ex. « entrée en surchauffe RSI ≥ 70 », « gap sous le SL — titre peu liquide »). Un contexte manquant est tagué comme **bug de capture**, jamais comme « perte sans signal d'alerte » — une leçon fausse est pire que pas de leçon.
+1. **Capture** — à chaque décision d'achat (scan, briefing, gain réduit, ordre manuel) **et à chaque position découverte par le sync**, le *pourquoi* est mémorisé : thèse, régime de marché, RSI/momentum/volume à l'entrée, distances SL/TP réellement posées, source. Le contrôle pré-achat autonome rafraîchit ce contexte au moment réel de l'achat, et un **filet de sécurité** dans le passage d'ordre capture a minima les indicateurs techniques si aucun chemin amont ne l'a fait — aucun trade ne se clôture plus avec un contexte vide.
+2. **Post-mortem** — à la clôture, le bot croise le contexte d'entrée avec le résultat et tague automatiquement le défaut (ex. « entrée en surchauffe RSI ≥ 70 », « gap sous le SL — titre peu liquide »). Le tag « gap » se mesure par rapport au **SL réellement posé** (`sl_pct` mémorisé à l'entrée), pas à un seuil fixe : sur un titre volatil, un stop touché normalement sort à -9,6 % et se faisait taguer « gap » à tort. Un contexte manquant est tagué comme **bug de capture**, jamais comme « perte sans signal d'alerte » — une leçon fausse est pire que pas de leçon.
 3. **Leçons réinjectées** — les schémas perdants sont agrégés et rappelés à l'IA dans **tous** les prompts de validation, pour éviter de répéter les mêmes erreurs.
+4. **Leçons APPLIQUÉES** — un rappel dans un prompt reste un rappel : les deux défauts d'entrée que le post-mortem sait nommer sont désormais des **règles dures**, vérifiées sur les chiffres avant l'ordre (`lessons.entry_quality_veto`). Voir le garde-fou « qualité d'entrée » ci-dessous.
 
 **Garde-fous pilotés par les données** (indépendants de l'IA) :
+- **Qualité d'entrée** (`ENTRY_QUALITY_VETO`, défaut on) : entrée refusée si le **volume** du jour est sous `ENTRY_MIN_VOL_RATIO` × sa moyenne 20 j (hausse non confirmée par les échanges) ou si le **momentum 1 mois** dépasse `ENTRY_MAX_MOM_1M` (achat après l'envolée). Appliqué à deux endroits : dans le screen quantitatif (le candidat n'est ni classé ni proposé) et dans le passage d'ordre (dernier point commun aux deux chemins d'entrée). Donnée manquante = **pas** de veto : on ne refuse jamais une entrée sur une absence d'information.
 - **Cooldown 10 jours** : pas de re-entrée sur un titre qui vient de perdre.
 - **Réduction de taille en série de pertes** : 2 pertes → 75 %, 3 → 50 %, 4+ → 35 % du budget.
 - **Corrélation avec le portefeuille détenu** : corrélation des rendements quotidiens (90j) contre chaque position déjà gérée par le bot — au-delà de 0.85, entrée bloquée (même pari, aucune diversification) ; entre 0.6 et 0.85, taille réduite de moitié. Un score quant indépendant sur deux titres du même thème (ex. AIR + SAF, aéro) ne protège pas de la corrélation réelle des cours.
@@ -1759,6 +1761,9 @@ MIN_RR=1.5                # TP ≥ 1.5× la distance du SL
 ENTRY_MIN_MOM_1M=-5       # plancher de momentum 1 mois à l'entrée (backtesté : -5 > -12 > 0)
 ENTRY_CRASH_MOM_1M=-12    # veto dur : un effondrement n'est jamais un repli
 EARNINGS_VETO_DAYS=6      # EXCLUS si résultats < N jours (gap non couvert par le SL) ; au-delà, non bloquant
+ENTRY_QUALITY_VETO=on     # garde-fou qualité d'entrée (leçons du post-mortem appliquées avant l'ordre)
+ENTRY_MIN_VOL_RATIO=0.8   # volume < N× la moyenne 20j → refus (hausse non confirmée)
+ENTRY_MAX_MOM_1M=25       # momentum 1 mois > +N% → refus (entrée après l'envolée)
 RISK_PER_TRADE_PCT=1.0    # perte au SL en % du budget autonome
 MAX_POSITION_PCT=30       # coût max d'une position en % du budget autonome
 VOL_SCALE_TRIGGER=1.5     # vol 20j > 1.5× vol 1 an → taille réduite de moitié

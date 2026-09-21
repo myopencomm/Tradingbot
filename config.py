@@ -142,6 +142,20 @@ MIN_RR      = float(os.getenv("MIN_RR", "1.5"))
 # une fenêtre trop large.
 EARNINGS_VETO_DAYS = int(os.getenv("EARNINGS_VETO_DAYS", "6"))
 
+# Veto « QUALITÉ D'ENTRÉE » — les leçons du post-mortem appliquées AVANT l'ordre.
+# `lessons.post_mortem` sait nommer deux défauts d'entrée récurrents une fois la
+# perte encaissée : volume sous sa moyenne (hausse non confirmée par les
+# échanges) et achat après une envolée d'un mois. Jusqu'au 21/09/2026 ces
+# leçons n'existaient QUE sous forme de texte injecté dans les prompts — le
+# modèle pouvait les ignorer, et aucune règle ne relisait les indicateurs avant
+# de passer l'ordre. Cas AGRO (15/09/2026) : entré à 0.67× le volume moyen 20 j
+# après +30.5% en un mois, sur un titre à 4.4% d'ATR.
+# Donnée absente = pas de veto (yfinance rend None sur les titres peu suivis) :
+# on ne refuse jamais un trade sur une absence d'information.
+ENTRY_QUALITY_VETO  = os.getenv("ENTRY_QUALITY_VETO", "on").strip().lower() not in ("off", "false", "0", "no")
+ENTRY_MIN_VOL_RATIO = float(os.getenv("ENTRY_MIN_VOL_RATIO", "0.8"))
+ENTRY_MAX_MOM_1M    = float(os.getenv("ENTRY_MAX_MOM_1M", "25"))
+
 # Sizing par le RISQUE (fractional-Kelly conservateur) : la perte au SL vaut
 # RISK_PER_TRADE_PCT % du budget autonome — plus jamais tout le budget sur un
 # trade. Coût plafonné à MAX_POSITION_PCT % du budget. Réduction de moitié si

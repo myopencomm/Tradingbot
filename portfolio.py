@@ -125,6 +125,9 @@ def add_pending_opportunity(ticker: str, entry: float, sl: float, tp: float,
         ctx.setdefault("source", source)
         ctx.setdefault("entry", round(entry, 4))
         ctx.setdefault("tp_pct", round((tp - entry) / entry * 100, 1) if entry else None)
+        # Distance du SL proposé : le post-mortem s'en sert pour distinguer un
+        # stop touché normalement d'un vrai gap (cf. lessons.post_mortem).
+        ctx.setdefault("sl_pct", round((sl - entry) / entry * 100, 1) if entry else None)
         set_entry_context(ticker, ctx)
     import pytz
     from datetime import datetime

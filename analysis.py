@@ -1490,6 +1490,16 @@ def _quant_screen(universe: list[str], held_tickers: set[str],
         above_ma = tech.get("above_ma200")
         if rsi is None or mom is None:
             return None
+        # VETO QUALITÉ D'ENTRÉE, appliqué DÈS LE SCREEN — même logique que le
+        # veto volatilité plus bas : `lessons.entry_quality_veto` écarte les
+        # défauts que le post-mortem ne savait nommer qu'APRÈS la perte (volume
+        # sous sa moyenne 20 j, envolée du dernier mois). Les filtrer ici évite
+        # de leur brûler une validation IA et de les proposer dans /scan.
+        # `tech` brut et non `vol` : ce dernier vaut 1.0 quand la donnée manque,
+        # ce qui transformerait une absence d'information en feu vert.
+        import lessons as _lessons
+        if _lessons.entry_quality_veto(tech):
+            return None
 
         rel = round(mom - index_mom, 1)  # force relative vs indice
         base = {"ticker": ticker, "rsi": rsi, "mom_1m": mom, "mom_12_1": m121,

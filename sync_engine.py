@@ -328,6 +328,31 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                     # Consomme l'engagement "ordre en attente" (exécuté)
                     for k in (yf_t.upper(), bd_ticker):
                         data.get("auto_pending_orders", {}).pop(k, None)
+                # Boucle d'apprentissage : une position découverte ICI (achat
+                # manuel sur BD, ou auto dont aucun chemin amont n'a capturé le
+                # contexte) se clôturait sans aucun indicateur d'entrée — le
+                # post-mortem rendait « leçon inexploitable » (BAC, 14/09/2026).
+                # Écriture DANS `data` : `portfolio.set_entry_context` ferait un
+                # load/save intercalé que le save de fin de sync écraserait.
+                try:
+                    import lessons
+                    base = portfolio._base_sym(yf_t)
+                    ctx_existing = data.get("entry_contexts", {}).get(base)
+                    if not ctx_existing:
+                        ctx_new = lessons.build_entry_context(
+                            yf_t, source="sync (découverte BD)",
+                            entry=entry, sl=sl, tp=tp)
+                        if ctx_new:
+                            ctx_new.setdefault("captured_at", portfolio.now_iso())
+                            data.setdefault("entry_contexts", {})[base] = ctx_new
+                    else:
+                        ctx_existing.update({
+                            k: v for k, v in lessons.entry_distances(entry, sl, tp).items()
+                            if ctx_existing.get(k) is None
+                        })
+                except Exception as _cx:
+                    print(f"[sync] capture contexte d'entrée {yf_t}: {_cx}")
+
                 local[new_key] = data["positions"][new_key]
                 matched_local_keys.add(new_key)
                 added_keys.append(new_key)
