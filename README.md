@@ -1731,6 +1731,21 @@ L'IA reste dans la boucle comme **contrôle qualitatif symétrique** (news inval
 
 Limites : constituants actuels (biais du survivant, identique pour toutes les configs comparées), pas de FX, moteur quantitatif seul.
 
+**Réanalyse des positions détenues (`--review`, 23/09/2026)** — question : le bot doit-il revoir chaque jour ses positions et sortir quand la thèse d'achat se dégrade, avant le SL ? Règles testées, signal lu à la clôture, sortie à l'open suivant : clôture sous la **MM50** (vente ou SL remonté sous le plus bas des 10 séances, en quotidien ou en hebdomadaire), **chandelier** (clôture à 2,5 / 3 / 4 ATR sous le plus haut depuis l'achat), **choc** (séance à plus de 2 ou 3 ATR de baisse), et la combinaison MM50 + choc. `--max-pos N` règle le nombre de positions (production : 4), `--wide` ajoute l'univers US liquide du cache.
+
+| Règle (137 titres, 2023 → 09/2026) | 4 positions | 2 positions |
+|---|---|---|
+| Référence (SL/TP/trailing seuls) | -1711 € | -754 € |
+| MM50 cassée → vente, quotidien | -2412 € | -1260 € |
+| MM50 cassée → vente, hebdo | -2267 € | -1093 € |
+| MM50 cassée → SL remonté, quotidien | -1885 € | -847 € |
+| MM50 cassée → SL remonté, hebdo | -1949 € | -741 € |
+| Chandelier 2,5 ATR → vente | -1769 € | -821 € |
+| Chandelier 4 ATR → vente | -1714 € | -754 € |
+| Choc > 2 ATR → vente | -1706 € | -741 € |
+
+**Aucune règle n'est activée.** La vente sur MM50 cassée coûte 500 à 700 € : elle coupe des replis que le titre rattrape. Les autres règles sont neutres, à ±15 € près, soit du bruit. Le choc ne se déclenche presque jamais : une baisse de 2 ATR en une séance touche d'abord le SL, posé à 2 ATR. C'est la même conclusion que pour la sortie sur stagnation (27/08) et le breakeven serré (15/09) : sur ce moteur, **toute sortie anticipée basée sur le prix fait baisser le P&L**, parce que le résultat vient de quelques grands gagnants qu'on coupe avec les perdants. Ce qui reste hors de portée du backtest, ce sont les **nouvelles** (résultats, dégradations, annonces) : aucun historique de titres n'est disponible pour les rejouer.
+
 ## Règles de trading par défaut
 
 - **Stop-loss** : technique, ≈ 2×ATR sous l'entrée, borné 3-10% (fallback -7% fixe pour les positions manuelles sans ATR)

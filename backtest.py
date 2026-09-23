@@ -89,6 +89,8 @@ def build_indicators(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         ind["mom_1m"] = (c / c.shift(21) - 1) * 100
         ind["mom_12_1"] = (c.shift(21) / c.shift(252) - 1) * 100
         ind["ma200"] = c.rolling(200).mean()
+        ind["ma50"] = c.rolling(50).mean()
+        ind["low10"] = df["Low"].rolling(10).min()
         ind["atr_pct"] = atr14_pct(df)
         # Extension courte : hausse des 5 dernières séances mesurée en ATR
         # quotidiens. 2.0 = le titre a déjà parcouru deux journées normales
@@ -112,7 +114,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              stale: tuple | None = None,
              min_mom1m: float | None = None,
              be_pct: float | None = None,
-             be_atr: float | None = None) -> dict:
+             be_atr: float | None = None,
+             review: dict | None = None) -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
 
     `stale` = ((j1, p1), (j2, p2)) — jalons de la sortie sur stagnation : à j1
@@ -124,6 +127,13 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     d'origine, qui ne rejetait que l'effondrement sous -12%).
 
     `be_pct` = seuil de remontée du SL au PRU, en % (None = AUTO_BREAKEVEN_PCT).
+    `review` = réanalyse des positions DÉTENUES (voir `_review_signal`) :
+    {"rule": "ma50"|"chandelier"|"shock"|"ma50+shock", "action": "exit"|"tighten",
+     "cadence": "daily"|"weekly", "k": multiple d'ATR, "grace": jours}.
+    Signal lu à la CLÔTURE ; « exit » vend à l'open suivant (on ne connaît
+    pas la clôture avant qu'elle soit faite), « tighten » remonte le SL sous
+    le plus bas des 10 dernières séances — jamais il ne le descend.
+
     `be_atr` = le MÊME seuil exprimé en multiples d'ATR d'entrée ; prime sur
     `be_pct` quand il est fourni. Un seuil en % fixe ne veut pas dire la même
     chose sur un titre à 1.7% d'ATR et sur un à 3.4% : +6% vaut 3.5 ATR pour le
@@ -149,8 +159,12 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
             row = df.loc[d]
             days_held = np.busday_count(p["entry_date"].date(), d.date())
             exit_price, why = None, None
+            if p.get("exit_next_open"):
+                exit_price, why = row["open"], "REVIEW"
             # Gap sous le SL → open ; sinon SL touché en séance → SL exact.
-            if row["open"] <= p["sl"]:
+            if exit_price is not None:
+                pass
+            elif row["open"] <= p["sl"]:
                 exit_price, why = row["open"], "SL(gap)"
             elif row["low"] <= p["sl"]:
                 exit_price, why = p["sl"], "SL"
@@ -181,6 +195,14 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                                "ret_pct": (exit_price / p["entry"] - 1) * 100})
                 equity += pnl
                 continue
+            p["peak"] = max(p.get("peak", p["entry"]), row["close"])
+            if review and _review_due(review, d, days_held):
+                prev = df["close"].shift(1).get(d)
+                if _review_signal(review, row, p, prev):
+                    if review.get("action", "exit") == "exit":
+                        p["exit_next_open"] = True
+                    elif not np.isnan(row["low10"]):
+                        p["sl"] = max(p["sl"], float(row["low10"]))
             # Trailing breakeven (optionnel — testé avec/sans)
             if be_trail and not p["be_done"]:
                 if be_atr is not None:
@@ -295,6 +317,39 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     }
 
 
+def _review_due(review: dict, d, days_held: int) -> bool:
+    """La réanalyse tourne-t-elle ce jour-là ? Jamais pendant le délai de
+    grâce (une entrée a le droit de respirer) ; « weekly » = clôture du
+    vendredi seulement."""
+    if days_held < review.get("grace", 3):
+        return False
+    return review.get("cadence", "daily") == "daily" or d.weekday() == 4
+
+
+def _review_signal(review: dict, row, p: dict, prev_close) -> bool:
+    """La thèse d'achat est-elle contredite à cette clôture ?
+
+    ma50       — clôture sous la moyenne 50 jours : la tendance moyenne a cassé
+    chandelier — clôture à plus de k ATR sous le plus haut atteint depuis
+                 l'achat : le mouvement s'est retourné, gain compris
+    shock      — séance à plus de k ATR de baisse : une nouvelle a frappé
+                 (résultats, dégradation, annonce) avant que le SL ne le dise
+    """
+    atr_abs = row["close"] * row["atr_pct"] / 100
+    if np.isnan(atr_abs):
+        return False
+    k = review.get("k", 3.0)
+    rules = review["rule"].split("+")
+    if "ma50" in rules and not np.isnan(row["ma50"]) and row["close"] < row["ma50"]:
+        return True
+    if "chandelier" in rules and row["close"] < p["peak"] - k * atr_abs:
+        return True
+    if "shock" in rules and prev_close is not None and not np.isnan(prev_close):
+        if prev_close - row["close"] > review.get("k_shock", 2.0) * atr_abs:
+            return True
+    return False
+
+
 def sorted_by_exit(closed):
     return [c["pnl"] for c in sorted(closed, key=lambda c: c["exit_date"])]
 
@@ -373,9 +428,21 @@ def main():
     ap.add_argument("--ext", action="store_true",
                     help="compare le veto d'extension (plusieurs seuils) à la stratégie livrée")
     ap.add_argument("--us", action="store_true", help="univers US uniquement")
+    ap.add_argument("--review", action="store_true",
+                    help="compare la réanalyse des positions détenues (MM50, "
+                         "chandelier, choc) à la stratégie livrée")
+    ap.add_argument("--wide", action="store_true",
+                    help="ajoute l'univers US liquide du cache (universe_cache.json)")
+    ap.add_argument("--max-pos", type=int, default=2,
+                    help="positions simultanées (production : 4)")
     args = ap.parse_args()
 
     universe = US_UNIVERSE if args.us else SCAN_UNIVERSE
+    if args.wide:
+        import market_universe
+        extra = [e["ticker"] if isinstance(e, dict) else e
+                 for e in market_universe.load_cache("us", max_age_days=10_000)]
+        universe = list(dict.fromkeys(list(universe) + extra))
     if args.fast:
         universe = universe[:30]
     dl_start = (pd.Timestamp(args.start) - pd.Timedelta(days=400)).strftime("%Y-%m-%d")
@@ -411,8 +478,33 @@ def main():
     regime_ok = regime_ok.reindex(pd.DatetimeIndex(all_dates).tz_localize(None)).ffill()
     regime_ok.index = pd.DatetimeIndex(all_dates)
 
-    base = dict(mode="new", risk_pct=1.0, max_pos=2, max_cost_pct=30)
-    if args.ext:
+    base = dict(mode="new", risk_pct=1.0, max_pos=args.max_pos, max_cost_pct=30)
+    if args.review:
+        # Réanalyse des positions détenues, 23/09/2026. Les règles de sortie
+        # précédentes (stagnation, breakeven serré) ont TOUTES baissé le P&L :
+        # celle-ci n'est activée que si elle bat la référence ici, bootstrap
+        # et walk-forward compris.
+        configs = [("R0. référence (SL/TP/trailing seuls)", dict(base))]
+        for cad in ("daily", "weekly"):
+            configs += [
+                (f"R1. MM50 cassée → vente [{cad}]",
+                 dict(base, review=dict(rule="ma50", action="exit", cadence=cad))),
+                (f"R2. MM50 cassée → SL remonté [{cad}]",
+                 dict(base, review=dict(rule="ma50", action="tighten", cadence=cad))),
+            ]
+        for k in (2.5, 3.0, 4.0):
+            configs.append((f"R3. chandelier {k} ATR → vente [daily]",
+                            dict(base, review=dict(rule="chandelier", k=k, action="exit"))))
+        for ks in (2.0, 3.0):
+            configs += [
+                (f"R4. choc > {ks} ATR → vente [daily]",
+                 dict(base, review=dict(rule="shock", k_shock=ks, action="exit"))),
+                (f"R5. choc > {ks} ATR → SL remonté [daily]",
+                 dict(base, review=dict(rule="shock", k_shock=ks, action="tighten"))),
+            ]
+        configs.append(("R6. MM50 OU choc 2 ATR → SL remonté [daily]",
+                        dict(base, review=dict(rule="ma50+shock", action="tighten"))))
+    elif args.ext:
         # Le veto d'extension est né d'UN trade perdant (JNJ, 30/07/2026) :
         # il ne sera activé que s'il tient sur l'historique complet, bootstrap
         # et walk-forward à l'appui. Une règle posée sur un échantillon de 1
