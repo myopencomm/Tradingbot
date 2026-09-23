@@ -606,6 +606,7 @@ def _parse_position(text: str) -> dict | None:
     #   [logo] nom | place › mnémo | COURS dev | var % | qté | PRU : x € |
     #   perf % | VALORISATION € | +/- VALUE € | poids %
     price = price_currency = value_eur = pnl_eur = None
+    quoted = False
     pru_idx = next((i for i, p in enumerate(parts) if p.startswith("PRU")), None)
     for i, p in enumerate(parts):
         if pru_idx is not None and i >= pru_idx:
@@ -614,6 +615,13 @@ def _parse_position(text: str) -> dict | None:
         if m:
             price = _parse_float(m.group(1))
             price_currency = _detect_currency(p)
+            # Variation du jour juste après le cours : « - » = BD n'a PAS de
+            # cotation vivante. Le 22/09/2026 à 22:35, toutes les lignes US
+            # sont sorties ainsi avec un cours converti en EUR mais libellé
+            # USD (JNJ 234.53 « USD » pour 269.19 réels) : valorisations
+            # fausses de -12 %, affichées jusqu'au relevé suivant.
+            nxt = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            quoted = "%" in nxt
             break
     if pru_idx is not None:
         for p in parts[pru_idx + 1:]:
@@ -632,7 +640,7 @@ def _parse_position(text: str) -> dict | None:
     return {"name": _clean_name(name), "bd_ticker": bd_ticker or "", "qty": qty,
             "pru": pru, "mic": mic or "", "pru_currency": pru_currency,
             "price": price, "price_currency": price_currency,
-            "value_eur": value_eur, "pnl_eur": pnl_eur}
+            "value_eur": value_eur, "pnl_eur": pnl_eur, "quoted": quoted}
 
 
 # ── Montants multi-devises ────────────────────────────────────────────────

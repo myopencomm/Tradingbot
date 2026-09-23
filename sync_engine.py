@@ -158,6 +158,13 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
             "bd_pnl_eur":        pos.get("pnl_eur"),
         }
         moved = False
+        # Ligne sans cotation vivante (variation « - ») sur un titre qui cote :
+        # BD peut y afficher un cours converti dans la mauvaise devise
+        # (22/09/2026 22:35, toutes les US à -12 %). On garde le dernier relevé
+        # coté. Exception : titre acté sans valeur (GVN, MCPHY) — « - » est son
+        # état permanent, et son seul relevé chiffré.
+        if pos.get("quoted") is False and cfg.get("bd_price") and not cfg.get("worthless"):
+            snap = {}
         for k, v in snap.items():
             if v is not None and cfg.get(k) != v:
                 cfg[k] = v
@@ -167,7 +174,7 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
         # mémorisé date de l'heure passée (sync horaire) ou d'une semaine
         # (session Playwright déconnectée). C'est ce qui décide s'il peut servir
         # de repli quand yfinance saute une séance.
-        if pos.get("price") is not None:
+        if snap and pos.get("price") is not None:
             import pytz as _pytz
             from datetime import datetime as _dt
             cfg["bd_price_at"] = _dt.now(_pytz.timezone("Europe/Paris")).isoformat(timespec="minutes")
