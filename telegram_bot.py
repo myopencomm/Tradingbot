@@ -1372,6 +1372,22 @@ def cmd_trailing(args, cid):
     _run_long(cid, _do_trailing)
 
 
+def cmd_news(args, cid):
+    """/news — tri des news et résultats imminents, à la demande.
+
+    Le passage planifié (lundi et jeudi par défaut) ne parle que s'il trouve
+    quelque chose. Ici on rend compte de chaque position."""
+    import news_alert
+
+    def _do_news():
+        try:
+            news_alert.news_alert_cycle(lambda m: send(m, cid), verbose=True)
+        except Exception as e:
+            send(f"Erreur news : {e}", cid)
+
+    _run_long(cid, _do_news)
+
+
 def cmd_stagnation(args, cid):
     """/stagnation — verdict de vitesse sur chaque position, à la demande.
 

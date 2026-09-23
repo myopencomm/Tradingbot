@@ -142,6 +142,16 @@ MIN_RR      = float(os.getenv("MIN_RR", "1.5"))
 # une fenêtre trop large.
 EARNINGS_VETO_DAYS = int(os.getenv("EARNINGS_VETO_DAYS", "6"))
 
+# Alerte NEWS et RÉSULTATS sur les positions détenues (news_alert.py) — alerte
+# Telegram seule, jamais de vente. Les titres d'articles sont jugés par Jev
+# (TypeSafe) ; sans TYPESAFE_API_KEY le tri des news est désactivé.
+TYPESAFE_API_KEY         = os.getenv("TYPESAFE_API_KEY", "")
+NEWS_ALERT_DAYS          = [d.strip().lower() for d in os.getenv("NEWS_ALERT_DAYS", "mon,thu").split(",") if d.strip()]
+NEWS_ALERT_TIME          = os.getenv("NEWS_ALERT_TIME", "08:50")
+NEWS_ALERT_THRESHOLD     = float(os.getenv("NEWS_ALERT_THRESHOLD", "0.8"))
+NEWS_ALERT_LOOKBACK_DAYS = int(os.getenv("NEWS_ALERT_LOOKBACK_DAYS", "5"))
+EARNINGS_ALERT_DAYS      = int(os.getenv("EARNINGS_ALERT_DAYS", "7"))
+
 # Veto « QUALITÉ D'ENTRÉE » — les leçons du post-mortem appliquées AVANT l'ordre.
 # `lessons.post_mortem` sait nommer deux défauts d'entrée récurrents une fois la
 # perte encaissée : volume sous sa moyenne (hausse non confirmée par les

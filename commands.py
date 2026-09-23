@@ -120,6 +120,8 @@ ALL = [
     Command("research", "cmd_research", "Analyser une action — /research TICKER", "ia",
             usage="TICKER [question]", help="analyse d'une action",
             extra=("  ex: /research EXENS.PA dois-je vendre ?",)),
+    Command("news", "cmd_news", "News negatives + resultats imminents sur mes positions", "ia",
+            help="news negatives et resultats imminents (alerte seule, jamais de vente)"),
     Command("lessons", "cmd_lessons", "Ce que le bot a appris de ses trades", "ia",
             help="ce que le bot a appris de ses trades passes"),
 

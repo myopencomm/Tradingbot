@@ -163,6 +163,7 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
 | Telegram | Vos messages, analyses, graphiques (chiffré en transit) |
 | Provider IA | Contexte de marché, tickers, votre contexte personnel de trading |
 | Yahoo Finance | Tickers interrogés (aucune donnée personnelle) |
+| TypeSafe (Jev) | Nom et ticker des positions détenues, titres et résumés d'articles publics — **aucun montant, aucune quantité, aucun PRU** (`news_alert.py`). Clé `TYPESAFE_API_KEY` dans `.env` |
 | Bourse Direct | Vos identifiants (session) + ordres — via HTTPS, comme le site |
 
 ---

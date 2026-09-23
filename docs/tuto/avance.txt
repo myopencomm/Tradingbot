@@ -145,6 +145,35 @@ s'effrite que devoir le revendre vite.
 (ENTRY_MIN_MOM_1M dans .env)
 
 ===== PAGE =====
+Fonctions avancees — Alerte news
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Le bot ne revend PAS une position parce
+que son cours faiblit : teste le 23/09
+sur 679 titres, vendre sous la moyenne
+50 jours ou apres un recul coute plus
+qu'il ne protege.
+
+Ce que le prix ne dit pas, ce sont les
+NOUVELLES. Lundi et jeudi a 8h50, le bot
+lit les articles recents de chaque
+position et te previent si l'un d'eux
+est une mauvaise nouvelle pour le cours
+(degradation, avertissement, proces...).
+Il te previent aussi 7 jours avant des
+resultats : un stop-loss ne protege pas
+d'un ecart a l'ouverture.
+
+Alerte seule : c'est toi qui decides.
+
+/news → tri immediat, position par
+        position
+
+Les titres d'articles sont juges par
+Jev (TypeSafe) : TYPESAFE_API_KEY dans
+.env. Sans cle, seule l'alerte
+resultats fonctionne.
+
+===== PAGE =====
 Fonctions avancees — Protections perdues
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Un stop se perd de DEUX facons :

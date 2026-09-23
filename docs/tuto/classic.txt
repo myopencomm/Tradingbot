@@ -50,6 +50,7 @@ A LA DEMANDE
   /scan     → 3 opportunites avec ton cash
   /scan us  → valeurs US uniquement
   /research TICKER → analyse approfondie
+  /news     → news negatives sur tes positions
 
 ORDRES (instructions a saisir sur BD)
   /buy TICKER QTE PRU

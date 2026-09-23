@@ -291,6 +291,17 @@ def run_scheduler():
                  if _market_day() and datetime.now().day == 1 else None, "monthly_breach")
     )
     schedule.every().monday.at("09:20").do(_bounded(_weekly_version_check, "version_check"))
+    # News négatives et résultats imminents sur les positions détenues : alerte
+    # seule. Pas quotidien — seuls les articles jamais vus partent chez Jev,
+    # et deux passages par semaine suffisent à ne rien laisser dormir.
+    import news_alert
+    from config import NEWS_ALERT_DAYS, NEWS_ALERT_TIME
+    _jours = {"mon": "monday", "tue": "tuesday", "wed": "wednesday",
+              "thu": "thursday", "fri": "friday", "sat": "saturday", "sun": "sunday"}
+    for j in NEWS_ALERT_DAYS:
+        if j[:3] in _jours:
+            getattr(schedule.every(), _jours[j[:3]]).at(NEWS_ALERT_TIME).do(
+                _bounded(lambda: news_alert.news_alert_cycle(telegram_bot.send), "news_alert"))
     # Univers de marché : rafraîchi le week-end, marchés fermés. JAMAIS à la
     # demande — un passage complet (~5000 symboles) fait rate-limiter yfinance,
     # ce qui dégraderait les cours du scan et du suivi de positions.
@@ -327,7 +338,7 @@ def run_scheduler():
     us_sched = (f" | US checks: {', '.join(US_CHECK_TIMES)}"
                 + (f" | Scan US: {US_SCAN_TIME}" if US_SCAN_TIME else "")
                 if US_EXTENDED_HOURS else "")
-    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 | Version: lundi 09:20 | Sync BD silencieux: toutes les heures à :35{us_sched} (heure Paris)")
+    print(f"   Checks: {', '.join(CHECK_TIMES)} | Briefing: {ANALYSIS_TIME} | Swap: lundi 09:10 | Revue SL: 1er du mois 09:15 | Version: lundi 09:20 | News: {'/'.join(NEWS_ALERT_DAYS)} {NEWS_ALERT_TIME} | Sync BD silencieux: toutes les heures à :35{us_sched} (heure Paris)")
     while True:
         schedule.run_pending()
         time.sleep(30)

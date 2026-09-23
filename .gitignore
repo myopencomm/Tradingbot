@@ -62,3 +62,6 @@ nav_history.json
 
 # Valeurs refusees par BD (cache local, repeuple tout seul)
 bd_blocklist.json
+
+# Alerte news : articles deja vus (news_alert.py)
+news_alert_state.json
