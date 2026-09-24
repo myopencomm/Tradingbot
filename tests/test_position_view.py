@@ -131,3 +131,23 @@ class TestCoherenceDesVues:
         pos = {"A": dict(AIR), "B": dict(AIR), "C": dict(AIR)}
         assert [v["name"] for v in position_view.views(
             pos, quotes={n: q() for n in pos})] == ["A", "B", "C"]
+
+
+class TestEuros:
+    """Le % euro doit être celui de BD : change compris (JNJ, 24/09/2026 :
+    +3.38% en dollars, +5.59% chez BD)."""
+    JNJ = {"ticker": "JNJ", "qty": 5, "entry_price": 264.0162,
+           "bd_pru_raw": 228.638}
+
+    def test_perf_euro_inclut_le_change(self):
+        fx = 241.412 / 274.52      # taux implicite du relevé BD
+        chg_eur, pnl_eur, effet = position_view.eur_perf(self.JNJ, 274.52, "USD", fx)
+        assert chg_eur == 5.59
+        assert round(pnl_eur) == 64
+        assert effet == round(5.59 - (274.52 / 264.0162 - 1) * 100, 2)
+
+    def test_titre_en_euros_ou_taux_absent(self):
+        assert position_view.eur_perf(self.JNJ, 274.52, "EUR") is None
+        assert position_view.eur_perf(self.JNJ, 274.52, "USD", 1.0) is None
+        assert position_view.eur_perf({"qty": 5, "entry_price": 264}, 274.52,
+                                      "USD", 0.88) is None

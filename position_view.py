@@ -26,6 +26,39 @@ import prices
 PERF_ABERRANTE_PCT = 80
 
 
+def eur_perf(cfg: dict, price: float, currency: str,
+             fx: float | None = None) -> tuple[float, float, float] | None:
+    """Performance EN EUROS d'un titre coté en devise, telle que BD l'affiche.
+
+    Retourne (chg_eur %, pnl_eur, effet change en points de %) ou None si le
+    calcul n'a pas de sens (titre en euros, PRU BD en euros inconnu, taux
+    indisponible).
+
+    Le % en devise (cours vs PRU en dollars) ignore le change : JNJ le
+    24/09/2026 était à +3.4% en dollars et +5.6% chez BD, le dollar ayant pris
+    ~1.6% face à l'euro depuis l'achat. Le PRU de référence est la valeur
+    BRUTE de BD (`bd_pru_raw`, frais inclus) — celle contre laquelle BD
+    calcule son « var / PRU ».
+    """
+    entry_eur = cfg.get("bd_pru_raw")
+    qty = cfg.get("qty") or 0
+    if (currency or "EUR").upper() == "EUR" or not (price and entry_eur and qty):
+        return None
+    fx = fx if fx is not None else prices.fx_to_eur(currency)
+    # fx_to_eur renvoie 1.0 quand le taux manque : comparer un cours en dollars
+    # à un PRU en euros donnerait une perf fantaisiste.
+    if not fx or fx == 1.0:
+        return None
+    entry = cfg.get("entry_price")
+    val_eur = price * fx
+    chg_eur = round((val_eur - entry_eur) / entry_eur * 100, 2)
+    pnl_eur = round((val_eur - entry_eur) * qty, 2)
+    if not entry:
+        return chg_eur, pnl_eur, None
+    chg_dev = (price - entry) / entry * 100
+    return chg_eur, pnl_eur, round(chg_eur - chg_dev, 2)
+
+
 def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
     """Tout ce qu'il faut savoir pour AFFICHER une position.
 
@@ -40,7 +73,10 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
                                           diagnostic, pas pour l'utilisateur
     stale, note                           le cours est-il périmé, et pourquoi | ''
     chg_pct, pnl                          en devise de COTATION
-    entry_eur, pnl_eur, chg_eur           en EUROS (dashboard, totaux)
+    entry_eur, pnl_eur, chg_eur           en EUROS (dashboard, totaux) — ce que
+                                          montre BD, change compris
+    fx_effect                             part de chg_eur due au change (points
+                                          de %), None pour un titre en euros
     sl, tp                                seuils mémorisés
     hold, autonomous                      nature de la position
     protected                             False = AUCUN ordre SL/TP actif sur BD
@@ -65,7 +101,7 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
     _eur      = entry * fx
     entry_eur = cfg.get("bd_pru_raw") or round(_eur, 2 if _eur >= 1 else 4)
 
-    chg_pct = pnl = pnl_eur = chg_eur = None
+    chg_pct = pnl = pnl_eur = chg_eur = fx_effect = None
     estimated = False
 
     if price and entry:
@@ -74,6 +110,9 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
         pnl     = round(brut, 2)                 # un double arrondi décalait le
         pnl_eur = round(brut * fx, 2)            # P&L euro d'un centime
         chg_eur = chg_pct
+        perf = eur_perf(cfg, price, currency, fx)
+        if perf:
+            chg_eur, pnl_eur, fx_effect = perf
         # Le relevé BD chiffre directement en euros les titres que yfinance ne
         # cote plus : plus fiable qu'une conversion sur un cours mort.
         if best["source"] == "bd" and cfg.get("bd_pnl_eur") is not None:
@@ -116,6 +155,7 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
         "entry_eur":  entry_eur,
         "pnl_eur":    pnl_eur,
         "chg_eur":    chg_eur,
+        "fx_effect":  fx_effect,
         "pru_bd":     bool(cfg.get("bd_pru_raw")),
         "sl":         cfg.get("target_low"),
         "tp":         cfg.get("target_high"),

@@ -147,6 +147,24 @@ def trailing_target(pos: dict, price: float, tp: float | None,
     return (round(target, 4) if target else None), step, label
 
 
+def _fx_note(pos: dict, price: float, currency: str, change_pct: float) -> str:
+    """« en € : +5.59% chez BD, dont +2.21 pts dus au dollar » — ou ''.
+
+    Le 24/09/2026 /trailing annonçait JNJ à +3.38% quand BD affichait +5.59% :
+    les deux étaient justes (dollars vs euros), mais rien ne le disait.
+    """
+    import position_view
+    perf = position_view.eur_perf(pos, price, currency)
+    if not perf:
+        return ""
+    chg_eur, _, _ = perf
+    fx_pts = chg_eur - change_pct
+    devise = "dollar" if (currency or "").upper() == "USD" else currency
+    sens = "gagnés grâce au" if fx_pts >= 0 else "perdus à cause du"
+    return (f"\n      💶 en € : {chg_eur:+.2f}% (vue BD, frais inclus) — "
+            f"{abs(fx_pts):.2f} pts {sens} {devise}")
+
+
 def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     """
     Remonte le SL au PRU (breakeven) DIRECTEMENT SUR BD pour toute position —
@@ -178,6 +196,7 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     # 1. Positions au-dessus de leur seuil de breakeven
     candidates = []
     skipped = []
+    fx_lines = []
     for name, pos in positions.items():
         if pos.get("hold"):
             skipped.append(f"  🔒 {name} : HOLD long terme — hors gestion bot")
@@ -198,6 +217,7 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         if _best["source"] != "yf":
             print(f"[Trailing] {name} : {_best['note']}")
         change_pct = (price - entry) / entry * 100
+        fx_note = _fx_note(pos, price, _best["currency"], change_pct)
         threshold = BREAKEVEN_PCT if pos.get("autonomous") else BREAKEVEN_THRESHOLD
         # Deux portes d'entrée : le seuil de breakeven, OU la progression vers
         # le TP (palier de sécurisation). Sur un TP étroit la seconde s'ouvre
@@ -207,12 +227,14 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         if change_pct >= threshold or (prog is not None
                                        and prog * 100 >= TRAIL_LOCK_TRIGGER_PCT):
             candidates.append((name, pos, change_pct, price))
+            if fx_note:
+                fx_lines.append(f"  💱 {name} : {change_pct:+.2f}% en devise{fx_note}")
         else:
             need = entry * (1 + threshold / 100)
             prog_note = f", {prog * 100:.0f}% du chemin vers le TP" if prog is not None else ""
             skipped.append(
                 f"  ⏳ {name} : {change_pct:+.2f}% — seuil +{threshold:.0f}% "
-                f"non atteint (il faut {need:.2f}{prog_note})"
+                f"non atteint (il faut {need:.2f}{prog_note}){fx_note}"
             )
     if verbose:
         head = [f"🔒 TRAILING — vérification à la demande",
@@ -227,9 +249,16 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         if candidates:
             head.append(f"\n{len(candidates)} position(s) au-dessus du seuil : "
                         + ", ".join(n for n, _, _, _ in candidates))
+        if fx_lines:
+            head.extend(fx_lines)
         if skipped:
             head.append("\nNon concernées :")
             head.extend(skipped)
+        if any("💶" in l for l in skipped + fx_lines):
+            head.append("\n💶 Les seuils se jugent sur le cours en DEVISE : le stop "
+                        "est un ordre en devise, déclenché par le cours de "
+                        "l'action. Le % en euros (celui de BD) inclut le change, "
+                        "qui ne dit rien de la tendance du titre.")
         if not candidates:
             head.append("\n✅ Rien à remonter — aucune action.")
         send_fn("\n".join(head))
