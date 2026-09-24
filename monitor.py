@@ -181,7 +181,9 @@ def check_positions(send_fn, us_only: bool = False) -> None:
         # Trailing stop : quand la position atteint +BREAKEVEN_THRESHOLD% au-dessus du PRU,
         # propose (et enregistre) un relevé du SL au PRU — zéro perte garanti.
         entry = cfg["entry_price"]
-        if (change_pct >= BREAKEVEN_THRESHOLD
+        import trailing   # perf en euros pour un titre en devise (24/09/2026)
+        be_perf = trailing.breakeven_basis(cfg, price)[0] if price and entry else change_pct
+        if (be_perf >= BREAKEVEN_THRESHOLD
                 and cfg["target_low"] < entry
                 and not cfg.get("breakeven_notified", False)):
             alerts.append({"type": "BREAKEVEN", "name": name, "cfg": cfg,
