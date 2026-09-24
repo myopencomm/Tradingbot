@@ -157,6 +157,7 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
         "chg_eur":    chg_eur,
         "fx_effect":  fx_effect,
         "pru_bd":     bool(cfg.get("bd_pru_raw")),
+        "opened_at":  cfg.get("opened_at"),
         "sl":         cfg.get("target_low"),
         "tp":         cfg.get("target_high"),
         "hold":       bool(cfg.get("hold")),

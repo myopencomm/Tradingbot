@@ -625,6 +625,17 @@ def cmd_stats(args, cid):
         lines.append(f"  ⚠️ INCOMPLET — cours indisponible pour "
                      f"{', '.join(s['unpriced'])} (exclues du latent)")
     lines.append(f"\nTOTAL P&L     : {s['total_pnl']:+.0f}€")
+    # Le seul chiffre qui dit si le bot vaut mieux qu'un ETF (24/09/2026)
+    b = s.get("vs_spx")
+    if b:
+        verdict = "le bot fait MIEUX" if b["ecart_eur"] > 0 else "le S&P fait MIEUX"
+        lines.append(f"\nVS S&P 500 — meme capital, memes dates, en €")
+        lines.append(f"Bot           : {b['bot_eur']:+.0f}€  ({b['n']} trades, ouverts inclus)")
+        lines.append(f"S&P 500       : {b['spx_eur']:+.0f}€  (hors dividendes)")
+        lines.append(f"Ecart         : {b['ecart_eur']:+.0f}€ → {verdict}")
+        lines.append(f"Trades battant l'indice : {b['battus']}/{b['n']}")
+        if b["n"] < 50:
+            lines.append(f"  ⚠️ {b['n']} trades : trop peu pour conclure (viser 50)")
     if s.get("api_cost_eur"):
         lines.append(f"Couts API IA  : -{s['api_cost_eur']:.2f}€ "
                      f"(dont {s['api_month_eur']:.2f}€ ce mois)")

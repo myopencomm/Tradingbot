@@ -233,6 +233,13 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
     conversion FX appliquée pour le sizing et la rentabilité.
     """
     import lessons
+    # ── Rotation US / Euronext : plafond de places US ────────────────────────
+    if market.is_us(ticker):
+        us_full = sizing.us_slots_block()
+        if us_full:
+            send_fn(f"🚫 {ticker} : achat auto annulé — {us_full}.")
+            print(f"[Auto] {ticker} : {us_full}")
+            return False
     quote_cur = prices._ticker_currency(ticker)
     fx  = prices.fx_to_eur(quote_cur)      # 1 unité devise → EUR
     sym = prices.currency_symbol(quote_cur)
@@ -905,11 +912,19 @@ def _chercher_apres_vente(send_fn) -> None:
     # d'entrée les écarterait un par un (`market_open_for`), ce qui est
     # exactement ce qui s'est passé le 14/09.
     import analysis
-    if market.is_open_now("NVDA"):              # sonde : séance de Wall Street
+    # Rotation (24/09/2026) : pas de scan US si les places US sont prises, et
+    # quand les deux séances sont ouvertes (15h30-17h30), priorité au marché
+    # le moins représenté — Euronext à égalité, il coûte moins cher.
+    us_ok = market.is_open_now("NVDA") and not sizing.us_slots_block()
+    eu_ok = market.is_open_now("AIR.PA")
+    if us_ok and eu_ok:
+        n_us, n_eu = sizing.market_counts()
+        us_ok = n_us < n_eu
+    if us_ok:                                   # sonde : séance de Wall Street
         _last_rescan_ts = time.time()
         send_fn("💰 Vente encaissée — recherche d'un remplaçant sur le marché US…")
         analysis.scan_us_opportunities(send_fn)
-    elif market.is_open_now("AIR.PA"):          # sonde : séance Euronext
+    elif eu_ok:                                 # sonde : séance Euronext
         _last_rescan_ts = time.time()
         send_fn("💰 Vente encaissée — recherche d'un remplaçant sur Euronext…")
         analysis.scan_opportunities(send_fn)

@@ -245,6 +245,8 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Mode gain réduit** (opt-in) | Si rien ne passe à +10%, trades courts (TP +3-8%, 1-5 jours) — désactivé par défaut (`SMALL_GAIN_MODE=on` pour l'activer) |
 | **Valeur de la part** | Croissance de l'investissement en %, base 100, insensible aux versements et retraits (`/nav` + graphique du dashboard) |
 | **Dashboard visuel** | http://localhost:8642 (accès Tailscale possible) + `/dashboard` Telegram : P&L cumulé, cash engagé, ROI, trades filtrables |
+| **Comparaison S&P 500** | `/stats` confronte le P&L du bot à ce qu'aurait fait le S&P 500 converti en euros avec le même capital et les mêmes dates (`benchmark.py`). Le chiffre qui dit si le bot vaut mieux qu'un ETF ; en dessous de 50 trades, il est signalé comme trop peu pour conclure |
+| **Rotation US / Euronext** | Au plus `MAX_US_POSITIONS` (défaut 2) positions autonomes US à la fois, ordres en attente compris : au-delà, l'achat US est refusé et le scan US sauté. Après une vente, quand les deux séances sont ouvertes, le remplaçant est cherché sur le marché le moins représenté (Euronext à égalité : ~0,4 % d'aller-retour contre ~2 % sur une ligne US, et pas de change) |
 | **Coûts API dans le bilan** | Chaque appel IA enregistre ses tokens réels ET **le modèle qui a réellement répondu** (`api_costs.json`) ; `/stats` et le dashboard affichent le coût cumulé, le modèle servi et le **P&L net après coûts IA** — bilan honnête de l'efficacité du bot |
 | **Instructions d'ordres** | Format Bourse Direct step-by-step, prêt à saisir sur mobile ou web |
 | **Import screenshot** | Envoyez vos captures d'écran — le bot lit et importe automatiquement |
@@ -336,7 +338,7 @@ TradingBot/
 |---|---|
 | `/status` | Portefeuille complet avec P&L temps réel, alertes SL/TP |
 | `/cash [montant]` | Voir ou mettre à jour le cash disponible |
-| `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor, **coûts API IA et P&L net** |
+| `/stats` | Bilan des trades : win rate, P&L réalisé, profit factor, **coûts API IA et P&L net**, et **VS S&P 500** : ce qu'aurait rapporté le même capital placé dans le S&P 500 (en €, hors dividendes) aux mêmes dates, trade par trade, positions ouvertes comprises |
 | `/fallback [provider] [clé]` | IA de secours : `/fallback gemini CLE_API` teste la clé, l'enregistre dans `.env`, **supprime le message du chat** et active la bascule auto si le provider principal échoue. `/fallback` = état, `/fallback off` = désactiver |
 | `/dashboard` | Graphique P&L cumulé + résumé visuel (image) — voir section [Dashboard](#dashboard-visuel) |
 | `/nav` | Croissance de l'investissement en % (valeur de la part, base 100) — voir [Valeur de la part](#valeur-de-la-part--la-croissance-de-linvestissement) |
@@ -1760,6 +1762,18 @@ Limites : constituants actuels (biais du survivant, identique pour toutes les co
 
 **Le palier en euros perd dans les trois univers** (-115 à -437 €, moins de TP atteints). Quand le dollar monte, il déclenche le breakeven plus tôt, sur un titre qui n'a fait que +3 à +4 % : les replis ordinaires sortent alors la position au PRU au lieu de la laisser aller au TP. Même mécanisme que le breakeven serré du 15/09. Le bootstrap ne distingue aucune variante du bruit (P(gagnante) 0 %, 1 fenêtre walk-forward gagnante sur 4). **Retiré le jour même : le palier 1 reste jugé en dollars** ; seul l'affichage du % en euros et de la part due au change est conservé.
 
+**Distance max au stop (`--slcap`, 24/09/2026)** — question : les plus grosses pertes réelles (AGRO -9,7 %, EXENS -9,8 %) sont des stops à 9-10 %. Refuser les titres dont le stop (2 × ATR) serait plus loin qu'un plafond réduit-il les pertes ? C'est le réglage `MAX_SL_PCT` de production (défaut 10, veto dans `analysis`).
+
+| Plafond du stop (2023 → 09/2026) | 137 titres, 4 pos. | 679 titres US, 4 pos. |
+|---|---|---|
+| 10 % (production) | -1741 € | -2954 € |
+| 8 % | -1237 € | -2986 € |
+| 7 % | -1603 € | -2599 € |
+| 6 % | -1384 € | -2472 € |
+| 5 % | -1120 € | -2629 € |
+
+Un plafond plus serré fait **un peu mieux** dans la plupart des cas, mais sans ordre régulier (7 % moins bon que 6 % et 8 % sur le premier univers), avec un win rate quasi inchangé (30-35 %) et des intervalles bootstrap qui se chevauchent tous. **Non activé** : l'effet ne se distingue pas du bruit. `MAX_SL_PCT=6` dans `.env` est le levier si on veut l'essayer en réel.
+
 ## Règles de trading par défaut
 
 - **Stop-loss** : technique, ≈ 2×ATR sous l'entrée, borné 3-10% (fallback -7% fixe pour les positions manuelles sans ATR)
@@ -1797,6 +1811,7 @@ ENTRY_MAX_MOM_1M=25       # momentum 1 mois > +N% → refus (entrée après l'en
 RISK_PER_TRADE_PCT=1.0    # perte au SL en % du budget autonome
 MAX_POSITION_PCT=30       # coût max d'une position en % du budget autonome
 VOL_SCALE_TRIGGER=1.5     # vol 20j > 1.5× vol 1 an → taille réduite de moitié
+MAX_US_POSITIONS=2        # positions autonomes US max à la fois (le reste → Euronext), 0 = sans limite
 
 BROKERAGE_FEE_US=8.50     # courtage BD par ordre US (le barème Euronext est en dur)
 TTF_RATE=0.004            # taxe transactions financières FR, à l'achat (0.4%)

@@ -185,7 +185,36 @@ def compute_position_size(ticker: str, entry: float, sl: float,
             "swept_from": swept_from}
 
 
-def entry_capacity_block(min_cash: float | None = None) -> str | None:
+def us_slots_block() -> str | None:
+    """Plafond US atteint ? Message lisible, ou None s'il reste une place US.
+
+    Compte les positions autonomes ET les ordres d'achat autonomes en attente :
+    un ordre posé réserve déjà sa place. Voir config.MAX_US_POSITIONS.
+    """
+    import market
+    from config import MAX_US_POSITIONS
+    if MAX_US_POSITIONS <= 0:
+        return None
+    us = [n for n, p in portfolio.get_autonomous_positions().items()
+          if market.is_us(p.get("ticker", ""))]
+    us += [t for t in portfolio.get_auto_pending_orders() if market.is_us(t)]
+    if len(us) < MAX_US_POSITIONS:
+        return None
+    return (f"{len(us)}/{MAX_US_POSITIONS} places US occupées ({', '.join(us)}) — "
+            f"les places libres vont à Euronext (MAX_US_POSITIONS)")
+
+
+def market_counts() -> tuple[int, int]:
+    """(positions US, positions hors US) du moteur autonome, ordres en attente
+    compris — pour faire tourner les marchés après une vente."""
+    import market
+    tickers = [p.get("ticker", "") for p in portfolio.get_autonomous_positions().values()]
+    tickers += list(portfolio.get_auto_pending_orders())
+    n_us = sum(1 for t in tickers if market.is_us(t))
+    return n_us, len(tickers) - n_us
+
+
+def entry_capacity_block(min_cash: float | None = None, us: bool = False) -> str | None:
     """
     Blocage STRUCTUREL d'une nouvelle entrée autonome : plus aucun emplacement
     libre, ou budget/cash trop faible pour un achat viable. `None` = une entrée
@@ -200,6 +229,7 @@ def entry_capacity_block(min_cash: float | None = None) -> str | None:
     acheter (31/07/2026 : scan US de 16h lancé sur 3/3 places occupées).
 
     `min_cash` : plancher de cash exigé (défaut : garde-fou frais du scan).
+    `us` : l'entrée visée est US — le plafond MAX_US_POSITIONS s'applique.
     """
     cfg = portfolio.get_autonomous_config()
     if not cfg.get("enabled"):
@@ -213,6 +243,11 @@ def entry_capacity_block(min_cash: float | None = None) -> str | None:
         held = ", ".join(list(auto_pos.keys()) + list(pending.keys()))
         return (f"{used}/{max_pos} emplacements occupés ({held}) — il faut une "
                 f"sortie pour libérer une place (/auto positions N pour en ouvrir plus)")
+
+    if us:
+        us_full = us_slots_block()
+        if us_full:
+            return us_full
 
     if min_cash is None:
         try:

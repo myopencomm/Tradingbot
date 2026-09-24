@@ -317,3 +317,6 @@ et cloture auto les positions concernees.
 
 STATS
   /stats → win rate, P&L, profit factor
+  et « VS S&P 500 » : ce qu'aurait rapporté
+  le même capital dans le S&P 500 (en €),
+  aux mêmes dates. Le bot doit battre ça.

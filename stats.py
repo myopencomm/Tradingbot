@@ -138,7 +138,8 @@ def get_stats() -> dict:
     # Cours retenu et conversion en euros : position_view (source unique). Un
     # cours périmé fausse le P&L latent aussi sûrement qu'un cours manquant.
     import position_view
-    for v in position_view.views(positions):
+    open_views = position_view.views(positions)
+    for v in open_views:
         if v["pnl_eur"] is None:
             unpriced.append(v["name"])
             continue
@@ -187,7 +188,17 @@ def get_stats() -> dict:
     )
 
     total_pnl = round(realized_pnl + unrealized_pnl, 2)
+
+    # Bot vs S&P 500 (24/09/2026) : même capital, mêmes dates, en euros.
+    try:
+        import benchmark
+        vs_spx = benchmark.compare(closed, open_views)
+    except Exception as e:
+        print(f"[stats] comparaison S&P 500 : {e}")
+        vs_spx = None
+
     return {
+        "vs_spx":        vs_spx,
         "hold":          _duree(chronometres),
         "hold_wins":     _duree([t for t in chronometres if t["result"] == "win"]),
         "hold_losses":   _duree([t for t in chronometres if t["result"] == "loss"]),

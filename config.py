@@ -175,6 +175,13 @@ RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "1.0"))
 MAX_POSITION_PCT   = float(os.getenv("MAX_POSITION_PCT", "30"))
 VOL_SCALE_TRIGGER  = float(os.getenv("VOL_SCALE_TRIGGER", "1.5"))
 
+# Rotation US / Euronext (24/09/2026) : au plus MAX_US_POSITIONS positions
+# autonomes US à la fois (positions + ordres d'achat en attente). Une ligne US
+# coûte ~2 % d'aller-retour (8.50€/ordre + change) contre ~0.4 % sur Euronext,
+# et ajoute le risque de change. Au-delà, les places libres vont à Euronext.
+# 0 = pas de limite.
+MAX_US_POSITIONS   = int(os.getenv("MAX_US_POSITIONS", "2"))
+
 # Corrélation avec les positions déjà détenues (07/2026) : un score quant élevé
 # sur deux titres du même pari (ex: AIR + SAF, aéro) ne diversifie rien — ça
 # double la même exposition. Corrélation de Pearson sur les rendements

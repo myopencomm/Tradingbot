@@ -116,7 +116,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              be_pct: float | None = None,
              be_atr: float | None = None,
              review: dict | None = None,
-             fx: pd.Series | None = None, be_eur: bool = False) -> dict:
+             fx: pd.Series | None = None, be_eur: bool = False,
+             max_sl_pct: float = 10.0) -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
 
     `stale` = ((j1, p1), (j2, p2)) — jalons de la sortie sur stagnation : à j1
@@ -143,6 +144,10 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     dollars s'il est plus haut et laisse TRAIL_MIN_BUFFER_PCT sous le cours.
     Essayé en production le 24/09/2026 puis retiré : il perd sur les trois
     univers testés (voir README, « Palier 1 en dollars ou en euros »).
+
+    `max_sl_pct` = veto des titres dont le stop (2×ATR) serait plus loin que
+    ce % : la perte au SL d'un titre volatil est plus grosse quand la taille
+    de position est imposée par le plancher de frais plutôt que par le risque.
 
     `be_atr` = le MÊME seuil exprimé en multiples d'ATR d'entrée ; prime sur
     `be_pct` quand il est fourni. Un seuil en % fixe ne veut pas dire la même
@@ -273,7 +278,7 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                         or np.isnan(r["ma200"]) or r["close"] <= r["ma200"]
                         or not (35 <= r["rsi"] <= 65)
                         or r["mom_1m"] < (-12 if min_mom1m is None else min_mom1m)
-                        or np.isnan(r["atr_pct"]) or 2 * r["atr_pct"] > 10):
+                        or np.isnan(r["atr_pct"]) or 2 * r["atr_pct"] > max_sl_pct):
                     continue
                 # Veto d'extension : le titre a-t-il déjà couru sur 5 séances ?
                 if max_ext_atr is not None:
@@ -470,6 +475,9 @@ def main():
     ap.add_argument("--fx", action="store_true",
                     help="P&L en euros (change compris) et palier 1 jugé en "
                          "dollars vs en euros sur les titres US")
+    ap.add_argument("--slcap", action="store_true",
+                    help="compare des plafonds de distance au SL (veto des "
+                         "titres trop volatils)")
     ap.add_argument("--max-pos", type=int, default=2,
                     help="positions simultanées (production : 4)")
     args = ap.parse_args()
@@ -516,7 +524,13 @@ def main():
     regime_ok.index = pd.DatetimeIndex(all_dates)
 
     base = dict(mode="new", risk_pct=1.0, max_pos=args.max_pos, max_cost_pct=30)
-    if args.fx:
+    if args.slcap:
+        # 24/09/2026 : les plus grosses pertes (AGRO -9.7%, EXENS -9.8%) sont
+        # des stops à ~9-10%. Refuser ces titres réduit-il les pertes SANS
+        # couper plus de gains qu'il n'en sauve ?
+        configs = [(f"S. stop max {c:.0f}%" + (" (production)" if c == 10 else ""),
+                    dict(base, max_sl_pct=c)) for c in (10, 8, 7, 6, 5)]
+    elif args.fx:
         # 24/09/2026 : le palier 1 est passé du % dollars au % euros (celui de
         # BD). Les deux variantes sont chiffrées EN EUROS, change compris.
         eu = yf.download("EURUSD=X", start=dl_start, auto_adjust=True,

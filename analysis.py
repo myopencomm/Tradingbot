@@ -2035,7 +2035,7 @@ def scan_us_opportunities(send_fn) -> None:
         return
     try:
         import sizing as _ae
-        blocked = _ae.entry_capacity_block(min_cash=floor)
+        blocked = _ae.entry_capacity_block(min_cash=floor, us=True)
     except Exception as _ce:
         print(f"[scan US] capacité autonome indisponible : {_ce}")
         blocked = None
