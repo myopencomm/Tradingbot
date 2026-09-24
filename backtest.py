@@ -138,10 +138,11 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     `fx` = EURUSD (dollars pour 1 €) indexé par date « AAAA-MM-JJ » : le P&L
     des titres US est alors chiffré en EUROS, change compris — `total_pnl` est
     ce que le compte en euros aurait réellement gagné.
-    `be_eur` (exige `fx`) = palier 1 jugé en EUROS pour un titre US, comme la
-    production depuis le 24/09/2026 : seuil sur la perf euros, SL au PRU
-    euros converti au taux du jour, relevé au PRU dollars s'il est plus haut
-    et laisse TRAIL_MIN_BUFFER_PCT sous le cours (`trailing.breakeven_basis`).
+    `be_eur` (exige `fx`) = palier 1 jugé en EUROS pour un titre US : seuil sur
+    la perf euros, SL au PRU euros converti au taux du jour, relevé au PRU
+    dollars s'il est plus haut et laisse TRAIL_MIN_BUFFER_PCT sous le cours.
+    Essayé en production le 24/09/2026 puis retiré : il perd sur les trois
+    univers testés (voir README, « Palier 1 en dollars ou en euros »).
 
     `be_atr` = le MÊME seuil exprimé en multiples d'ATR d'entrée ; prime sur
     `be_pct` quand il est fourni. Un seuil en % fixe ne veut pas dire la même
@@ -526,8 +527,8 @@ def main():
         eu = eu.reindex(full.strftime("%Y-%m-%d")).ffill()
         base = dict(base, fx=eu)
         configs = [
-            ("F0. palier 1 en DOLLARS (avant 24/09)", dict(base)),
-            ("F1. palier 1 en EUROS (production)", dict(base, be_eur=True)),
+            ("F0. palier 1 en DOLLARS (production)", dict(base)),
+            ("F1. palier 1 en EUROS (essayé 24/09, retiré)", dict(base, be_eur=True)),
             ("F2. sans trailing (repère)", dict(base, be_trail=False)),
         ]
     elif args.review:

@@ -160,36 +160,3 @@ class TestSeuilDeRemontee:
     def test_les_deux_seuils_sont_configurables(self):
         from config import TRAIL_MIN_STEP_EUR, TRAIL_MIN_STEP_PCT
         assert TRAIL_MIN_STEP_EUR > 0 and TRAIL_MIN_STEP_PCT > 0
-
-
-class TestBreakevenEnEuros:
-    """24/09/2026 : le capital est en euros — le palier 1 se juge sur le % BD."""
-    JNJ = {"ticker": "JNJ", "qty": 5, "entry_price": 264.0162,
-           "bd_pru_raw": 228.638, "autonomous": True, "target_high": 286.95}
-
-    def _fx(self, monkeypatch, rate):
-        import prices
-        monkeypatch.setattr(prices, "fx_to_eur", lambda cur: rate)
-        monkeypatch.setattr(prices, "_ticker_currency", lambda t: "USD")
-
-    def test_seuil_euro_atteint_avant_le_seuil_dollar(self, monkeypatch):
-        import trailing
-        self._fx(monkeypatch, 1 / 1.137)
-        # 276 USD : +4.5% en dollars, mais +6.2% en euros
-        perf, be, en_eur = trailing.breakeven_basis(self.JNJ, 276.0)
-        assert en_eur and perf >= 6
-        assert be == 264.0162          # PRU dollars plus haut, et sous le cours
-        target, step, _ = trailing.trailing_target(self.JNJ, 276.0, None)
-        assert step == "breakeven" and target == 264.0162
-
-    def test_dollar_en_baisse_le_stop_protege_le_pru_euros(self, monkeypatch):
-        import trailing
-        self._fx(monkeypatch, 1 / 1.19)   # le dollar a perdu du terrain
-        perf, be, _ = trailing.breakeven_basis(self.JNJ, 290.0)
-        assert be == round(228.638 * 1.19, 4) > 264.0162
-
-    def test_titre_en_euros_inchange(self, monkeypatch):
-        import trailing, prices
-        monkeypatch.setattr(prices, "_ticker_currency", lambda t: "EUR")
-        pos = {"ticker": "AIR.PA", "qty": 5, "entry_price": 200.0}
-        assert trailing.breakeven_basis(pos, 212.0) == (6.0, 200.0, False)

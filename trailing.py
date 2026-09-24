@@ -79,34 +79,6 @@ def rearm_notifications() -> None:
     """
     _trailing_cancel_failed.clear()
 
-def breakeven_basis(pos: dict, price: float) -> tuple[float, float, bool]:
-    """Palier 1 jugé sur TON capital : (perf %, niveau du SL « au PRU », en_euros).
-
-    Titre en devise avec PRU BD en euros connu : la perf est celle que BD
-    affiche (euros, change compris) et le SL « au PRU » est le PRU EUROS ramené
-    en devise au taux du jour — c'est lui qui garantit « zéro perte en euros ».
-    On garde le PRU en devise s'il est plus haut et laisse encore de l'air
-    sous le cours : il protège alors aussi contre un repli du dollar.
-
-    Décision du 24/09/2026 : JNJ était à +3.4% en dollars mais +5.6% chez BD ;
-    le capital est en euros, c'est donc le % euros qui ouvre le palier.
-
-    Sinon (titre en euros, PRU BD ou taux indisponible) : perf et PRU en devise.
-    """
-    from config import TRAIL_MIN_BUFFER_PCT
-    import position_view
-    entry = pos.get("entry_price") or 0
-    cur = prices._ticker_currency(pos.get("ticker", ""))
-    fx = prices.fx_to_eur(cur)
-    perf = position_view.eur_perf(pos, price, cur, fx)
-    if not perf:
-        return (price - entry) / entry * 100, entry, False
-    be = pos["bd_pru_raw"] / fx
-    if entry > be and entry <= price * (1 - TRAIL_MIN_BUFFER_PCT / 100):
-        be = entry
-    return perf[0], round(be, 4), True
-
-
 def tp_progress(entry: float, tp: float | None, price: float) -> float | None:
     """Part du chemin PRU → TP déjà parcourue (0 = au PRU, 1 = au TP)."""
     if not entry or not tp or tp <= entry:
@@ -122,9 +94,8 @@ def trailing_target(pos: dict, price: float, tp: float | None,
 
     Deux paliers, le PLUS HAUT l'emporte :
 
-    1. BREAKEVEN — la perf dépasse le seuil (+6% autonome / +5% manuel) :
-       SL au PRU. Protège le capital, pas le gain. Titre en devise : perf et
-       PRU en EUROS (voir `breakeven_basis`).
+    1. BREAKEVEN — le cours dépasse le seuil (+6% autonome / +5% manuel) :
+       SL au PRU. Protège le capital, pas le gain.
     2. SÉCURISATION — le cours a parcouru au moins TRAIL_LOCK_TRIGGER_PCT du
        chemin PRU→TP : SL AU-DESSUS du PRU, à une fraction du gain déjà acquis.
        La fraction grandit avec la progression (TRAIL_LOCK_MIN_RATIO au
@@ -147,12 +118,10 @@ def trailing_target(pos: dict, price: float, tp: float | None,
 
     target, step, label = None, "", ""
 
-    # Palier 1 — breakeven, jugé en euros pour un titre en devise
+    # Palier 1 — breakeven
     threshold = BREAKEVEN_PCT if pos.get("autonomous") else BREAKEVEN_THRESHOLD
-    perf, be, en_eur = breakeven_basis(pos, price)
-    if perf >= threshold:
-        target, step = be, "breakeven"
-        label = "SL au PRU en euros (change du jour)" if en_eur else "SL au PRU"
+    if (price - entry) / entry * 100 >= threshold:
+        target, step, label = entry, "breakeven", "SL au PRU"
 
     # Palier 2 — sécurisation du gain
     prog = tp_progress(entry, tp, price)
@@ -179,7 +148,7 @@ def trailing_target(pos: dict, price: float, tp: float | None,
 
 
 def _fx_note(pos: dict, price: float, currency: str, change_pct: float) -> str:
-    """« 💱 +3.74% en dollars — 1.52 pts gagnés grâce au dollar » — ou ''.
+    """« en € : +5.59% chez BD, dont +2.21 pts dus au dollar » — ou ''.
 
     Le 24/09/2026 /trailing annonçait JNJ à +3.38% quand BD affichait +5.59% :
     les deux étaient justes (dollars vs euros), mais rien ne le disait.
@@ -188,18 +157,17 @@ def _fx_note(pos: dict, price: float, currency: str, change_pct: float) -> str:
     perf = position_view.eur_perf(pos, price, currency)
     if not perf:
         return ""
-    fx_pts = perf[0] - change_pct
+    chg_eur, _, _ = perf
+    fx_pts = chg_eur - change_pct
     devise = "dollar" if (currency or "").upper() == "USD" else currency
-    en = "en dollars" if devise == "dollar" else f"en {currency}"
     sens = "gagnés grâce au" if fx_pts >= 0 else "perdus à cause du"
-    return (f"\n      💱 {change_pct:+.2f}% {en} — "
+    return (f"\n      💶 en € : {chg_eur:+.2f}% (vue BD, frais inclus) — "
             f"{abs(fx_pts):.2f} pts {sens} {devise}")
 
 
 def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     """
-    Remonte le SL au PRU (breakeven, en euros pour un titre en devise — voir
-    `breakeven_basis`) DIRECTEMENT SUR BD pour toute position —
+    Remonte le SL au PRU (breakeven) DIRECTEMENT SUR BD pour toute position —
     autonome (+BREAKEVEN_PCT%) ou manuelle (+BREAKEVEN_THRESHOLD%) — protégée
     par un ordre Expert vente actif. Move purement protecteur : le SL ne peut
     que MONTER, le TP n'est jamais modifié.
@@ -251,25 +219,21 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         change_pct = (price - entry) / entry * 100
         fx_note = _fx_note(pos, price, _best["currency"], change_pct)
         threshold = BREAKEVEN_PCT if pos.get("autonomous") else BREAKEVEN_THRESHOLD
-        perf, _be, en_eur = breakeven_basis(pos, price)
         # Deux portes d'entrée : le seuil de breakeven, OU la progression vers
         # le TP (palier de sécurisation). Sur un TP étroit la seconde s'ouvre
         # AVANT la première — une position à +5% d'un TP à +8% a déjà fait 62%
         # du chemin et mérite un stop au-dessus du PRU.
         prog = tp_progress(entry, pos.get("target_high"), price)
-        if perf >= threshold or (prog is not None
+        if change_pct >= threshold or (prog is not None
                                        and prog * 100 >= TRAIL_LOCK_TRIGGER_PCT):
-            candidates.append((name, pos, perf, price))
+            candidates.append((name, pos, change_pct, price))
             if fx_note:
-                fx_lines.append(f"  💶 {name} : {perf:+.2f}% en € (vue BD){fx_note}")
+                fx_lines.append(f"  💱 {name} : {change_pct:+.2f}% en devise{fx_note}")
         else:
-            # Cours à atteindre : le seuil s'applique à la perf retenue, en
-            # euros pour un titre en devise — ramenée en cours de cotation.
-            need = price * (1 + threshold / 100) / (1 + perf / 100)
+            need = entry * (1 + threshold / 100)
             prog_note = f", {prog * 100:.0f}% du chemin vers le TP" if prog is not None else ""
-            base = f"{perf:+.2f}% en € (vue BD)" if en_eur else f"{change_pct:+.2f}%"
             skipped.append(
-                f"  ⏳ {name} : {base} — seuil +{threshold:.0f}% "
+                f"  ⏳ {name} : {change_pct:+.2f}% — seuil +{threshold:.0f}% "
                 f"non atteint (il faut {need:.2f}{prog_note}){fx_note}"
             )
     if verbose:
@@ -290,11 +254,11 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         if skipped:
             head.append("\nNon concernées :")
             head.extend(skipped)
-        if any("💱" in l for l in skipped + fx_lines):
-            head.append("\n💶 Titres en devise : le palier 1 se juge sur le % en "
-                        "EUROS (celui de BD, change compris) et le SL « au PRU » "
-                        "est ton PRU en euros converti au taux du jour. Le "
-                        "palier 2 reste jugé en devise, comme le TP.")
+        if any("💶" in l for l in skipped + fx_lines):
+            head.append("\n💶 Les seuils se jugent sur le cours en DEVISE : le stop "
+                        "est un ordre en devise, déclenché par le cours de "
+                        "l'action. Le % en euros (celui de BD) inclut le change, "
+                        "qui ne dit rien de la tendance du titre.")
         if not candidates:
             head.append("\n✅ Rien à remonter — aucune action.")
         send_fn("\n".join(head))
@@ -489,10 +453,10 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         #   · `raise_worth_it` ailleurs : deux seuils, en euros ET en % — voir
         #     config.TRAIL_MIN_STEP_* pour pourquoi un seul ne suffit pas.
         if cur_sl is not None:
-            at_breakeven = cur_sl >= target * (1 - BREAKEVEN_TOLERANCE_PCT / 100)
+            at_breakeven = cur_sl >= entry * (1 - BREAKEVEN_TOLERANCE_PCT / 100)
             if step == "breakeven" and at_breakeven:
                 if verbose:
-                    send_fn(f"  ↳ {name} : SL déjà au PRU ({cur_sl} vs cible {target}, "
+                    send_fn(f"  ↳ {name} : SL déjà au PRU ({cur_sl} vs PRU {entry}, "
                             f"tolérance {BREAKEVEN_TOLERANCE_PCT}%) — rien à faire ✅")
                 continue
             qty_ordre = abs((sl_ord or tp_ord or {}).get("qty") or pos.get("qty") or 0)
