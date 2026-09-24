@@ -1750,6 +1750,16 @@ Limites : constituants actuels (biais du survivant, identique pour toutes les co
 
 **Aucune règle n'est activée.** La vente sur MM50 cassée coûte 500 à 800 € : elle coupe des replis que le titre rattrape. Les autres règles sont neutres, à ±50 € près, soit du bruit (bootstrap : P(gagnante) 0 % pour toutes, 1 fenêtre walk-forward gagnante sur 4). Le choc ne se déclenche presque jamais : une baisse de 2 ATR en une séance touche d'abord le SL, posé à 2 ATR. C'est la même conclusion que pour la sortie sur stagnation (27/08) et le breakeven serré (15/09) : sur ce moteur, **toute sortie anticipée basée sur le prix fait baisser le P&L**, parce que le résultat vient de quelques grands gagnants qu'on coupe avec les perdants. Ce qui reste hors de portée du backtest, ce sont les **nouvelles** (résultats, dégradations, annonces) : aucun historique de titres n'est disponible pour les rejouer.
 
+**Palier 1 en dollars ou en euros (`--fx`, 24/09/2026)** — question : pour un titre US, le breakeven doit-il se juger sur le % en euros vu par BD (change compris) plutôt que sur le % en dollars ? Les deux variantes sont chiffrées **en euros**, change EURUSD compris (`fx`, `be_eur` de `simulate`).
+
+| Variante (2023 → 09/2026, P&L en €) | 137 US, 4 pos. | 137 US, 2 pos. | 679 US, 4 pos. |
+|---|---|---|---|
+| Palier 1 en dollars | -2604 € | -1398 € | -3546 € |
+| Palier 1 en euros | -3041 € | -1561 € | -3661 € |
+| Sans trailing (repère) | -2468 € | -1318 € | -3034 € |
+
+**Le palier en euros perd dans les trois univers** (-115 à -437 €, moins de TP atteints). Quand le dollar monte, il déclenche le breakeven plus tôt, sur un titre qui n'a fait que +3 à +4 % : les replis ordinaires sortent alors la position au PRU au lieu de la laisser aller au TP. Même mécanisme que le breakeven serré du 15/09. Le bootstrap ne distingue aucune variante du bruit (P(gagnante) 0 %, 1 fenêtre walk-forward gagnante sur 4).
+
 ## Règles de trading par défaut
 
 - **Stop-loss** : technique, ≈ 2×ATR sous l'entrée, borné 3-10% (fallback -7% fixe pour les positions manuelles sans ATR)

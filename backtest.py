@@ -115,7 +115,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              min_mom1m: float | None = None,
              be_pct: float | None = None,
              be_atr: float | None = None,
-             review: dict | None = None) -> dict:
+             review: dict | None = None,
+             fx: pd.Series | None = None, be_eur: bool = False) -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
 
     `stale` = ((j1, p1), (j2, p2)) — jalons de la sortie sur stagnation : à j1
@@ -134,6 +135,14 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     pas la clôture avant qu'elle soit faite), « tighten » remonte le SL sous
     le plus bas des 10 dernières séances — jamais il ne le descend.
 
+    `fx` = EURUSD (dollars pour 1 €) indexé par date « AAAA-MM-JJ » : le P&L
+    des titres US est alors chiffré en EUROS, change compris — `total_pnl` est
+    ce que le compte en euros aurait réellement gagné.
+    `be_eur` (exige `fx`) = palier 1 jugé en EUROS pour un titre US, comme la
+    production depuis le 24/09/2026 : seuil sur la perf euros, SL au PRU
+    euros converti au taux du jour, relevé au PRU dollars s'il est plus haut
+    et laisse TRAIL_MIN_BUFFER_PCT sous le cours (`trailing.breakeven_basis`).
+
     `be_atr` = le MÊME seuil exprimé en multiples d'ATR d'entrée ; prime sur
     `be_pct` quand il est fourni. Un seuil en % fixe ne veut pas dire la même
     chose sur un titre à 1.7% d'ATR et sur un à 3.4% : +6% vaut 3.5 ATR pour le
@@ -142,6 +151,21 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     positions = []   # {ticker, entry, sl, tp, qty, entry_date, be_done}
     closed = []
     equity = BUDGET
+    from config import TRAIL_MIN_BUFFER_PCT
+
+    def _fx(t, d):
+        """Dollars pour 1 € ce jour-là, ou None (titre non US / pas de fx)."""
+        if fx is None or "." in t:
+            return None
+        v = fx.get(d.strftime("%Y-%m-%d"))
+        return float(v) if v is not None and not np.isnan(v) else None
+
+    def _pnl(p, exit_price, d):
+        fees = _fee_pair(p["ticker"], fee, p["entry"] * p["qty"])
+        fx_in, fx_out = p.get("fx_entry"), _fx(p["ticker"], d)
+        if fx_in and fx_out:
+            return p["qty"] * (exit_price / fx_out - p["entry"] / fx_in) - fees
+        return (exit_price - p["entry"]) * p["qty"] - fees
 
     # Signaux évalués chaque lundi ; cadence "monthly" = 1er lundi du mois
     weekly = dates[dates.weekday == 0]
@@ -188,8 +212,7 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                     if parcouru < exige and row["close"] > pt_mort:
                         exit_price, why = row["close"], "STALE"
             if exit_price is not None:
-                pnl = (exit_price - p["entry"]) * p["qty"] - _fee_pair(
-                    p["ticker"], fee, p["entry"] * p["qty"])
+                pnl = _pnl(p, exit_price, d)
                 closed.append({"ticker": p["ticker"], "pnl": pnl, "why": why,
                                "entry_date": p["entry_date"], "exit_date": d,
                                "ret_pct": (exit_price / p["entry"] - 1) * 100})
@@ -210,7 +233,18 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                 else:
                     seuil = p["entry"] * (1 + (BREAKEVEN_PCT if be_pct is None
                                                else be_pct) / 100)
-                if row["close"] >= seuil:
+                fx_in, fx_d = p.get("fx_entry"), _fx(p["ticker"], d)
+                if be_eur and fx_in and fx_d and be_atr is None:
+                    # Perf et PRU en euros, change du jour compris
+                    perf = row["close"] / p["entry"] * fx_in / fx_d - 1
+                    if perf * 100 >= (BREAKEVEN_PCT if be_pct is None else be_pct):
+                        be = p["entry"] * fx_d / fx_in
+                        if p["entry"] > be and p["entry"] <= row["close"] * (
+                                1 - TRAIL_MIN_BUFFER_PCT / 100):
+                            be = p["entry"]
+                        p["sl"] = max(p["sl"], be)
+                        p["be_done"] = True
+                elif row["close"] >= seuil:
                     p["sl"] = max(p["sl"], p["entry"])
                     p["be_done"] = True
             still.append(p)
@@ -281,14 +315,13 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                 atr_entry = 2.0
             positions.append({"ticker": t, "entry": entry, "sl": sl, "tp": tp,
                               "qty": qty, "entry_date": e_day, "be_done": False,
-                              "atr_entry": atr_entry})
+                              "atr_entry": atr_entry, "fx_entry": _fx(t, e_day)})
 
     # Clôture des positions restantes au dernier cours
     for p in positions:
         df = ind[p["ticker"]]
         last = float(df["close"].iloc[-1])
-        pnl = (last - p["entry"]) * p["qty"] - _fee_pair(
-            p["ticker"], fee, p["entry"] * p["qty"])
+        pnl = _pnl(p, last, df.index[-1])
         closed.append({"ticker": p["ticker"], "pnl": pnl, "why": "OPEN",
                        "entry_date": p["entry_date"], "exit_date": df.index[-1],
                        "ret_pct": (last / p["entry"] - 1) * 100})
@@ -433,6 +466,9 @@ def main():
                          "chandelier, choc) à la stratégie livrée")
     ap.add_argument("--wide", action="store_true",
                     help="ajoute l'univers US liquide du cache (universe_cache.json)")
+    ap.add_argument("--fx", action="store_true",
+                    help="P&L en euros (change compris) et palier 1 jugé en "
+                         "dollars vs en euros sur les titres US")
     ap.add_argument("--max-pos", type=int, default=2,
                     help="positions simultanées (production : 4)")
     args = ap.parse_args()
@@ -479,7 +515,22 @@ def main():
     regime_ok.index = pd.DatetimeIndex(all_dates)
 
     base = dict(mode="new", risk_pct=1.0, max_pos=args.max_pos, max_cost_pct=30)
-    if args.review:
+    if args.fx:
+        # 24/09/2026 : le palier 1 est passé du % dollars au % euros (celui de
+        # BD). Les deux variantes sont chiffrées EN EUROS, change compris.
+        eu = yf.download("EURUSD=X", start=dl_start, auto_adjust=True,
+                         progress=False)["Close"]
+        eu = eu.iloc[:, 0] if isinstance(eu, pd.DataFrame) else eu
+        eu.index = pd.DatetimeIndex(eu.index).strftime("%Y-%m-%d")
+        full = pd.date_range(eu.index.min(), pd.Timestamp.today())
+        eu = eu.reindex(full.strftime("%Y-%m-%d")).ffill()
+        base = dict(base, fx=eu)
+        configs = [
+            ("F0. palier 1 en DOLLARS (avant 24/09)", dict(base)),
+            ("F1. palier 1 en EUROS (production)", dict(base, be_eur=True)),
+            ("F2. sans trailing (repère)", dict(base, be_trail=False)),
+        ]
+    elif args.review:
         # Réanalyse des positions détenues, 23/09/2026. Les règles de sortie
         # précédentes (stagnation, breakeven serré) ont TOUTES baissé le P&L :
         # celle-ci n'est activée que si elle bat la référence ici, bootstrap
