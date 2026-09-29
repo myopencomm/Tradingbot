@@ -161,18 +161,20 @@ class TestPerfBd:
     """La ligne STATUS / status parle en euros change compris, comme BD."""
 
     def test_titre_en_devise_euros_puis_devise(self):
-        cfg = {"ticker": "JNJ", "qty": 5, "entry_price": 264.0,
-               "bd_pru_raw": 228.64, "target_low": 248.5, "target_high": 287.0}
-        with patch("prices.fx_to_eur", return_value=0.8804):
-            v = position_view.view("JNJ", cfg, q(price=271.95, currency="USD"))
-        assert v["value_eur"] == pytest.approx(1197.12, abs=0.01)
-        assert v["chg_eur"] == pytest.approx(4.72, abs=0.005)
+        # Chiffres fictifs : 10 titres achetés $106 (92.50 € PRU BD), cotés
+        # $110 à 0.88 → 968 € ; +4.64 % en euros, +3.77 % en dollars.
+        cfg = {"ticker": "XYZ", "qty": 10, "entry_price": 106.0,
+               "bd_pru_raw": 92.50, "target_low": 100.0, "target_high": 120.0}
+        with patch("prices.fx_to_eur", return_value=0.88):
+            v = position_view.view("XYZ", cfg, q(price=110.0, currency="USD"))
+        assert v["value_eur"] == pytest.approx(968.0, abs=0.01)
+        assert v["chg_eur"] == pytest.approx(4.65, abs=0.01)
         txt = position_view.perf_bd(v)
-        assert txt.startswith("1197.12 € (+4.72%)")
-        assert "en USD +3.01%" in txt
+        assert txt.startswith("968.00 € (+4.65%)")
+        assert "en USD +3.77%" in txt
 
     def test_titre_en_euros_sans_suffixe(self):
-        cfg = {"ticker": "AGS.BR", "qty": 16, "entry_price": 75.83,
-               "target_low": 72.9, "target_high": 83.35}
-        v = position_view.view("AGS", cfg, q(price=74.85))
-        assert position_view.perf_bd(v) == "1197.60 € (-1.29%) | P&L -16 €"
+        cfg = {"ticker": "ABC.PA", "qty": 20, "entry_price": 50.0,
+               "target_low": 46.0, "target_high": 58.0}
+        v = position_view.view("ABC", cfg, q(price=49.0))
+        assert position_view.perf_bd(v) == "980.00 € (-2.00%) | P&L -20 €"
