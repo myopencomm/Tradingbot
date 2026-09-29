@@ -4,6 +4,10 @@ Le contrat : les cinq vues (/status, STATUS planifié, snapshot IA, dashboard,
 /stats) lisent des champs déjà calculés et ne recalculent plus rien. Ce qui
 change ici change partout — c'est exactement le but.
 """
+from unittest.mock import patch
+
+import pytest
+
 import analysis
 import position_view
 
@@ -151,3 +155,24 @@ class TestEuros:
         assert position_view.eur_perf(self.JNJ, 274.52, "USD", 1.0) is None
         assert position_view.eur_perf({"qty": 5, "entry_price": 264}, 274.52,
                                       "USD", 0.88) is None
+
+
+class TestPerfBd:
+    """La ligne STATUS / status parle en euros change compris, comme BD."""
+
+    def test_titre_en_devise_euros_puis_devise(self):
+        cfg = {"ticker": "JNJ", "qty": 5, "entry_price": 264.0,
+               "bd_pru_raw": 228.64, "target_low": 248.5, "target_high": 287.0}
+        with patch("prices.fx_to_eur", return_value=0.8804):
+            v = position_view.view("JNJ", cfg, q(price=271.95, currency="USD"))
+        assert v["value_eur"] == pytest.approx(1197.12, abs=0.01)
+        assert v["chg_eur"] == pytest.approx(4.72, abs=0.005)
+        txt = position_view.perf_bd(v)
+        assert txt.startswith("1197.12 € (+4.72%)")
+        assert "en USD +3.01%" in txt
+
+    def test_titre_en_euros_sans_suffixe(self):
+        cfg = {"ticker": "AGS.BR", "qty": 16, "entry_price": 75.83,
+               "target_low": 72.9, "target_high": 83.35}
+        v = position_view.view("AGS", cfg, q(price=74.85))
+        assert position_view.perf_bd(v) == "1197.60 € (-1.29%) | P&L -16 €"

@@ -102,7 +102,10 @@ def check_positions(send_fn, us_only: bool = False) -> None:
         # Position HOLD long terme : hors gestion bot — affichage informatif
         # uniquement, aucune alerte SL/TP/breakeven.
         if cfg.get("hold"):
-            status_lines.append(f"  🔒 {name}: HOLD long terme — hors gestion bot")
+            hv   = position_view.view(name, cfg)
+            perf = position_view.perf_bd(hv)
+            status_lines.append(f"  🔒 {name}: HOLD long terme — hors gestion bot"
+                                + (f"\n     {perf}" if perf else ""))
             continue
 
         # Cours retenu, P&L, drapeaux : position_view (source unique). yfinance
@@ -122,7 +125,8 @@ def check_positions(send_fn, us_only: bool = False) -> None:
 
         change_pct = v["chg_pct"]
         pnl        = v["pnl"]
-        icon       = "📈" if change_pct >= 0 else "📉"
+        # L'icône suit le % euros, celui que montre BD — pas le % en devise.
+        icon       = "📈" if (v["chg_eur"] if v["chg_eur"] is not None else change_pct) >= 0 else "📉"
         # On ne signale un cours QUE s'il est réellement périmé. Dire d'où il
         # vient à chaque ligne, c'était exposer la plomberie du bot au lieu de
         # répondre à « ce chiffre est-il bon ? » (18/08/2026).
@@ -132,7 +136,7 @@ def check_positions(send_fn, us_only: bool = False) -> None:
         pend_tag = position_view.alerte_stop_en_attente(v, indent="     ")
         prot_tag = position_view.alerte_protection(v, indent="     ")
         status_lines.append(
-            f"  {icon} {name}: {sym}{price} ({change_pct:+.2f}%) | P&L: {sym}{pnl:+.0f}"
+            f"  {icon} {name}: {sym}{price} | {position_view.perf_bd(v)}"
             f"\n     SL {sym}{v['sl']} — TP {sym}{v['tp']}{pend_tag}{prot_tag}{src_tag}"
         )
 

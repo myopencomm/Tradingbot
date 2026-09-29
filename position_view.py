@@ -73,8 +73,10 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
                                           diagnostic, pas pour l'utilisateur
     stale, note                           le cours est-il périmé, et pourquoi | ''
     chg_pct, pnl                          en devise de COTATION
-    entry_eur, pnl_eur, chg_eur           en EUROS (dashboard, totaux) — ce que
-                                          montre BD, change compris
+    entry_eur, pnl_eur, chg_eur           en EUROS — ce que montre BD (var / PRU),
+                                          change compris : c'est ce qu'affichent
+                                          /status, le STATUS planifié, le dashboard
+    value_eur                             valorisation en euros (cours × qté)
     fx_effect                             part de chg_eur due au change (points
                                           de %), None pour un titre en euros
     sl, tp                                seuils mémorisés
@@ -101,8 +103,15 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
     _eur      = entry * fx
     entry_eur = cfg.get("bd_pru_raw") or round(_eur, 2 if _eur >= 1 else 4)
 
-    chg_pct = pnl = pnl_eur = chg_eur = fx_effect = None
+    chg_pct = pnl = pnl_eur = chg_eur = fx_effect = value_eur = None
     estimated = False
+
+    if price and qty:
+        # Valorisation telle que BD l'affiche : cours × quantité, en euros au
+        # taux du jour (le relevé BD fait foi pour un titre qu'il cote seul).
+        value_eur = round(price * qty * fx, 2)
+        if best["source"] == "bd" and cfg.get("bd_value_eur") is not None:
+            value_eur = cfg["bd_value_eur"]
 
     if price and entry:
         chg_pct = round((price - entry) / entry * 100, 2)
@@ -155,6 +164,7 @@ def view(name: str, cfg: dict, quote: dict | None = None) -> dict:
         "entry_eur":  entry_eur,
         "pnl_eur":    pnl_eur,
         "chg_eur":    chg_eur,
+        "value_eur":  value_eur,
         "fx_effect":  fx_effect,
         "pru_bd":     bool(cfg.get("bd_pru_raw")),
         "opened_at":  cfg.get("opened_at"),
@@ -199,3 +209,19 @@ def alerte_stop_en_attente(v: dict, indent: str = "  ") -> str:
         return ""
     return (f"\n{indent}⏳ SL {v['pending_sl']} calculé mais PAS posé sur BD — "
             f"le stop actif reste {v['sl']}")
+
+
+def perf_bd(v: dict) -> str:
+    """Valorisation, var / PRU et P&L EN EUROS, comme la ligne BD.
+
+    Un titre en devise ajoute son % en devise : c'est lui que jugent le SL et
+    le TP (ordres en dollars). Sans cette séparation, le STATUS de 9h du
+    29/09/2026 donnait CBLL à -0.88 % quand BD l'affichait à +0.89 %.
+    """
+    if v["chg_eur"] is None:
+        return ""
+    val = f"{v['value_eur']:.2f} € " if v["value_eur"] is not None else ""
+    txt = f"{val}({v['chg_eur']:+.2f}%) | P&L {v['pnl_eur']:+.0f} €"
+    if v["currency"] != "EUR" and v["chg_pct"] is not None:
+        txt += f" — en {v['currency']} {v['chg_pct']:+.2f}%"
+    return txt

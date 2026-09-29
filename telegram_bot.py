@@ -135,9 +135,9 @@ def cmd_status(args, cid):
             continue
 
         if price:
-            chg, pnl = v["chg_pct"], v["pnl"]
-            total_pnl += pnl
-            arrow  = "+" if chg >= 0 else ""
+            # Total en euros : sommer des dollars et des euros sous l'étiquette
+            # « € » faussait le total dès la première position US.
+            total_pnl += v["pnl_eur"] or 0
             sl_tag = " ⚠️ SL DÉPASSÉ" if price < v["sl"] else ""
             tp_tag = " ⚠️ TP DÉPASSÉ" if price > v["entry"] * 1.25 else ""
             cur_tag = ""
@@ -150,8 +150,11 @@ def cmd_status(args, cid):
             prot     = position_view.alerte_protection(v)
             lines.append(
                 f"{name} ({v['ticker']})\n"
-                f"  Prix: {sym}{price} ({arrow}{chg:.2f}%) | P&L: {sym}{pnl:+.0f}{sl_tag}{tp_tag}\n"
-                f"  PRU: {sym}{v['entry']} | {v['qty']} titres\n"
+                f"  Prix: {sym}{price}{sl_tag}{tp_tag}\n"
+                f"  {position_view.perf_bd(v)}\n"
+                f"  PRU: {v['entry_eur']} €"
+                + (f" ({sym}{v['entry']})" if v["currency"] != "EUR" else "")
+                + f" | {v['qty']} titres\n"
                 f"  SL: {sym}{v['sl']}  TP: {sym}{v['tp']}{pend_tag}{prot}{cur_tag}"
             )
         else:
