@@ -81,3 +81,28 @@ def test_yf_news_nouveau_format(monkeypatch):
     assert n[0] == {"title": "KBC relève sa guidance", "publisher": "Reuters",
                     "date": "2026-09-30", "summary": "Hausse du résultat"}
     assert n[1]["title"] == "Ancien format" and n[1]["publisher"] == "AFP"
+
+
+def _jev(monkeypatch, ancrage, specifique):
+    import jev
+    monkeypatch.setattr(jev, "ask", lambda *a, **k: {
+        "ancrage": {"noul": ancrage}, "specifique": {"noul": specifique}})
+
+
+def test_jev_veto_preuves_non_ancrees(monkeypatch):
+    _jev(monkeypatch, 0.1, 0.9)
+    _, _, f = thesis_gate.check(FORTE, DONNEES, "Société X")
+    assert "absentes" in thesis_gate.jev_review(f, DONNEES, "Société X")["veto"]
+
+
+def test_jev_incertain_ne_bloque_pas(monkeypatch):
+    _jev(monkeypatch, 0.45, 0.6)
+    _, _, f = thesis_gate.check(FORTE, DONNEES, "Société X")
+    assert thesis_gate.jev_review(f, DONNEES, "Société X")["veto"] is None
+
+
+def test_jev_absent_pas_d_avis(monkeypatch):
+    import jev
+    monkeypatch.setattr(jev, "ask", lambda *a, **k: None)
+    _, _, f = thesis_gate.check(FORTE, DONNEES, "Société X")
+    assert thesis_gate.jev_review(f, DONNEES, "Société X") is None
