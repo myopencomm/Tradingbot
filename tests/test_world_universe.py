@@ -23,3 +23,17 @@ def test_double_cotation_ecartee():
                {"ticker": "ABEA.DE", "name": "Alphabet Inc. Class A", "traded_eur": 1e7},
                {"ticker": "SHEL.L", "name": "Shell plc", "traded_eur": 5e8}]
     assert [e["ticker"] for e in mu._dedupe(entries, log=lambda m: None)] == ["GOOGL", "SHEL.L"]
+
+
+def test_pas_d_annonce_quand_rien_n_est_achetable(monkeypatch):
+    """AAPL/GOOGL annoncés à chaque cycle avec 290 € et 3/2 places US."""
+    import autonomous_engine as ae
+    import prices
+    import sizing
+    monkeypatch.setattr(prices, "get_quote", lambda t: {"price": 330.0, "currency": "USD"})
+    monkeypatch.setattr(prices, "fx_to_eur", lambda c: 0.88)
+    monkeypatch.setattr(sizing, "us_slots_block", lambda: "3/2 places US occupées")
+    assert "places US" in ae._blocage_silencieux("AAPL", 290.0)
+    monkeypatch.setattr(sizing, "us_slots_block", lambda: None)
+    assert "disponibles" in ae._blocage_silencieux("AAPL", 290.0)
+    assert ae._blocage_silencieux("AAPL", 5000.0) is None

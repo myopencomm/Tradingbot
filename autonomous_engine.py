@@ -169,6 +169,37 @@ def cancel_auto_order_if_rejected(ticker: str, reason: str, send_fn=None) -> Non
 
 # ─── Cycle d'entrée ─────────────────────────────────────────────────────────
 
+def _blocage_silencieux(ticker: str, available: float) -> str | None:
+    """Raison pour laquelle aucun achat de `ticker` n'est possible MAINTENANT,
+    connue sans rien demander à BD ni à l'IA — ou None. L'opportunité reste en
+    attente (la situation peut changer : vente, place US libérée) ; on ne
+    l'annonce simplement pas."""
+    import market
+    from config import auto_buy_allowed
+    if not auto_buy_allowed(ticker):
+        return None          # traité à part : signalé une fois, puis retiré
+    if market.is_us(ticker):
+        bloc = sizing.us_slots_block()
+        if bloc:
+            return bloc
+    try:
+        q = prices.get_quote(ticker)
+        px = (q.get("price") or 0) * prices.fx_to_eur(q.get("currency") or "EUR")
+        if px and px > available:
+            return f"une action coûte {px:.0f} € > {available:.0f} € disponibles"
+    except Exception:
+        pass
+    try:
+        import analysis
+        mini = analysis.min_ligne_rentable(ticker)
+        if mini > available:
+            return (f"ligne rentable dès {mini:.0f} € (frais du marché) > "
+                    f"{available:.0f} € disponibles")
+    except Exception:
+        pass
+    return None
+
+
 def _deal_summary(ticker: str, reason: str = "") -> str:
     """3 lignes en langage SIMPLE pour un achat auto : ce que fait l'entreprise
     + pourquoi le deal peut être gagnant. Sert quand on ne reçoit qu'un ticker
@@ -537,6 +568,13 @@ def run_entry_cycle(send_fn) -> None:
                 t = opp["ticker"]
                 if t.upper() in held:
                     continue
+                # Rien ne peut se passer pour ce titre (places US pleines, cash
+                # sous le prix d'une action ou sous la ligne rentable) : pas
+                # d'annonce. Le message partait à chaque cycle pour AAPL/GOOGL
+                # avec 290 € de cash et 3/2 places US (01/10/2026), puis
+                # l'achat échouait en silence dans le log.
+                if _blocage_silencieux(t, available):
+                    continue
                 if market_open_for(t):
                     statuses.append(f"• {t} [{opp.get('source', '?')}] — marché ouvert, évaluation")
                     actionable = True
@@ -557,6 +595,11 @@ def run_entry_cycle(send_fn) -> None:
                 if not market_open_for(ticker):
                     print(f"[Auto] {ticker} : marché fermé pour ce titre — "
                           f"opportunité conservée pour le prochain cycle")
+                    continue
+
+                raison = _blocage_silencieux(ticker, available)
+                if raison:
+                    print(f"[Auto] {ticker} : {raison} — opportunité conservée")
                     continue
 
                 # Marché hors AUTO_BUY_MARKETS : repéré par le scan mondial,
