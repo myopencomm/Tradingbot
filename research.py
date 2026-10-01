@@ -46,16 +46,39 @@ def _detect_market(ticker: str) -> str:
     return "us"
 
 
+_last_search = 0.0
+
+
 def _search(query: str, max_results: int = 5, lang: str = "fr-fr") -> list[dict]:
-    """Recherche DuckDuckGo via l'endpoint HTML."""
+    """Recherche DuckDuckGo via l'endpoint HTML.
+
+    DDG bride les rafales : HTTP 202 + page « anomaly » au lieu des résultats.
+    Un scan enchaîne ~50 requêtes ; sans pause ni nouvel essai, une partie des
+    candidats recevait une recherche VIDE et l'IA les jugeait à l'aveugle
+    (01/10/2026). Espacement minimal entre requêtes + 2 nouveaux essais.
+    """
+    import time
+    global _last_search
     try:
-        r = requests.post(
-            DDG_URL,
-            data={"q": query, "s": "0", "kl": lang},
-            headers=HEADERS,
-            timeout=10,
-        )
-        if r.status_code != 200:
+        r = None
+        for attempt in range(3):
+            wait = 1.0 - (time.time() - _last_search)
+            if wait > 0:
+                time.sleep(wait)
+            _last_search = time.time()
+            r = requests.post(
+                DDG_URL,
+                data={"q": query, "s": "0", "kl": lang},
+                headers=HEADERS,
+                timeout=10,
+            )
+            if r.status_code == 200 and "result__a" in r.text:
+                break
+            if r.status_code == 200:          # vraie réponse sans résultat
+                return []
+            time.sleep(3 * (attempt + 1))     # bridé : on attend et on réessaie
+        if r is None or r.status_code != 200:
+            print(f"⚠️ DDG bridé ({r.status_code if r is not None else '?'}) : {query[:60]}")
             return []
 
         titles   = re.findall(r'class="result__a"[^>]*>(.*?)</a>', r.text, re.DOTALL)

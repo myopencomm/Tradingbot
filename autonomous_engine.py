@@ -630,7 +630,11 @@ def run_entry_cycle(send_fn) -> None:
                         )
                         portfolio.clear_pending_opportunity(ticker)
                         continue
-                    send_fn(f"✅ {ticker} : contrôle pré-achat confirme ACHAT — passage de l'ordre…")
+                    preuves = "\n".join(f"  • {p}" for p in (res.get("evidence") or [])[:2])
+                    send_fn(f"✅ {ticker} : contrôle pré-achat confirme ACHAT "
+                            f"(conviction {res.get('conviction')}/5) — passage de l'ordre…\n"
+                            f"Thèse : {res.get('thesis', '')}"
+                            + (f"\nPreuves :\n{preuves}" if preuves else ""))
                     # Boucle d'apprentissage : mémorise le contexte FRAIS du
                     # contrôle (RSI/momentum au moment réel de l'achat, pas de
                     # la validation d'il y a des heures), en gardant la source

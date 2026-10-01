@@ -220,21 +220,29 @@ RÈGLES D'ANALYSE CRITIQUE — à appliquer AVANT tout signal ACHAT :
 - SENTIMENT SOCIAL : signal d'appoint — jamais un argument principal d'achat.
 """
 
-# Directive injectée dans les prompts de validation. Cadre la mission : le
-# candidat a passé un filtre quantitatif VALIDÉ (momentum 12-1 + MM200 + zone
-# RSI saine). Le rôle de l'IA : décision SYMÉTRIQUE — chercher les défauts
-# disqualifiants que les chiffres ne voient pas (news, OPA, illiquidité,
-# événement binaire), sans exiger de catalyseur ni forcer l'achat.
+# Directive injectée dans les prompts de validation. Le candidat a passé un
+# filtre quantitatif (momentum 12-1 + MM200 + zone RSI saine) — nécessaire,
+# PAS suffisant : le backtest de juillet 2026 a montré que ce filtre seul n'a
+# pas d'edge robuste. Jusqu'au 01/10/2026 la directive disait « si tu hésites,
+# dis ACHAT » : l'IA ne faisait que chercher des défauts, et validait 8
+# candidats sur 8 sans rien savoir d'eux (KBC.BR). La charge de la preuve est
+# désormais sur l'ACHAT, et thesis_gate la vérifie dans le code.
 SCREEN_DIRECTIVE = f"""
 CADRE DE DÉCISION — ce candidat a passé le filtre quantitatif validé par la
 recherche : momentum 12 mois (hors dernier mois) positif, cours > MM200, RSI
 en zone d'entrée {RSI_ENTRY_MIN:.0f}-{RSI_ENTRY_MAX:.0f} (pullback, pas surchauffe).
-La thèse quantitative est donc SOLIDE a priori. Ton rôle est le contrôle
-QUALITATIF que les chiffres ne voient pas. Décide de façon SYMÉTRIQUE :
-ne force ni l'achat ni la prudence.
+Ce filtre est NÉCESSAIRE MAIS PAS SUFFISANT : seul, il n'a pas d'edge
+démontré. Un ACHAT exige une thèse SPÉCIFIQUE à cette société, appuyée sur
+les DONNÉES fournies ci-dessous (news, recherche web, catalyseurs, analystes).
+La charge de la preuve est sur l'ACHAT : sans au moins deux faits concrets
+tirés de ces données qui expliquent pourquoi CE titre devrait monter MAINTENANT,
+la réponse est EXCLUS — « information insuffisante ». Des pages de navigation,
+des titres de rubriques ou un agenda vide ne sont PAS des informations.
 
-NE SONT PAS des motifs d'exclusion :
-- « pas de catalyseur daté » (le momentum 12 mois + tendance EST la thèse)
+NE SONT PAS, À EUX SEULS, des motifs d'exclusion :
+- « pas de catalyseur daté » — À CONDITION que les données montrent une raison
+  concrète à la force du titre (croissance publiée, relèvement d'objectifs,
+  contrat, guidance relevée…). Le momentum seul n'est PAS une thèse.
 - « objectif analyste sous le cours » (cible 12 mois, en retard sur le prix)
 - sentiment de marché « fear » général (non spécifique au titre)
 - un repli récent du cours : c'est précisément le point d'entrée recherché,
@@ -254,9 +262,9 @@ SONT des motifs d'EXCLUSION légitimes :
 - illiquidité réelle / société en difficulté financière
 - structure technique cassée : support majeur perdu, cours repassé sous MM200
 - couteau qui tombe (perf 1 an < -30% ou cours < +15% du plus bas 52s)
-Si tu hésites entre ACHAT et EXCLUS sans défaut concret identifié, dis ACHAT
-avec risque MEDIUM et un SL rigoureux ; si tu as identifié un défaut de la
-liste, dis EXCLUS et cite-le précisément.
+Si tu hésites, dis EXCLUS. Un trade raté ne coûte rien ; un achat sans
+raison coûte le stop. N'invente AUCUN fait : chaque preuve doit pouvoir être
+retrouvée dans les données fournies.
 """
 
 TICKER_RULES = """
@@ -371,9 +379,12 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
     tech   = prices.get_technicals(ticker) or {}
     funds  = prices.get_fundamentals(ticker) or {}
     pctx   = prices.get_price_context(ticker) or {}
-    yf_news = prices.get_yf_news(ticker, max_items=4)
-    web    = research.research_stock(ticker)
-    cats   = research.search_catalysts(ticker)
+    yf_news = prices.get_yf_news(ticker, max_items=6)
+    # Le nom complet, pas le seul ticker : « KBC » ramenait des pages de
+    # navigation, « KBC Group » ramène l'actualité de la société.
+    _name  = funds.get("name") or ""
+    web    = research.research_stock(ticker, _name)
+    cats   = research.search_catalysts(ticker, _name)
     social = research.get_social_sentiment(ticker)
 
     company_name = funds.get("name", ticker)
@@ -426,7 +437,9 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
         funds_lines.append(f"- Consensus : {funds['analyst_buy']} Achat / "
                            f"{funds['analyst_hold']} Neutre / {funds['analyst_sell']} Vente")
     funds_block = ("\nFONDAMENTAUX\n" + "\n".join(funds_lines)) if funds_lines else ""
-    news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
+    news_lines = [f"- {n.get('date', '')} {n['title']} ({n['publisher']})"
+                  + (f" — {n['summary'][:200]}" if n.get("summary") else "")
+                  for n in yf_news]
     news_block = ("\nACTUALITÉS\n" + "\n".join(news_lines)) if news_lines else ""
     social_block = f"\nSENTIMENT SOCIAL\n{social}" if social and "aucune donnée" not in social else ""
     chart_txt = _analyze_chart(ticker, ai)
@@ -461,7 +474,9 @@ la liste ci-dessus n'est apparu ou n'a été manqué (news invalidante, OPA
 plafonnée, événement binaire imminent, illiquidité, structure cassée, RSI
 repassé > {RSI_HARD_MAX:.0f}). Ne re-juge pas l'attractivité générale de
 l'opportunité — mais si un défaut CONCRET est présent, EXCLUS sans hésiter :
-mieux vaut un trade raté qu'une perte évitable."""
+mieux vaut un trade raté qu'une perte évitable. La thèse doit TOUJOURS être
+écrite et prouvée par les données du jour (format ci-dessous) : sans elle,
+EXCLUS."""
         tp_line = (f"{company_name} ({ticker}){(' — ' + company_sector) if company_sector else ''}\n"
                    f"- Entrée : {price}{sym}  SL : X{sym} (-{_SL}%)  "
                    f"TP : X{sym} (+X% — minimum +{_TP}%)")
@@ -490,21 +505,38 @@ RECHERCHE WEB
 CATALYSEURS IMMINENTS
 {cats}
 
-Signal ACHAT ou EXCLUS ?
-RÈGLE : si le titre ne répond pas aux critères → EXCLUS — [raison 5 mots]
-RÈGLE : si le ticker viole une contrainte du contexte personnel → EXCLUS — [raison]
+Signal ACHAT ou EXCLUS ? La PREMIÈRE ligne est OBLIGATOIREMENT le verdict.
+Si EXCLUS : « VERDICT : EXCLUS — [raison 5 mots] » et rien d'autre.
+RÈGLE : données insuffisantes sur la société → VERDICT : EXCLUS — information insuffisante
+RÈGLE : ticker contraire au contexte personnel → VERDICT : EXCLUS — [raison]
 Si ACHAT : format exact (symbole {sym}, le titre cote en {cur}) :
+VERDICT : ACHAT
 {tp_line}
-- Société : [1 phrase]
-- Secteur maintenant : [1 phrase — pourquoi porteur EN CE MOMENT]
-- Thèse : [CATALYSEUR daté] OU [FORCE RELATIVE] OU [MOMENTUM + niveau invalidation]
-- Risque principal : [1 phrase CONCRÈTE et falsifiable — le scénario précis qui
-  invaliderait cette thèse ; PAS une généralité type "le marché peut baisser"]
-- Raison : 1 phrase
+- Thèse : [2 phrases SPÉCIFIQUES à cette société : ce qui fait monter le titre
+  et pourquoi ça doit continuer — pas le nom du secteur, pas « momentum »]
+- Pourquoi maintenant : [1 phrase — ce qui rend l'entrée opportune AUJOURD'HUI]
+- Preuve 1 : [fait précis TIRÉ DES DONNÉES ci-dessus, avec chiffre ou date, et sa source]
+- Preuve 2 : [autre fait précis tiré des données, avec chiffre ou date, et sa source]
+- Risque principal : [scénario précis et falsifiable qui invaliderait la thèse]
+- Invalidation : [niveau de cours ou événement qui prouverait la thèse fausse]
+- Conviction : [1 à 5 — 5 = thèse forte et étayée ; 3 ou moins = ne pas acheter]
 - Risque : LOW / MEDIUM / HIGH"""
 
-    val = _strip_markdown(ai.complete(prompt, max_tokens=400))
+    val = _strip_markdown(ai.complete(prompt, max_tokens=900))
+    # Réponse COMPLÈTE au log : sans elle, impossible de savoir après coup sur
+    # quoi un achat a été décidé (KBC.BR, 01/10/2026 : thèse introuvable).
+    print(f"[validate] {ticker} ({mode}) — réponse IA :\n{val}\n[/validate]")
     verdict, reason = _parse_verdict(val)
+
+    # ── Porte « analyse forte » : pas d'ACHAT sans thèse prouvée ─────────────
+    # Avant : toute réponse sans le mot EXCLU valait ACHAT, thèse ou pas.
+    import thesis_gate
+    donnees = "\n".join([web or "", cats or "", news_block, funds_block, social_block])
+    gate_ok, gate_reason, fields = thesis_gate.check(val, donnees, company_name)
+    thesis = thesis_gate.resume(fields)
+    if verdict == "ACHAT" and not gate_ok:
+        verdict, reason = "EXCLUS", f"analyse insuffisante — {gate_reason}"
+        print(f"[validate] {ticker} : ACHAT refusé par la porte — {gate_reason}")
 
     entry_m = re.search(r"Entr[ée]e?\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
     sl_m    = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
@@ -587,7 +619,9 @@ Si ACHAT : format exact (symbole {sym}, le titre cote en {cur}) :
         "currency": cur, "sym": sym, "fx": fx,
         "company_name": company_name, "company_sector": company_sector,
         "company_label": company_label, "tech": tech, "pctx": pctx, "funds": funds,
-        "context": _entry_ctx(tech, pctx, val.splitlines()[0] if val else "", mode, regime),
+        "thesis": thesis, "evidence": fields.get("preuves", []),
+        "conviction": fields.get("conviction"),
+        "context": _entry_ctx(tech, pctx, thesis, mode, regime),
     })
     return out
 
@@ -667,9 +701,9 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
             opps.append(val)
             portfolio.add_pending_opportunity(
                 t, entry, sl_v, tp_v,
-                reason=val.splitlines()[0][:150],
+                reason=res.get("thesis", "")[:150],
                 source="court_terme",
-                context=_entry_ctx(tech, pctx, val.splitlines()[0], "court_terme"),
+                context=_entry_ctx(tech, pctx, res.get("thesis", ""), "court_terme"),
             )
         except Exception as e:
             print(f"[gain réduit] {t}: {e}")
@@ -893,7 +927,7 @@ ni ligne sur les positions HOLD.{opps_mission}"""
                     if res.get("sl") and res.get("tp"):
                         portfolio.add_pending_opportunity(
                             t, res["entry"], res["sl"], res["tp"],
-                            reason=val.splitlines()[0][:150],
+                            reason=res.get("thesis", "")[:150],
                             source="briefing",
                             context=res.get("context"),
                         )
@@ -1316,7 +1350,9 @@ def research_ticker(send_fn, ticker: str, question: str = "",
 
         news_block = ""
         if yf_news:
-            news_lines = [f"- {n['title']} ({n['publisher']})" for n in yf_news]
+            news_lines = [f"- {n.get('date', '')} {n['title']} ({n['publisher']})"
+                  + (f" — {n['summary'][:200]}" if n.get("summary") else "")
+                  for n in yf_news]
             news_block = "\nACTUALITÉS RÉCENTES (Yahoo Finance)\n" + "\n".join(news_lines)
 
         chart_txt   = _analyze_chart(real_ticker, ai)
@@ -1902,7 +1938,7 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                         float(entry_m.group(1).replace(",", ".")),
                         float(sl_m.group(1).replace(",", ".")),
                         float(tp_m.group(1).replace(",", ".")),
-                        reason=val.splitlines()[0][:150],
+                        reason=res.get("thesis", "")[:150],
                         source="scan",
                         context=res.get("context"),
                     )

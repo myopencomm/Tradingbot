@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -137,15 +138,34 @@ def get_fundamentals(ticker: str) -> dict:
 
 
 def get_yf_news(ticker: str, max_items: int = 6) -> list[dict]:
-    """Actualités récentes via yfinance (titre + source)."""
+    """Actualités récentes via yfinance : titre, source, date, résumé.
+
+    yfinance a changé de format : chaque article est désormais
+    {"id", "content": {"title", "provider": {"displayName"}, "pubDate",
+    "summary"}}. Le code lisait encore `item["title"]` au premier niveau et
+    renvoyait ZÉRO actualité sur tous les titres — l'IA validait des achats
+    sans jamais voir une news (constaté le 01/10/2026, KBC.BR / NVDA).
+    Les deux formats sont lus.
+    """
     try:
         news = yf.Ticker(ticker).news or []
         out  = []
-        for item in news[:max_items]:
-            title = item.get("title", "")
-            pub   = item.get("publisher", "")
-            if title:
-                out.append({"title": title, "publisher": pub})
+        for item in news:
+            c = item.get("content") if isinstance(item.get("content"), dict) else item
+            title = (c.get("title") or "").strip()
+            if not title:
+                continue
+            prov = c.get("provider")
+            pub  = (prov.get("displayName", "") if isinstance(prov, dict)
+                    else item.get("publisher", "")) or ""
+            date = str(c.get("pubDate") or c.get("displayTime") or "")[:10]
+            if not date and item.get("providerPublishTime"):
+                date = datetime.fromtimestamp(item["providerPublishTime"]).strftime("%Y-%m-%d")
+            summary = re.sub(r"<[^>]+>", "", c.get("summary") or c.get("description") or "")
+            out.append({"title": title, "publisher": pub, "date": date,
+                        "summary": summary.strip()[:300]})
+            if len(out) >= max_items:
+                break
         return out
     except Exception as e:
         print(f"⚠️ YF news error {ticker}: {e}")

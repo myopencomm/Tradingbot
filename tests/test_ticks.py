@@ -105,6 +105,10 @@ class TestAnalyseArrondieALaSource:
                          ("get_fundamentals", {}), ("get_price_context", {}),
                          ("get_yf_news", [])):
             monkeypatch.setattr(prices, nom, lambda *a, _v=val, **k: _v)
+        import research
+        for nom in ("research_stock", "search_catalysts", "get_social_sentiment"):
+            monkeypatch.setattr(research, nom, lambda *a, **k: "")
+        monkeypatch.setattr(analysis, "_analyze_chart", lambda *a, **k: "")
         class FauxIA:
             def complete(self, *a, **k): return texte
             def complete_cheap(self, *a, **k): return texte
@@ -163,6 +167,10 @@ class TestIndicateurManquant:
         for nom, val in (("get_fundamentals", {}), ("get_price_context", {}),
                          ("get_yf_news", [])):
             monkeypatch.setattr(prices, nom, lambda *a, _v=val, **k: _v)
+        import research
+        for nom in ("research_stock", "search_catalysts", "get_social_sentiment"):
+            monkeypatch.setattr(research, nom, lambda *a, **k: "")
+        monkeypatch.setattr(analysis, "_analyze_chart", lambda *a, **k: "")
 
         class FauxIA:
             def complete(self, *a, **k):

@@ -224,6 +224,8 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Briefing matinal 9h05** | **Une ligne par position** : ✅ sur la bonne lancée / 👀 à surveiller / ⚠️ alléger / 🔴 vendre, suivie de ce qui CHANGE la décision (14 mots max), puis l'arbitrage du jour s'il y en a un. Rien d'autre — le snapshot du portefeuille reste la source de vérité du *prompt*, pas du message (ces chiffres sont déjà dans `/status` et le dashboard), et le bloc HOLD, le « risque global » et le mode d'emploi du `/scan` ont été retirés : 35 lignes → 7. L'icône et la longueur sont posées par le code (`briefing_lines`), jamais par l'IA — un message quotidien ne change pas de forme parce que le modèle a été bavard |
 | **Surveillance 4×/jour + sync horaire** | Checks 9h / 12h / 15h / 17h (alertes SL/TP) + sync BD silencieux chaque heure : détection automatique des exécutions |
 | **Séance US prolongée** | Wall Street tournant jusqu'à 22h Paris, le bot prolonge la surveillance des positions US (checks 18h / 20h / 21h40, alertes seules) et lance un **scan US** à 16h — plus seulement au briefing de 9h05 (`US_EXTENDED_HOURS`) |
+| **Pas d'achat sans analyse forte** | La charge de la preuve est sur l'ACHAT. L'IA doit écrire `VERDICT : ACHAT`, une thèse spécifique à la société, le « pourquoi maintenant », **deux preuves** chiffrées ou datées, le risque principal, un niveau d'invalidation et une conviction de 1 à 5. `thesis_gate.py` vérifie dans le code : verdict explicite (une réponse sans verdict n'est plus un achat), thèse non creuse, au moins une preuve **retrouvée dans les données de recherche** (news, web, catalyseurs, analystes — une preuve absente des données peut être inventée), conviction ≥ `MIN_CONVICTION` (4). Sinon : EXCLUS, motif affiché. Faute d'information sur la société, l'IA répond `EXCLUS — information insuffisante`. S'applique au scan, au briefing et au contrôle pré-achat ; la réponse IA complète est écrite au log (`[validate]`) et la vraie thèse est mémorisée (avant : l'en-tête « Société — Secteur »). Origine : KBC.BR, 01/10/2026, achat validé sans aucune raison, 8 candidats sur 8 validés ce matin-là |
+| **Recherche réparée** | Les news Yahoo n'arrivaient plus à l'IA (nouveau format yfinance : **zéro** titre lu sur tous les titres) — lues à nouveau, avec date et résumé. La recherche DuckDuckGo, bridée par les rafales d'un scan (HTTP 202), espace ses requêtes et réessaie au lieu de rendre une recherche vide. Elle cherche sur le nom complet de la société, pas le seul ticker |
 | **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
 | **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
 | **Dashboard filtrable par période** | Menu ☰ : Global / ce mois / mois dernier / cette année / année dernière. Cartes, graphiques et tableau recalculés sur la période ; P&L latent et cash restent des instantanés globaux, signalés comme tels |
@@ -292,6 +294,7 @@ TradingBot/
 ├── prices.py                Prix temps réel + indicateurs techniques (RSI, momentum, volume)
 ├── ai_provider.py           Abstraction multi-providers avec vision (5 providers)
 ├── research.py              Recherche web DuckDuckGo : marché, actions, catalyseurs imminents
+├── thesis_gate.py           Porte d'achat : thèse + 2 preuves retrouvées dans les données, sinon EXCLUS
 ├── gmail_sync.py            Sync IMAP Gmail : détecte les ordres BD finalisés et clôture auto
 ├── stats.py                 Historique des trades, P&L, win rate, profit factor
 │
@@ -1804,6 +1807,7 @@ ATR_SL_MULT=2.0           # distance SL = 2×ATR 14j
 MIN_SL_PCT=3              # SL jamais plus serré (bruit du titre)
 MAX_SL_PCT=10             # au-delà : titre trop volatil → exclu
 MIN_RR=1.5                # TP ≥ 1.5× la distance du SL
+MIN_CONVICTION=4          # conviction IA minimale (1-5) pour un ACHAT — thesis_gate
 ENTRY_MIN_MOM_1M=-5       # plancher de momentum 1 mois à l'entrée (backtesté : -5 > -12 > 0)
 ENTRY_CRASH_MOM_1M=-12    # veto dur : un effondrement n'est jamais un repli
 EARNINGS_VETO_DAYS=6      # EXCLUS si résultats < N jours (gap non couvert par le SL) ; au-delà, non bloquant
