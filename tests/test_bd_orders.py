@@ -12,9 +12,13 @@ import bourse_direct_orders as bd
 
 
 def _fin_de_mois() -> str:
+    """Dernier jour OUVRÉ du mois (BD refuse une révocation un week-end)."""
+    from datetime import date, timedelta
     now = datetime.now()
-    last = calendar.monthrange(now.year, now.month)[1]
-    return f"{now.year}-{now.month:02d}-{last:02d}T00:00:00.000Z"
+    d = date(now.year, now.month, calendar.monthrange(now.year, now.month)[1])
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return f"{d.isoformat()}T00:00:00.000Z"
 
 
 class TestValidity:
@@ -26,7 +30,11 @@ class TestValidity:
     def test_max_sur_euronext_va_a_la_fin_d_annee(self):
         v, d = bd.parse_validity("max", "XPAR")
         assert v == "end_of_year"
-        assert d == f"{datetime.now().year}-12-31T00:00:00.000Z"
+        from datetime import date, timedelta
+        fin = date(datetime.now().year, 12, 31)
+        while fin.weekday() >= 5:
+            fin -= timedelta(days=1)
+        assert d == f"{fin.isoformat()}T00:00:00.000Z"
 
     def test_max_hors_euronext_devient_revocation_fin_de_mois(self):
         """C'est LA contrainte qui bloquait les ordres US : une révocation sans

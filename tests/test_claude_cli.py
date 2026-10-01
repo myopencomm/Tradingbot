@@ -58,3 +58,13 @@ def test_limite_d_usage_bascule_sur_les_cles(cli, monkeypatch):
     assert chaine.complete("x") == "réponse API"
     # Mise en quarantaine : les appels suivants ne repassent pas par la CLI.
     assert ai_provider.FallbackProvider._en_quarantaine("claude_cli")
+
+
+def test_revocation_fin_de_mois_jamais_un_week_end():
+    """31/10/2026 = samedi : BD refusait la repose des protections US
+    (« date de révocation … ne correspond pas au mode de règlement »)."""
+    from datetime import datetime
+    from bourse_direct_orders import parse_validity
+    assert parse_validity("max", "XNYS", now=datetime(2026, 10, 1))[1][:10] == "2026-10-30"
+    assert parse_validity("max", "XNYS", now=datetime(2026, 9, 10))[1][:10] == "2026-09-30"
+    assert parse_validity("max", "XPAR", now=datetime(2028, 12, 1))[1][:10] == "2028-12-29"

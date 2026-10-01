@@ -212,15 +212,27 @@ def parse_validity(validity_str: str, mic: str,
     # "revocation" avec date de FIN DE MOIS — payload réel du site BD confirmé
     # par capture réseau (07/2026) : validityDate n'est jamais null.
     import calendar
+    from datetime import date, timedelta
     now = now or datetime.now()
-    last_day = calendar.monthrange(now.year, now.month)[1]
-    end_of_month = f"{now.year}-{now.month:02d}-{last_day:02d}T00:00:00.000Z"
+    # DERNIER JOUR OUVRÉ du mois, pas le dernier jour calendaire : le
+    # 31/10/2026 est un samedi, et BD refuse alors toute protection US
+    # (« La date de révocation choisie ne correspond pas au mode de
+    # règlement »). Les 31/08 (lundi) et 30/09 (mercredi) passaient — c'est
+    # pourquoi le défaut n'est apparu que le 01/10/2026, avec trois positions
+    # US laissées sans stop.
+    def _ouvre(d: date) -> date:
+        while d.weekday() >= 5:
+            d -= timedelta(days=1)
+        return d
+    last = _ouvre(date(now.year, now.month, calendar.monthrange(now.year, now.month)[1]))
+    end_of_month = f"{last.isoformat()}T00:00:00.000Z"
+    year_end = _ouvre(date(now.year, 12, 31))
 
     if s == "seance":
         return "day", now.strftime("%Y-%m-%dT00:00:00.000Z")
     if s == "max":
         if mic in EURONEXT_MICS:
-            return "end_of_year", f"{now.year}-12-31T00:00:00.000Z"
+            return "end_of_year", f"{year_end.isoformat()}T00:00:00.000Z"
         return "revocation", end_of_month
     if s == "revocation":
         return "revocation", end_of_month
@@ -231,7 +243,7 @@ def parse_validity(validity_str: str, mic: str,
     if s == "end_of_year":
         if mic not in EURONEXT_MICS:
             return "revocation", None
-        return "end_of_year", f"{now.year}-12-31T00:00:00.000Z"
+        return "end_of_year", f"{year_end.isoformat()}T00:00:00.000Z"
     if s == "day":
         return "day", now.strftime("%Y-%m-%dT00:00:00.000Z")
     return s, None

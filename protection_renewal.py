@@ -257,7 +257,18 @@ def renew_cycle(send_fn, verbose: bool = False, now: datetime | None = None) -> 
         if not conf:
             # Rien n'a été annulé pour en arriver là : l'échec laisse la
             # position dans l'état où elle était (à nu), pas dans un état pire.
-            if not marche_ouvert:
+            #
+            # Un refus qui porte sur un CHAMP de l'ordre (date, prix…) n'a rien
+            # à voir avec l'heure : le classer « hors séance » faisait retenter
+            # en silence, heure après heure, un ordre que BD refuserait
+            # toujours (date de révocation un samedi, 01/10/2026).
+            raw = (bd_orders._last_raw or {}).get("data") or {}
+            champs = raw.get("fields") if isinstance(raw, dict) else None
+            motif_bd = ""
+            if champs:
+                motif_bd = "; ".join(f"{k} : {v[0] if isinstance(v, list) else v}"
+                                     for k, v in champs.items())
+            if not marche_ouvert and not champs:
                 print(f"[Renouvellement] {name} : refus BD hors séance — "
                       f"nouvelle tentative à l'ouverture")
                 if verbose:
@@ -271,6 +282,7 @@ def renew_cycle(send_fn, verbose: bool = False, now: datetime | None = None) -> 
             send_fn(
                 f"🚨 {name} : REPOSE DE LA PROTECTION ÉCHOUÉE — la position "
                 f"reste SANS STOP sur BD.\n"
+                + (f"Motif BD : {motif_bd}\n" if motif_bd else "") +
                 f"Nouvelle tentative au prochain cycle horaire.\n\n"
                 f"À faire à la main si ça dure :\n"
                 f"/ordre vendre {ticker} {qty} expert {sl} {tp}"
