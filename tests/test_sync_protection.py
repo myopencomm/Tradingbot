@@ -155,3 +155,16 @@ class TestNominal:
         _msg, saved = sync([bd([soude], True)], silent=False)
         assert saved["positions"]["AIR"]["protected"] is True
         assert saved["positions"]["AIR"]["trailable"] is False
+
+
+def test_cash_reserve_par_un_achat_en_attente(sync, monkeypatch):
+    """Achat limite au carnet → cash réservé mémorisé. Le premier essai plantait
+    dans sync() (UnboundLocalError sur `prices`), sans que rien ne le montre."""
+    import prices
+    monkeypatch.setattr(prices, "fx_to_eur", lambda cur: 1.0)
+    achat = {"statut": "En cours", "sens": "Achat", "type": "Take Profit",
+             "bd_ticker": "SU", "mic": "XPAR", "name": "Schneider Electric SE",
+             "limit": 289.5, "qty_exec": 0, "qty_total": 3, "seuil": 267.0,
+             "profit": 324.0, "currency": "EUR", "order_entries": []}
+    _, saved = sync([bd([ORDRE_AIR, achat], True)])
+    assert saved["cash_reserved"] == pytest.approx(868.5 + 5.37, abs=1.0)

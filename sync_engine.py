@@ -5,7 +5,6 @@ Appelé par /sync. Met à jour cash + détecte les écarts de positions.
 from datetime import datetime
 
 import market
-import prices
 import portfolio
 import bourse_direct_reader as reader
 
@@ -471,7 +470,11 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                 restant = (o.get("qty_total") or 0) - (o.get("qty_exec") or 0)
                 if restant <= 0 or not o.get("limit"):
                     continue
-                fx = prices.fx_to_eur(o.get("currency") or "EUR")
+                # Alias : `prices` est importé localement plus bas dans cette
+                # fonction, ce qui rend le nom local partout ici (UnboundLocalError
+                # au premier sync du 01/10/2026).
+                import prices as _px
+                fx = _px.fx_to_eur(o.get("currency") or "EUR")
                 montant = restant * o["limit"] * fx
                 # BD écrit « SU », pas « SU.PA » : sans suffixe, le barème de
                 # frais le prendrait pour un titre US.
