@@ -283,7 +283,7 @@ button.on { border-color: #3fd583; color: #3fd583; }
   <div class="card"><div class="v" id="c_hold">—</div><div class="l" id="l_hold">Durée médiane d'un trade</div></div>
   <div class="card"><div class="v" id="c_perday">—</div><div class="l" id="l_perday">Meilleur gain par jour de détention</div></div>
   <div class="card"><div class="v @NAV_CLS@">@NAV_PERF@%</div><div class="l">Croissance de l'investissement — part à @NAV_PART@ (base 100), hors période</div></div>
-  <div class="card"><div class="v">@NAV_FONDS@€</div><div class="l">Valeur du fonds : cash + @NAV_NB@ position(s) gérée(s) — hors <em>hold</em></div></div>
+  <div class="card"><div class="v">@NAV_FONDS@€</div><div class="l">Valeur du fonds : cash (achats en attente compris) + @NAV_NB@ position(s) gérée(s) — hors <em>hold</em></div></div>
 </div>
 
 
@@ -547,6 +547,7 @@ function redrawCharts() {
   const navP = (D.nav && D.nav.perimetre) || null;
   document.getElementById('navcompo').textContent = navP
     ? `Fonds : ${navP.total.toFixed(2)}€ = ${navP.cash.toFixed(2)}€ de cash `
+      + (navP.reserve ? `+ ${navP.reserve.toFixed(2)}€ réservés (achat en attente) ` : '')
       + `+ ${navP.positions.toFixed(2)}€ sur ${navP.lignes.length} position(s) `
       + `gérée(s)${navP.lignes.length ? ' (' + navP.lignes.join(', ') + ')' : ''}.`
     : '';

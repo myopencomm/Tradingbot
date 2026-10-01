@@ -555,6 +555,8 @@ def cmd_nav(args, cid):
         "",
         f"Fonds  : {r['valeur']:.2f} EUR",
         f"  cash      {p['cash']:.2f}",
+        *([f"  réservé   {p['reserve']:.2f}  (achat en attente au carnet)"]
+          if p.get("reserve") else []),
         f"  positions {p['positions']:.2f}  ({', '.join(p['lignes']) or 'aucune'})",
         "",
         "Perimetre : ce que le bot PILOTE. Les lignes en hold long",

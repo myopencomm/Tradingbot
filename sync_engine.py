@@ -5,6 +5,7 @@ Appelé par /sync. Met à jour cash + détecte les écarts de positions.
 from datetime import datetime
 
 import market
+import prices
 import portfolio
 import bourse_direct_reader as reader
 
@@ -454,6 +455,34 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     # Seuls les ordres actifs ("En cours") sont affichés et synchronisés.
     # Les ordres annulés/exécutés sont déjà filtrés par bourse_direct_reader.
     active_orders = [o for o in orders if o.get("statut") == "En cours"]
+
+    # ── Cash RÉSERVÉ par les achats en attente ───────────────────────────────
+    # BD retire du cash disponible le montant d'un achat limite dès sa pose,
+    # mais l'action n'existe pas encore en position : sans ce poste, la valeur
+    # du fonds perdait ~880 € pendant que l'achat SU.PA attendait son exécution
+    # (part à 89 au lieu de ~113, 01/10/2026).
+    if orders_read:
+        reserve = 0.0
+        try:
+            from config import order_fees
+            for o in active_orders:
+                if not (o.get("sens") or "").lower().startswith("achat"):
+                    continue
+                restant = (o.get("qty_total") or 0) - (o.get("qty_exec") or 0)
+                if restant <= 0 or not o.get("limit"):
+                    continue
+                fx = prices.fx_to_eur(o.get("currency") or "EUR")
+                montant = restant * o["limit"] * fx
+                # BD écrit « SU », pas « SU.PA » : sans suffixe, le barème de
+                # frais le prendrait pour un titre US.
+                sfx = {"XPAR": ".PA", "XAMS": ".AS", "XBRU": ".BR",
+                       "XLIS": ".LS"}.get(o.get("mic") or "", "")
+                reserve += montant + order_fees((o.get("bd_ticker") or "") + sfx, montant)
+        except Exception as e:
+            print(f"[sync] cash réservé : {e}")
+        if abs(round(reserve, 2) - (data.get("cash_reserved") or 0)) >= 0.01:
+            data["cash_reserved"] = round(reserve, 2)
+            meta_changed = True
     if not orders_read:
         lines.append("\nORDRES EN COURS SUR BD : onglet illisible ce cycle — "
                      "liste NON représentative (aucune conclusion tirée).")

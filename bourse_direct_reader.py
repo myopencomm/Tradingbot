@@ -750,6 +750,12 @@ def _parse_order(text: str) -> dict | None:
     if m_profit:
         order["profit"] = _parse_float(m_profit.group(1))
 
+    # Limite d'un ordre d'entrée (« Lim. 289.50 € ») — sert à chiffrer le cash
+    # que BD RÉSERVE tant que l'achat est en attente.
+    m_lim = re.search(rf'Lim(?:ite)?\.\s*{_AMT}', flat)
+    if m_lim:
+        order["limit"] = _parse_float(m_lim.group(1))
+
     # Quantité exécutée / totale (ex: 0/17)
     m_qty = re.search(r'(\d+)\s*/\s*(\d+)', flat)
     if m_qty:

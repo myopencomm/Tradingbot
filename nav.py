@@ -63,7 +63,13 @@ def _save(data: dict):
 
 
 def perimetre() -> dict:
-    """Ce que le bot pilote, ici et maintenant : cash + positions gérées."""
+    """Ce que le bot pilote, ici et maintenant : cash + cash réservé par les
+    achats en attente + positions gérées.
+
+    Le cash RÉSERVÉ compte : BD le retire du disponible dès la pose d'un achat
+    limite, alors que l'action n'est pas encore une position. Sans lui, la part
+    chutait de ~113 à 89 pendant que l'achat SU.PA attendait (01/10/2026) —
+    une perte qui n'existait pas."""
     import portfolio
     import position_view
     import prices
@@ -81,8 +87,10 @@ def perimetre() -> dict:
         latent += v["pnl_eur"] or 0
         lignes.append(v["name"])
     cash = d.get("cash_available", 0) or 0
-    return {"cash": round(cash, 2), "positions": round(valeur, 2),
-            "total": round(cash + valeur, 2), "latent": round(latent, 2),
+    reserve = d.get("cash_reserved", 0) or 0
+    return {"cash": round(cash, 2), "reserve": round(reserve, 2),
+            "positions": round(valeur, 2),
+            "total": round(cash + reserve + valeur, 2), "latent": round(latent, 2),
             "lignes": lignes}
 
 

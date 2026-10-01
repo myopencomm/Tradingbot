@@ -68,3 +68,19 @@ def test_revocation_fin_de_mois_jamais_un_week_end():
     assert parse_validity("max", "XNYS", now=datetime(2026, 10, 1))[1][:10] == "2026-10-30"
     assert parse_validity("max", "XNYS", now=datetime(2026, 9, 10))[1][:10] == "2026-09-30"
     assert parse_validity("max", "XPAR", now=datetime(2028, 12, 1))[1][:10] == "2028-12-29"
+
+
+def test_achat_en_attente_compte_dans_le_fonds(monkeypatch):
+    """Achat limite au carnet : BD a retiré le cash, l'action n'est pas encore
+    une position — la part ne doit pas chuter (89 au lieu de ~113, 01/10/2026)."""
+    import bourse_direct_reader as r
+    import nav
+    import portfolio
+    o = r._parse_order("Schneider Electric SE | XPAR › SU | 291.750 EUR | -0.09 % | | "
+                       "Achat(CPT)\tOrdre en cours\t0/3\tLim. 289.50 €\t-\t31/12/2026 "
+                       "à 17:35:00 | Take Profit\tSeuil267.00 €\tProfit324.00 €")
+    assert (o["sens"], o["limit"], o["qty_total"], o["mic"]) == ("Achat", 289.5, 3, "XPAR")
+    monkeypatch.setattr(portfolio, "load", lambda: {
+        "cash_available": 289.51, "cash_reserved": 873.87, "positions": {}})
+    p = nav.perimetre()
+    assert p["reserve"] == 873.87 and p["total"] == round(289.51 + 873.87, 2)
