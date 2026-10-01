@@ -14,6 +14,26 @@ _PARIS = pytz.timezone("Europe/Paris")
 _currency_cache: dict[str, str] = {}
 
 
+_pence_cache: dict[str, float] = {}
+
+
+def price_divisor(ticker: str) -> float:
+    """100 si Yahoo cote ce titre en PENCE (« GBp », la règle à Londres), 1
+    sinon. Le bot prenait 3 570 pence de Shell pour 3 570 livres : tout titre
+    londonien était surévalué d'un facteur 100 (01/10/2026)."""
+    if ticker in _pence_cache:
+        return _pence_cache[ticker]
+    div = 1.0
+    if ticker.upper().endswith(".L"):
+        try:
+            raw = getattr(yf.Ticker(ticker).fast_info, "currency", "") or ""
+            div = 100.0 if raw in ("GBp", "GBX", "GBx") else 1.0
+        except Exception:
+            div = 100.0          # défaut londonien : pence
+    _pence_cache[ticker] = div
+    return div
+
+
 def _ticker_currency(ticker: str) -> str:
     if ticker in _currency_cache:
         return _currency_cache[ticker]
@@ -22,6 +42,8 @@ def _ticker_currency(ticker: str) -> str:
         currency = (getattr(fi, "currency", None) or "EUR").upper()
     except Exception:
         currency = "EUR"
+    if currency == "GBX":
+        currency = "GBP"         # pence → livres (cours divisés par price_divisor)
     _currency_cache[ticker] = currency
     return currency
 
@@ -92,7 +114,7 @@ def get_fundamentals(ticker: str) -> dict:
 
         target = info.get("targetMeanPrice") or info.get("targetMedianPrice")
         if target:
-            result["analyst_target"] = round(float(target), 2)
+            result["analyst_target"] = round(float(target) / price_divisor(ticker), 2)
 
         for key in ("trailingPE", "forwardPE"):
             if info.get(key):
@@ -255,8 +277,8 @@ def get_intraday_range(ticker: str, hours: int = 4) -> dict:
         if recent.empty:
             return {}
         return {
-            "high":    round(float(recent["High"].max()), 4),
-            "low":     round(float(recent["Low"].min()), 4),
+            "high":    round(float(recent["High"].max()) / price_divisor(ticker), 4),
+            "low":     round(float(recent["Low"].min()) / price_divisor(ticker), 4),
             "current": round(float(recent["Close"].iloc[-1]), 4),
         }
     except Exception as e:
@@ -482,6 +504,8 @@ def get_quote(ticker: str) -> dict:
         stale = age >= 2
 
         currency = _ticker_currency(ticker)
+        div = price_divisor(ticker)
+        current, prev = current / div, prev / div
         return {
             "ticker":     ticker,
             "price":      round(current, 4),
@@ -518,6 +542,9 @@ def get_chart_image(ticker: str, period: str = "3mo") -> bytes | None:
         hist = hist.dropna(subset=["Close"])
         if len(hist) < 10:
             return None
+        div = price_divisor(ticker)
+        if div != 1.0:      # même unité que le cours annoncé à l'IA (livres)
+            hist[["Open", "High", "Low", "Close"]] = hist[["Open", "High", "Low", "Close"]] / div
 
         # Style sombre lisible par la vision IA
         style = mpf.make_mpf_style(

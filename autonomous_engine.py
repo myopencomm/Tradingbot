@@ -559,6 +559,18 @@ def run_entry_cycle(send_fn) -> None:
                           f"opportunité conservée pour le prochain cycle")
                     continue
 
+                # Marché hors AUTO_BUY_MARKETS : repéré par le scan mondial,
+                # mais aucun ordre n'y a encore été vérifié en réel sur BD.
+                from config import auto_buy_allowed
+                if not auto_buy_allowed(ticker):
+                    send_fn(f"🌍 {ticker} : validé par l'analyse, mais l'achat "
+                            f"automatique n'est pas activé sur ce marché.\n"
+                            f"À passer à la main si tu le veux :\n"
+                            f"/ordre acheter {ticker} <qté> expert "
+                            f"{opp.get('entry')} {opp.get('sl')} {opp.get('tp')}")
+                    portfolio.clear_pending_opportunity(ticker)
+                    continue
+
                 # Garde-fou piloté par les données : ne pas re-rentrer sur un
                 # titre qui vient de coûter une perte (< 10 jours). L'IA peut
                 # le re-proposer par momentum ; les données disent d'attendre.

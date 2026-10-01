@@ -379,3 +379,150 @@ def load_indicators(source: str = "us", max_age_days: int = 3) -> dict[str, dict
         return {}
 
 
+
+
+# ═══ Univers MONDIAL (01/10/2026) ═══════════════════════════════════════════
+# L'univers réellement scanné se réduisait à 149 valeurs choisies à la main :
+# le gisement US expirait (indicateurs valables 3 jours, rafraîchis le
+# dimanche seulement) et rien d'autre n'existait. Une valeur comme Höegh
+# Autoliners (+89 % sur un an) ne pouvait donc JAMAIS remonter.
+#
+# Source : le screener Yahoo Finance, interrogé bourse par bourse — uniquement
+# les places que Bourse Direct traite EN LIGNE (Oslo, Stockholm, Milan… sont
+# « sur demande », à des frais dissuasifs). Le filtre de bourse écarte les
+# doubles cotations (ASML à Zurich, titres US à Milan, Francfort .F) et l'OTC.
+
+WORLD_EXCHANGES = {   # code Yahoo → suffixe Yahoo des tickers
+    "PAR": ".PA", "AMS": ".AS", "BRU": ".BR", "LIS": ".LS",
+    "GER": ".DE", "LSE": ".L", "MCE": ".MC", "EBS": ".SW",
+    "NYQ": "", "NMS": "", "NGM": "", "NCM": "", "ASE": "",
+}
+import os as _os
+WORLD_MIN_MCAP       = float(_os.getenv("WORLD_MIN_MCAP", "300000000"))
+WORLD_MIN_TRADED_EUR = float(_os.getenv("WORLD_MIN_TRADED_EUR", "2000000"))
+# Au-delà, la « performance » est presque toujours une erreur de donnée
+# (cotation en pence prise pour des livres, regroupement d'actions…).
+WORLD_MAX_52W_PCT    = 1500.0
+
+
+def _fx_eur(currency: str) -> float:
+    cur = (currency or "EUR")
+    if cur in ("GBp", "GBX"):
+        return _fx_eur("GBP") / 100.0
+    try:
+        import prices
+        return prices.fx_to_eur(cur.upper())
+    except Exception:
+        return 1.0
+
+
+def fetch_world_symbols(log=print) -> list[dict]:
+    """Actions liquides de toutes les bourses accessibles en ligne chez BD."""
+    import yfinance as yf
+    from yfinance import EquityQuery as Q
+    fx_cache: dict = {}
+    out, seen = [], set()
+    for ex, sfx in WORLD_EXCHANGES.items():
+        q = Q("and", [Q("is-in", ["exchange", ex]),
+                      Q("gt", ["intradaymarketcap", WORLD_MIN_MCAP]),
+                      Q("gt", ["avgdailyvol3m", 10000])])
+        offset, n_ex = 0, 0
+        while True:
+            r = None
+            for essai in range(3):
+                try:
+                    r = yf.screen(q, offset=offset, size=250,
+                                  sortField="intradaymarketcap", sortAsc=False)
+                    break
+                except Exception as e:
+                    print(f"[universe] screener {ex} offset {offset} : {e}")
+                    time.sleep(3 * (essai + 1))
+            if not r:
+                break
+            quotes = r.get("quotes") or []
+            for x in quotes:
+                sym = x.get("symbol") or ""
+                if not sym or sym in seen:
+                    continue
+                # Bonne place de cotation : suffixe attendu (US : aucun point)
+                if sfx and not sym.endswith(sfx):
+                    continue
+                if not sfx and "." in sym:
+                    continue
+                cur   = x.get("currency") or ("USD" if not sfx else "EUR")
+                price = x.get("regularMarketPrice") or 0
+                vol   = x.get("averageDailyVolume3Month") or 0
+                chg   = x.get("fiftyTwoWeekChangePercent") or 0
+                if cur not in fx_cache:
+                    fx_cache[cur] = _fx_eur(cur)
+                traded = price * vol * fx_cache[cur]
+                if traded < WORLD_MIN_TRADED_EUR or abs(chg) > WORLD_MAX_52W_PCT:
+                    continue
+                seen.add(sym)
+                n_ex += 1
+                out.append({"ticker": sym, "exchange": ex, "currency": cur,
+                            "name": x.get("longName") or x.get("shortName") or sym,
+                            "traded_eur": round(traded),
+                            "mcap": x.get("marketCap"),
+                            "chg_52w": round(chg, 1)})
+            offset += len(quotes)
+            if not quotes or offset >= (r.get("total") or 0):
+                break
+        log(f"{ex} : {n_ex} valeurs")
+    out.sort(key=lambda e: e["traded_eur"], reverse=True)
+    return _dedupe(out, log)
+
+
+_FORMES = re.compile(r"\b(inc|incorporated|corp|corporation|plc|se|sa|s\.a|ag|nv|n\.v|"
+                     r"ltd|limited|co|company|holdings?|group|the|class [a-c]|"
+                     r"asa|spa|ab|oyj|cl [a-c])\b")
+
+
+def _norm_name(name: str) -> str:
+    n = _FORMES.sub(" ", (name or "").lower())
+    return re.sub(r"[^a-z0-9]+", "", n)
+
+
+def _dedupe(entries: list[dict], log=print) -> list[dict]:
+    """Une ligne par SOCIÉTÉ : la plus liquide. Xetra, Londres ou Zurich
+    listent aussi des valeurs étrangères (Alphabet à Francfort : ABEA.DE) —
+    sans ce filtre, la même société occupait deux places du classement, et
+    la moins chère à traiter n'était pas forcément celle retenue. Entrées déjà
+    triées par liquidité décroissante : la première vue est gardée."""
+    vus, out, doublons = set(), [], 0
+    for e in entries:
+        k = _norm_name(e.get("name", "")) or e["ticker"]
+        if k in vus:
+            doublons += 1
+            continue
+        vus.add(k)
+        out.append(e)
+    if doublons:
+        log(f"{doublons} doubles cotations écartées")
+    return out
+
+
+def refresh_world(send_fn=None) -> dict:
+    """Univers mondial → indicateurs, mis en cache pour le scan. Quotidien,
+    avant l'ouverture (marchés fermés : le passage groupé ne gêne aucun cours
+    suivi). Les valeurs manquées par un lot rate-limité sont retentées une fois
+    en petits lots — c'est ce qui laissait le gisement US à 210/1482 valeurs."""
+    def log(m):
+        print(f"[universe] {m}")
+        if send_fn:
+            send_fn(m)
+    t0 = time.time()
+    entries = fetch_world_symbols(log=lambda m: print(f"[universe] {m}"))
+    log(f"{len(entries)} actions liquides sur {len(WORLD_EXCHANGES)} bourses accessibles")
+    if not entries:
+        raise RuntimeError("screener Yahoo vide — cache précédent conservé")
+    save_cache(entries, "world")
+    tickers = [e["ticker"] for e in entries]
+    ind = compute_indicators_bulk(tickers)
+    manquants = [t for t in tickers if t not in ind]
+    if manquants:
+        time.sleep(10)
+        ind.update(compute_indicators_bulk(manquants, batch=50))
+    save_indicators(ind, "world")
+    log(f"indicateurs : {len(ind)}/{len(tickers)} valeurs en {(time.time()-t0)/60:.1f} min")
+    return {"symbols": len(entries), "indicators": len(ind)}

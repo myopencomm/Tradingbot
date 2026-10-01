@@ -232,6 +232,19 @@ POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "1000"))
 # risque (RISK_PER_TRADE_PCT) n'est donc plus respecté sur un trade balayé. Le
 # nouveau risque est annoncé dans le message d'achat. 0 = désactivé.
 CASH_SWEEP_MIN_LEFTOVER = float(os.getenv("CASH_SWEEP_MIN_LEFTOVER", "500"))
+# Marchés où le mode autonome peut ACHETER seul. Le scan voit le monde entier
+# (market_universe.refresh_world), mais un ordre n'a été vérifié en réel sur BD
+# qu'à Euronext et aux US : ailleurs (Xetra, Londres, Madrid, Suisse), la
+# commande est proposée et l'utilisateur la passe lui-même.
+AUTO_BUY_MARKETS = [m.strip() for m in os.getenv(
+    "AUTO_BUY_MARKETS", ".PA,.AS,.BR,US").split(",") if m.strip()]
+
+
+def auto_buy_allowed(ticker: str) -> bool:
+    import market
+    return (market.suffix(ticker) or "US") in AUTO_BUY_MARKETS
+
+
 # Marge laissée sous le cash BD à l'achat. BD exige une « couverture » un peu
 # au-dessus de montant + frais : KBC.BR le 01/10/2026 (achat + frais = 99.3 %
 # du cash) et ABBV le 24/09 ont été refusés « Couverture insuffisante », PFE

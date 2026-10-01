@@ -1653,25 +1653,37 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
     # Repli silencieux sur la liste manuelle si le cache est absent ou périmé :
     # jamais de scan sur des données mortes.
     precomputed_tech: dict = precomputed or {}
+    world_names: dict = {}
     if universe is None:
         universe = list(SCAN_UNIVERSE)
         try:
             import market_universe as _mu
-            from config import SCAN_US_MIN_DOLLAR_VOLUME as _MINDV
-            _ind = _mu.load_indicators("us") if _MINDV > 0 else {}
-            if _ind and _MINDV > 0:
-                # Filtre de liquidité appliqué au scan : le cache est volontai-
-                # rement large, c'est ici qu'on décide du niveau de qualité.
-                _liq = {e["ticker"]: e["dollar_volume"] for e in _mu.load_cache("us")}
-                _ind = {t: v for t, v in _ind.items() if _liq.get(t, 0) >= _MINDV}
+            # Univers MONDIAL (toutes les bourses que BD traite en ligne,
+            # rafraîchi chaque matin) ; repli sur le gisement US, puis sur la
+            # liste manuelle. Jamais de scan sur des données mortes.
+            _ind = _mu.load_indicators("world")
+            if _ind:
+                world_names = {e["ticker"]: e for e in _mu.load_cache("world", max_age_days=8)}
+                # Seulement les tickers de l'univers courant (dédoublonné) :
+                # le cache d'indicateurs peut en garder d'un passage antérieur.
+                if world_names:
+                    _ind = {t: v for t, v in _ind.items() if t in world_names}
+                src = "mondiaux"
+            else:
+                from config import SCAN_US_MIN_DOLLAR_VOLUME as _MINDV
+                _ind = _mu.load_indicators("us") if _MINDV > 0 else {}
+                if _ind:
+                    _liq = {e["ticker"]: e["dollar_volume"] for e in _mu.load_cache("us")}
+                    _ind = {t: v for t, v in _ind.items() if _liq.get(t, 0) >= _MINDV}
+                src = "US"
             if _ind:
                 extra = [t for t in _ind if t not in set(universe)]
                 universe += extra
                 precomputed_tech = _ind
                 print(f"[scan] univers étendu : {len(SCAN_UNIVERSE)} manuels "
-                      f"+ {len(extra)} US découverts = {len(universe)}")
+                      f"+ {len(extra)} {src} = {len(universe)}")
             else:
-                print("[scan] cache univers US absent/périmé — liste manuelle seule")
+                print("[scan] caches univers absents/périmés — liste manuelle seule")
         except Exception as _ue:
             print(f"[scan] univers étendu indisponible : {_ue}")
     # Compat : progress_fn ancienne API → update_fn
@@ -1727,6 +1739,26 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
         screened = _quant_screen(universe, held_tickers, regime=regime,
                                  index_mom=index_mom, precomputed=precomputed_tech)
         print(f"[scan] régime={regime} | {len(screened)}/{len(universe)} candidats")
+
+        # Achetable de façon RENTABLE à notre taille de position ? Les frais BD
+        # imposent un minimum par marché (≈ 130 € Paris, 930 € US, 1 500 €
+        # Xetra, 1 630 € Londres…). L'IA ne valide que ce qu'on peut acheter ;
+        # le reste est montré à part — repéré, pas ignoré.
+        hors_budget = []
+        try:
+            import sizing as _sz
+            _cfg = portfolio.get_autonomous_config()
+            _type = ((_cfg.get("budget_total") or 0)
+                     / max(1, _cfg.get("max_positions") or 4))
+            _taille = max(min(_sz.get_budget_info()["available"], cash),
+                          _type or float(POSITION_BUDGET_MAX))
+            viables, hors_budget = _split_by_fee_viability(screened, _taille)
+            if hors_budget:
+                print(f"[scan] {len(hors_budget)} candidat(s) non rentables à "
+                      f"{_taille:.0f} € de ligne (frais du marché)")
+            screened = viables
+        except Exception as _fe:
+            print(f"[scan] tri par rentabilité indisponible : {_fe}")
 
         # En CRISIS : analyse positions uniquement, aucun nouveau trade
         if regime == "CRISIS":
@@ -1887,7 +1919,12 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                     blocked = _ae2.entry_blocked_reason()
                 except Exception:
                     pass
-                if auto_qty and not blocked:
+                from config import auto_buy_allowed as _aba
+                if auto_qty and not blocked and not _aba(t):
+                    val += ("\n🌍 Marché sans achat automatique (pas encore vérifié "
+                            f"sur BD) — à passer à la main :\n"
+                            f"   /ordre acheter {t} {qty_sugg} limite {current_price}")
+                elif auto_qty and not blocked:
                     val += "\n🤖 Le bot passera cet ordre automatiquement au prochain cycle."
                 elif auto_qty and blocked:
                     val += (f"\n⏸️ Pas d'entrée auto : {blocked}\n"
@@ -1993,6 +2030,18 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             no_opp = "Aucun candidat ne passe le filtre technique aujourd'hui."
             no_opp += "\n\n→ /research TICKER pour un avis ciblé sur un titre précis."
             result_parts.append(no_opp)
+        if hors_budget:
+            lignes_hb = []
+            for c in hors_budget[:5]:
+                info = world_names.get(c["ticker"], {})
+                nom  = info.get("name", c["ticker"])
+                lignes_hb.append(
+                    f"- {nom} ({c['ticker']}) — momentum 12 mois {c.get('mom_12_1', 0):+.0f}%, "
+                    f"RSI {c.get('rsi')} · rentable dès ~{c['min_ligne']:.0f} € de ligne")
+            result_parts.append(
+                "🌍 PÉPITES REPÉRÉES HORS BUDGET (frais du marché trop lourds "
+                "pour la taille de ligne actuelle — non analysées par l'IA)\n"
+                + "\n".join(lignes_hb))
         # Les exclusions sont toujours affichées (même quand il y a des opportunités)
         if rejected:
             result_parts.append("EXCLUS\n" + "\n".join(rejected))
@@ -2028,6 +2077,34 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 
 
 US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
+
+
+_MIN_LIGNE_CACHE: dict = {}
+
+
+def min_ligne_rentable(ticker: str) -> float:
+    """Plus petite ligne (€) dont le gain au TP couvre les frais du MARCHÉ du
+    titre. Calcul par suffixe, mis en cache : 4 000 tickers × un balayage
+    chacun serait trop lent. TTF supposée due sur Paris (prudent)."""
+    import market
+    sfx = market.suffix(ticker) or "US"
+    if sfx not in _MIN_LIGNE_CACHE:
+        from config import min_viable_amount
+        _MIN_LIGNE_CACHE[sfx] = min_viable_amount(
+            ticker, ttf_liable=(sfx == ".PA")) or float("inf")
+    return _MIN_LIGNE_CACHE[sfx]
+
+
+def _split_by_fee_viability(screened: list[dict], taille_eur: float):
+    """(achetables, hors budget) — l'ordre de classement est conservé."""
+    ok, ko = [], []
+    for c in screened:
+        m = min_ligne_rentable(c["ticker"])
+        if m <= taille_eur:
+            ok.append(c)
+        else:
+            ko.append(dict(c, min_ligne=m))
+    return ok, ko
 
 
 

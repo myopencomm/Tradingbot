@@ -33,7 +33,7 @@ JOB_TIMEOUTS = {
     "us_scan":          900,    # même travail sur l'univers US
     "weekly_swap":      900,    # compare chaque position à des candidats
     "monthly_breach":   600,
-    "universe_refresh": 2400,   # ~2500 valeurs, 2 ans d'historique
+    "universe_refresh": 2400,   # ~4000 valeurs mondiales, 2 ans d'historique
     # Le cycle horaire enchaîne sync + annulations + trailing + entrées. Une
     # fois par mois il porte en plus la repose des protections expirées, qui
     # exige DEUX lectures du carnet (voir protection_renewal) : le budget serré
@@ -126,21 +126,21 @@ def _releve_nav():
 
 
 def _refresh_market_universe():
-    """Reconstruit l'univers US investissable (liste officielle Nasdaq Trader
-    → filtre de liquidité → indicateurs), mis en cache pour le scan.
+    """Reconstruit l'univers MONDIAL investissable (screener Yahoo sur les bourses
+    accessibles en ligne chez BD → indicateurs), mis en cache pour le scan.
 
     Silencieux sauf échec : c'est de la maintenance, pas une décision de
     trading. Le scan retombe seul sur la liste manuelle si le cache manque.
     """
     try:
         import market_universe
-        r = market_universe.refresh_us()
+        r = market_universe.refresh_world()
         print(f"[universe] rafraîchi : {r}")
     except Exception as e:
         print(f"[universe] échec du rafraîchissement : {e}")
         telegram_bot.send(
             f"⚠️ Rafraîchissement de l'univers de marché échoué : {e}\n"
-            f"Le scan continue sur la liste manuelle (149 valeurs)."
+            f"Le scan continue sur le dernier univers en cache, sinon la liste manuelle."
         )
 
 
@@ -307,7 +307,11 @@ def run_scheduler():
     # ce qui dégraderait les cours du scan et du suivi de positions.
     # Son budget (large : ~4 min mesurés, mais 2 ans d'historique sur ~2500
     # valeurs) est déclaré avec les autres dans JOB_TIMEOUTS.
-    schedule.every().sunday.at("08:00").do(
+    # 01/10/2026 : QUOTIDIEN (et non plus le dimanche) — les indicateurs
+    # expirent en 3 jours, le scan retombait donc la moitié de la semaine sur
+    # les 149 valeurs manuelles. 07:30, avant toute ouverture : univers
+    # mondial (~4 000 actions, ~5 min).
+    schedule.every().day.at("07:30").do(
         _bounded(_refresh_market_universe, "universe_refresh")
     )
     schedule.every().hour.at(":35").do(_bounded(_hourly_bd_sync, "hourly_bd_sync"))
