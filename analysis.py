@@ -921,9 +921,13 @@ ni ligne sur les positions HOLD.{opps_mission}"""
                 # SOURCE DE DÉCISION UNIQUE — même moteur que scan/gate, mode standard
                 _reg = (regime_data or {}).get("label", "BULL")
                 _idx = (regime_data or {}).get("index_mom_avg", 0.0) or 0.0
-                res = validate_candidate(t, mode="standard", regime=_reg,
-                                         regime_summary=_reg, index_mom=_idx,
-                                         cash=cash, ai=ai)
+                try:
+                    res = validate_candidate(t, mode="standard", regime=_reg,
+                                             regime_summary=_reg, index_mom=_idx,
+                                             cash=cash, ai=ai)
+                except Exception as _ve:
+                    print(f"[briefing] validation {t} impossible : {_ve}")
+                    continue
                 current_price = res.get("price")
                 if not current_price:
                     continue
@@ -1804,9 +1808,16 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             except Exception:
                 pass
             # SOURCE DE DÉCISION UNIQUE — même moteur que briefing/gate, mode standard
-            res = validate_candidate(t, mode="standard", regime=regime,
-                                     regime_summary=regime_summary, index_mom=index_mom,
-                                     item=item, cash=cash, ai=ai)
+            # Une panne IA sur UN candidat ne doit pas faire tomber tout le scan
+            # (plus de secours Opus sur les décisions — garde-fou budget).
+            try:
+                res = validate_candidate(t, mode="standard", regime=regime,
+                                         regime_summary=regime_summary, index_mom=index_mom,
+                                         item=item, cash=cash, ai=ai)
+            except Exception as _ve:
+                print(f"[scan] validation {t} impossible : {_ve}")
+                rejected.append(f"- {t} : analyse IA indisponible ({str(_ve)[:60]})")
+                continue
             current_price = res.get("price")
             if not current_price:
                 continue

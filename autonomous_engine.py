@@ -616,8 +616,12 @@ def run_entry_cycle(send_fn) -> None:
                     send_fn(f"🔍 Contrôle pré-achat autonome — {ticker}…")
                     try:
                         import analysis as _analysis
+                        # Le SEUL appel qui engage de l'argent : le modèle de
+                        # rôle « final » (Opus 5.5), le reste tourne sur Gemini.
+                        from ai_provider import get_provider as _gp
                         res = _analysis.validate_candidate(ticker, mode="confirm",
-                                                           cash=portfolio.get_cash())
+                                                           cash=portfolio.get_cash(),
+                                                           ai=_gp("final"))
                     except Exception as e:
                         send_fn(f"⚠️ {ticker} : contrôle échoué ({e}) — achat annulé par précaution")
                         portfolio.clear_pending_opportunity(ticker)

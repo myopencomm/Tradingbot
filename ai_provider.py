@@ -534,13 +534,45 @@ def get_fallback_chain() -> list[str]:
             and p.strip().lower() != AI_PROVIDER]
 
 
-def get_provider() -> AIProvider:
-    cls = _PROVIDERS.get(AI_PROVIDER)
-    if not cls:
+def role_chain(role: str = "decision") -> list[str]:
+    """Chaîne de providers selon l'ENJEU de l'appel (01/10/2026, budget
+    Anthropic de 10 $/an) :
+      - "final"    : le contrôle pré-achat, juste avant l'ordre — le seul appel
+                     qui engage de l'argent. AI_FINAL_PROVIDER (anthropic :
+                     Opus 5.5, ~0,07 $ l'appel, ~5-15 appels/mois).
+      - "decision" : tout le reste (scan, briefing, revue des SL, swap,
+                     /research). AI_DECISION_PROVIDER (gemini : dernier Pro).
+    Les autres providers configurés restent en secours, dans l'ordre."""
+    if role == "final":
+        primary = os.environ.get("AI_FINAL_PROVIDER", AI_PROVIDER)
+    else:
+        default = "gemini" if os.environ.get("GEMINI_API_KEY") else AI_PROVIDER
+        primary = os.environ.get("AI_DECISION_PROVIDER", default)
+    primary = primary.strip().lower()
+    if primary not in _PROVIDERS:
+        primary = AI_PROVIDER
+    rest = [AI_PROVIDER] + [p.strip().lower()
+                            for p in os.environ.get("AI_FALLBACK_PROVIDERS", "").split(",")]
+    # Garde-fou budget : une panne Gemini ne doit pas basculer TOUS les scans
+    # sur Opus (~0,60 $ le scan). Sans Gemini, les décisions courantes
+    # s'arrêtent — aucun achat ne part sans contrôle final de toute façon.
+    final = os.environ.get("AI_FINAL_PROVIDER", AI_PROVIDER).strip().lower()
+    chain = [primary]
+    for p in rest:
+        if p and p in _PROVIDERS and p not in chain:
+            if role != "final" and p == final and p != primary:
+                continue
+            chain.append(p)
+    return chain
+
+
+def get_provider(role: str = "decision") -> AIProvider:
+    """Provider pour un appel de rôle `role` ("decision" ou "final")."""
+    if not _PROVIDERS.get(AI_PROVIDER):
         raise ValueError(
             f"AI_PROVIDER='{AI_PROVIDER}' inconnu. Valeurs valides: {list(_PROVIDERS)}"
         )
-    fallbacks = get_fallback_chain()
-    if fallbacks:
-        return FallbackProvider([AI_PROVIDER] + fallbacks)
-    return cls()
+    chain = role_chain(role)
+    if len(chain) > 1:
+        return FallbackProvider(chain)
+    return _PROVIDERS[chain[0]]()

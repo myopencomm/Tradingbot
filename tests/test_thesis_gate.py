@@ -106,3 +106,15 @@ def test_jev_absent_pas_d_avis(monkeypatch):
     monkeypatch.setattr(jev, "ask", lambda *a, **k: None)
     _, _, f = thesis_gate.check(FORTE, DONNEES, "Société X")
     assert thesis_gate.jev_review(f, DONNEES, "Société X") is None
+
+
+def test_roles_ia_budget(monkeypatch):
+    """Opus seulement au contrôle final ; jamais en secours des décisions."""
+    import ai_provider
+    monkeypatch.setenv("GEMINI_API_KEY", "x")
+    monkeypatch.setenv("AI_FALLBACK_PROVIDERS", "gemini")
+    monkeypatch.delenv("AI_DECISION_PROVIDER", raising=False)
+    monkeypatch.delenv("AI_FINAL_PROVIDER", raising=False)
+    monkeypatch.setattr(ai_provider, "AI_PROVIDER", "anthropic")
+    assert ai_provider.role_chain("final") == ["anthropic", "gemini"]
+    assert ai_provider.role_chain("decision") == ["gemini"]
