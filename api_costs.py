@@ -35,6 +35,9 @@ _lock = threading.Lock()
 #   sur `gemini-flash-latest` depuis le 20/07, ce raccourci sous-estimait la
 #   facture d'un facteur 5 en entrée.
 PRICING = (
+    # CLI claude sur l'abonnement : aucun coût à l'appel (en premier : le nom
+    # contient aussi « opus » / « haiku »)
+    ("claude-cli",  (0.0,  0.0)),
     # Anthropic
     ("haiku",       (1.0,  5.0)),
     ("sonnet-5",    (2.0, 10.0)),    # Sonnet 5 / 5.5

@@ -376,7 +376,113 @@ class GeminiProvider(AIProvider):
         return self._extract(r)
 
 
+class ClaudeCliProvider(AIProvider):
+    """Claude via la CLI `claude -p`, sur l'ABONNEMENT claude.ai de
+    l'utilisateur — pas de crédit API (01/10/2026 : budget API ≈ 10 $/an).
+
+    Appel dépouillé : prompt système minimal, aucun outil, aucun serveur MCP,
+    aucun réglage utilisateur, aucune session persistée. Sans ces options,
+    chaque appel chargeait 17 000 à 80 000 tokens de contexte Claude Code ;
+    avec, ~400.
+
+    ⚠️ La CLI préfère une clé API à l'abonnement quand elle en trouve une : le
+    bot charge ANTHROPIC_API_KEY depuis .env, donc on la RETIRE de
+    l'environnement du sous-processus — sinon on paierait l'API sans le voir.
+
+    Échec (limite d'usage de l'abonnement, session expirée, délai) → exception :
+    la chaîne de fallback passe aux clés API. Une limite d'usage met la CLI en
+    quarantaine une heure (motif « usage limit » dans _DEFINITIFS).
+    """
+    MODEL       = "claude-opus-5-5"
+    CHEAP_MODEL = "claude-haiku-4-5"
+    SYSTEM = ("Tu es un analyste financier rigoureux. Réponds directement, "
+              "exactement dans le format demandé, sans préambule.")
+    TIMEOUT_S = 600
+    # Motifs d'un dépassement de la limite d'usage de l'abonnement.
+    _LIMITE = ("usage limit", "limit reached", "hit your limit", "rate limit",
+               "out of extra usage", "weekly limit", "session limit")
+
+    def __init__(self):
+        self.binary = cli_path()
+        if not self.binary:
+            raise RuntimeError("CLI claude introuvable")
+        self.effort = os.environ.get("AI_CLI_EFFORT", "high")
+
+    def _env(self) -> dict:
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                            "ANTHROPIC_BASE_URL")}
+        # launchd lance le bot avec un PATH minimal
+        env["PATH"] = os.path.dirname(self.binary) + ":" + env.get("PATH", "/usr/bin:/bin")
+        return env
+
+    def _call(self, prompt: str, model: str, effort: str | None) -> str:
+        import json
+        import subprocess
+        import tempfile
+        cmd = [self.binary, "-p", "--model", model, "--output-format", "json",
+               "--system-prompt", self.SYSTEM, "--tools", "",
+               "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+               "--setting-sources", "", "--no-session-persistence"]
+        if effort:
+            cmd += ["--effort", effort]
+        try:
+            r = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                               timeout=self.TIMEOUT_S, env=self._env(),
+                               cwd=tempfile.gettempdir())
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"CLI claude : délai de {self.TIMEOUT_S}s dépassé")
+        out = (r.stdout or "").strip()
+        try:
+            data = json.loads(out)
+        except Exception:
+            raise RuntimeError(f"CLI claude (code {r.returncode}) : "
+                               f"{(out or r.stderr or '')[:300]}")
+        texte = (data.get("result") or "").strip()
+        if data.get("is_error") or r.returncode != 0 or not texte:
+            low = (texte + " " + str(data.get("subtype", ""))).lower()
+            if any(m in low for m in self._LIMITE):
+                raise RuntimeError(f"CLI claude : usage limit de l'abonnement — {texte[:200]}")
+            raise RuntimeError(f"CLI claude : {texte[:300] or data.get('subtype')}")
+        try:
+            import api_costs
+            u = data.get("usage") or {}
+            # Compté (appels, tokens) mais à 0 $ : l'abonnement ne facture pas
+            # à l'appel. `total_cost_usd` de la CLI est un équivalent API fictif.
+            api_costs.record(f"claude-cli/{model}", u.get("input_tokens", 0) or 0,
+                             u.get("output_tokens", 0) or 0)
+        except Exception as e:
+            print(f"[api costs] suivi CLI impossible : {e}")
+        return texte
+
+    def complete(self, prompt: str, max_tokens: int = 800) -> str:
+        return self._call(prompt, self.MODEL, self.effort)
+
+    def complete_cheap(self, prompt: str, max_tokens: int = 100) -> str:
+        return self._call(prompt, self.CHEAP_MODEL, None)
+
+    def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
+        # Outils coupés : la CLI ne lit pas d'image ici → provider suivant.
+        raise NotImplementedError("CLI claude : pas de vision")
+
+    def complete_cheap_with_image(self, prompt: str, image_bytes: bytes) -> str:
+        raise NotImplementedError("CLI claude : pas de vision")
+
+
+def cli_path() -> str | None:
+    """Chemin de la CLI claude, ou None. AI_USE_CLAUDE_CLI=0 la désactive."""
+    import shutil
+    if os.environ.get("AI_USE_CLAUDE_CLI", "1") == "0":
+        return None
+    for c in (os.environ.get("CLAUDE_CLI_PATH"), shutil.which("claude"),
+              os.path.expanduser("~/.local/bin/claude")):
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+
 _PROVIDERS = {
+    "claude_cli": ClaudeCliProvider,
     "anthropic": AnthropicProvider,
     "openai": OpenAIProvider,
     "mistral": MistralProvider,
@@ -385,6 +491,7 @@ _PROVIDERS = {
 }
 
 PROVIDER_INFO = {
+    "claude_cli": {"free": True, "vision": False, "default_model": "claude-opus-5-5 (abonnement)"},
     "anthropic": {"free": False, "vision": True,  "default_model": "claude-opus-5-5"},
     "openai":    {"free": False, "vision": True,  "default_model": "gpt-4o-mini"},
     "mistral":   {"free": False, "vision": True,  "default_model": "mistral-small-latest"},
@@ -421,7 +528,8 @@ class FallbackProvider(AIProvider):
     # Signatures d'un échec qui ne se réparera pas dans l'heure.
     _DEFINITIFS = ("credit balance", "quota", "billing", "insufficient",
                    "invalid_api_key", "authentication", "permission",
-                   "not_found_error", "model not found")
+                   "not_found_error", "model not found",
+                   "usage limit", "cli claude introuvable")
 
     def __init__(self, chain: list[str]):
         self.chain = chain            # noms, ex ["anthropic", "gemini"]
@@ -481,7 +589,7 @@ class FallbackProvider(AIProvider):
                 continue
             try:
                 result = getattr(self._get(name), method)(*args, **kwargs)
-                if last_err is not None:
+                if last_err is not None and not isinstance(last_err, NotImplementedError):
                     # Bascule constatée SUR CET APPEL (`last_err` n'est posé
                     # que par une vraie exception). Sauter un provider déjà en
                     # quarantaine ne se réjournalise pas : c'était une ligne
@@ -535,34 +643,39 @@ def get_fallback_chain() -> list[str]:
 
 
 def role_chain(role: str = "decision") -> list[str]:
-    """Chaîne de providers selon l'ENJEU de l'appel (01/10/2026, budget
-    Anthropic de 10 $/an) :
-      - "final"    : le contrôle pré-achat, juste avant l'ordre — le seul appel
-                     qui engage de l'argent. AI_FINAL_PROVIDER (anthropic :
-                     Opus 5.5, ~0,07 $ l'appel, ~5-15 appels/mois).
-      - "decision" : tout le reste (scan, briefing, revue des SL, swap,
-                     /research). AI_DECISION_PROVIDER (gemini : dernier Pro).
-    Les autres providers configurés restent en secours, dans l'ordre."""
+    """Chaîne de providers selon l'ENJEU de l'appel.
+
+    Par défaut (01/10/2026) TOUT passe d'abord par la CLI claude — Opus 5.5 sur
+    l'abonnement, sans crédit API. Si elle échoue (limite d'usage, session) :
+      - "final"    (contrôle pré-achat, seul appel qui engage de l'argent) :
+                   → clé API Anthropic (Opus 5.5, ~0,07 $) → Gemini Pro
+      - "decision" (scan, briefing, revues, swap, /research) :
+                   → Gemini Pro. JAMAIS la clé API Anthropic : un scan entier
+                   sur Opus API coûterait ~0,60 $ (budget ≈ 10 $/an).
+    Réglable : AI_FINAL_PROVIDER, AI_DECISION_PROVIDER, AI_USE_CLAUDE_CLI=0.
+    """
+    cli = "claude_cli" if cli_path() else None
+    gemini = "gemini" if os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY else None
     if role == "final":
-        primary = os.environ.get("AI_FINAL_PROVIDER", AI_PROVIDER)
+        primary = os.environ.get("AI_FINAL_PROVIDER") or cli or AI_PROVIDER
+        rest = [AI_PROVIDER]
     else:
-        default = "gemini" if os.environ.get("GEMINI_API_KEY") else AI_PROVIDER
-        primary = os.environ.get("AI_DECISION_PROVIDER", default)
+        primary = os.environ.get("AI_DECISION_PROVIDER") or cli or gemini or AI_PROVIDER
+        rest = [gemini]
+    rest += [p.strip().lower() for p in os.environ.get("AI_FALLBACK_PROVIDERS", "").split(",")]
     primary = primary.strip().lower()
     if primary not in _PROVIDERS:
         primary = AI_PROVIDER
-    rest = [AI_PROVIDER] + [p.strip().lower()
-                            for p in os.environ.get("AI_FALLBACK_PROVIDERS", "").split(",")]
-    # Garde-fou budget : une panne Gemini ne doit pas basculer TOUS les scans
-    # sur Opus (~0,60 $ le scan). Sans Gemini, les décisions courantes
-    # s'arrêtent — aucun achat ne part sans contrôle final de toute façon.
-    final = os.environ.get("AI_FINAL_PROVIDER", AI_PROVIDER).strip().lower()
     chain = [primary]
     for p in rest:
-        if p and p in _PROVIDERS and p not in chain:
-            if role != "final" and p == final and p != primary:
-                continue
-            chain.append(p)
+        if not p or p not in _PROVIDERS or p in chain:
+            continue
+        # Garde-fou budget : la clé API Anthropic ne sert QUE le contrôle final.
+        if role != "final" and p == AI_PROVIDER == "anthropic":
+            continue
+        if p == "claude_cli" and not cli:
+            continue
+        chain.append(p)
     return chain
 
 

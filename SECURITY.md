@@ -105,8 +105,16 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
 
 ### Exécution & entrées
 - **Aucun** `eval`, `exec`, `os.system`, `shell=True`, ni `pickle`.
-- Les appels `subprocess` (git) passent leurs arguments en **liste** (pas de
-  shell) — pas d'injection de commande possible.
+- Les appels `subprocess` (git, CLI `claude`) passent leurs arguments en
+  **liste** (pas de shell) — pas d'injection de commande possible. Le prompt
+  de la CLI `claude` passe par **stdin**, jamais par la ligne de commande.
+- La CLI `claude` (provider `claude_cli`, abonnement claude.ai) tourne **sans
+  outils** (`--tools ""`), **sans serveur MCP** (`--strict-mcp-config`), sans
+  réglages utilisateur ni session persistée, depuis le dossier temporaire :
+  le modèle ne peut ni lire de fichier ni exécuter de commande, il ne fait que
+  répondre au texte reçu. `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` sont
+  **retirés de son environnement** : sinon la CLI facturerait la clé API au lieu
+  de l'abonnement.
 - Les entrées Telegram sont parsées en tokens ; les montants/quantités sont
   convertis via `float()`/`int()` sous `try/except`.
 - Les ordres réels exigent une **double confirmation** (`/ordre …` → récap →
@@ -161,7 +169,8 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
 | Destinataire | Données envoyées |
 |---|---|
 | Telegram | Vos messages, analyses, graphiques (chiffré en transit) |
-| Provider IA | Contexte de marché, tickers, votre contexte personnel de trading |
+| Provider IA (CLI claude, API Anthropic, Gemini) | Contexte de marché, tickers, votre contexte personnel de trading, thèse d'achat |
+| TypeSafe (Jev), contre-avis | Nom de la société, extraits de recherche publics, thèse et preuves d'un achat envisagé — aucun montant du portefeuille |
 | Yahoo Finance | Tickers interrogés (aucune donnée personnelle) |
 | TypeSafe (Jev) | Nom et ticker des positions détenues, titres et résumés d'articles publics — **aucun montant, aucune quantité, aucun PRU** (`news_alert.py`). Clé `TYPESAFE_API_KEY` dans `.env` |
 | Bourse Direct | Vos identifiants (session) + ordres — via HTTPS, comme le site |

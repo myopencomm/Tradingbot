@@ -116,5 +116,6 @@ def test_roles_ia_budget(monkeypatch):
     monkeypatch.delenv("AI_DECISION_PROVIDER", raising=False)
     monkeypatch.delenv("AI_FINAL_PROVIDER", raising=False)
     monkeypatch.setattr(ai_provider, "AI_PROVIDER", "anthropic")
+    monkeypatch.setenv("AI_USE_CLAUDE_CLI", "0")
     assert ai_provider.role_chain("final") == ["anthropic", "gemini"]
     assert ai_provider.role_chain("decision") == ["gemini"]
