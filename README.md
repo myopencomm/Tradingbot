@@ -564,6 +564,7 @@ Le mode Autonome permet au bot de gérer un **budget isolé** en totale indépen
 - **SL/TP obligatoires** — aucune entrée sans protection Expert BD
 - **Playwright requis pour les entrées** — si la session expire, le bot ne peut plus entrer mais les positions existantes restent protégées par leurs ordres Expert sur BD
 - **Marché ouvert uniquement** — aucune entrée en dehors des heures 9h05–17h35
+- **Couverture BD** — la taille est plafonnée pour que **montant + frais** reste sous le cash moins `BD_COVERAGE_MARGIN_PCT` (1,5 %) : BD exige une couverture un peu supérieure au coût réel et refusait sinon l'ordre « Couverture insuffisante » (ABBV le 24/09, KBC.BR le 01/10/2026). Le balayage du reliquat respecte le même plafond. Si BD refuse malgré tout, le message Telegram donne son motif réel (le second endpoint de confirmation n'est plus tenté sur un refus 403, il masquait le motif sous « une erreur est intervenue ») et propose la commande avec un titre de moins
 - **Balayage du reliquat de cash** — si le cash restant après l'achat tombe sous `CASH_SWEEP_MIN_LEFTOVER` (500 €), la position est agrandie pour l'absorber : ce fond ne pouvait financer aucun autre trade. ⚠️ Ce mécanisme **prime sur le plafond de taille** et augmente donc la perte au SL dans la même proportion — c'est un arbitrage assumé entre capital déployé et respect strict du sizing par le risque. La nouvelle perte au SL est annoncée dans le message d'achat ; `CASH_SWEEP_MIN_LEFTOVER=0` désactive
 - **Aucune analyse IA quand toutes les places sont prises** — dès que les emplacements autonomes sont occupés (positions + ordres d'achat en attente), les analyses IA *planifiées* sont sautées : scan US de 16h et recherche de candidats du briefing. Elles ne pourraient produire que des opportunités inachetables. Le bot le dit une fois par jour dans Telegram, plutôt que de rester silencieux
 - **Annulation auto des ordres d'entrée périmés** — un ordre d'achat limite non exécuté à la clôture du marché du titre est **annulé sur BD** (vérifié à chaque cycle d'entrée + sync horaire). Un limite qui traîne ne se remplit que quand le cours retombe à travers — c'est-à-dire quand la thèse momentum est déjà morte (anti-sélection). Idem si une validation ultérieure rend EXCLUS sur le même titre : l'ordre en attente est annulé immédiatement
@@ -1794,6 +1795,7 @@ TRAIL_MIN_STEP_PCT=1      # gain mini du SL pour justifier annuler/reposer
 POSITION_BUDGET_PCT=50    # % du cash investi par nouvelle position (suggestions /scan)
 POSITION_BUDGET_MAX=1000  # plafond en € par position (à adapter à votre capital)
 CASH_SWEEP_MIN_LEFTOVER=500  # sous ce reliquat, la position est agrandie (0 = off)
+BD_COVERAGE_MARGIN_PCT=1.5    # marge sous le cash BD : montant + frais ≤ cash × (1 − marge)
 
 RSI_ENTRY_MIN=35          # zone d'entrée saine (pullback dans la tendance)
 RSI_ENTRY_MAX=65          # au-delà : on attend le repli

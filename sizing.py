@@ -95,7 +95,7 @@ def compute_position_size(ticker: str, entry: float, sl: float,
     reason (str : pourquoi qty vaut 0).
     """
     from config import (RISK_PER_TRADE_PCT, MAX_POSITION_PCT, VOL_SCALE_TRIGGER,
-                        CASH_SWEEP_MIN_LEFTOVER, order_fees)
+                        CASH_SWEEP_MIN_LEFTOVER, BD_COVERAGE_MARGIN_PCT, order_fees)
     import lessons
     import correlation_risk
 
@@ -143,6 +143,13 @@ def compute_position_size(ticker: str, entry: float, sl: float,
     if qty * entry_eur > cost_cap:
         qty = int(cost_cap / entry_eur)
 
+    # Ce que BD acceptera vraiment : montant + frais sous le cash, moins une
+    # marge de couverture. Comparer le seul montant au cash faisait refuser
+    # l'ordre par BD (« Couverture insuffisante » : ABBV 24/09, KBC.BR 01/10).
+    cash_cap = available * (1 - BD_COVERAGE_MARGIN_PCT / 100)
+    while qty >= 1 and qty * entry_eur + order_fees(ticker, qty * entry_eur) > cash_cap:
+        qty -= 1
+
     # ── Balayage du reliquat de cash ─────────────────────────────────────────
     # Un fond de cash trop petit pour financer un second trade ne travaille pas.
     # S'il reste moins de CASH_SWEEP_MIN_LEFTOVER après l'achat, on agrandit la
@@ -154,12 +161,12 @@ def compute_position_size(ticker: str, entry: float, sl: float,
     swept_from = 0
     if qty >= 1 and CASH_SWEEP_MIN_LEFTOVER > 0 and entry_eur > 0:
         base_cost = qty * entry_eur
-        leftover  = available - base_cost - order_fees(ticker, base_cost)
+        leftover  = cash_cap - base_cost - order_fees(ticker, base_cost)
         if 0 < leftover < CASH_SWEEP_MIN_LEFTOVER:
             extra = 0
             while True:
                 trial = (qty + extra + 1) * entry_eur
-                if trial + order_fees(ticker, trial) > available:
+                if trial + order_fees(ticker, trial) > cash_cap:
                     break
                 extra += 1
             if extra:

@@ -407,8 +407,19 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         )
         if not conf:
             raw = bd_orders._last_raw.get("data", {}) or {}
+            msg = raw.get("message", "?")
+            if "couverture" in msg.lower():
+                send_fn(
+                    f"⚠️ {ticker} : refusé par BD — {msg}\n"
+                    f"Le cash ({portfolio.get_cash():.2f}€) ne couvre pas "
+                    f"{qty} titres + frais avec la marge exigée par BD. Rien "
+                    f"n'est parti au marché.\n"
+                    f"Commande manuelle avec un titre de moins :\n"
+                    f"/ordre acheter {ticker} {qty - 1} expert {entry} {sl} {tp}"
+                )
+                return False
             send_fn(
-                f"⚠️ {ticker} : confirmation échouée ({raw.get('message', '?')})\n"
+                f"⚠️ {ticker} : confirmation échouée ({msg})\n"
                 f"Commande manuelle :\n"
                 f"/ordre acheter {ticker} {qty} expert {entry} {sl} {tp}"
             )

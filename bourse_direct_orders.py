@@ -537,11 +537,21 @@ def confirm_order_auto(page, order_id: str, is_buy_with_smart: bool) -> dict | N
     """
     primary, secondary = ((send_order, execute_strategy) if is_buy_with_smart
                           else (execute_strategy, send_order))
+    global _last_raw
     res = primary(page, order_id)
     if res:
         return res
+    primary_raw = _last_raw
+    # Un refus MÉTIER de BD (403 : couverture insuffisante…) vaut pour les deux
+    # endpoints : le secours ne ferait que masquer le vrai motif sous un
+    # « une erreur est intervenue » générique (KBC.BR, 01/10/2026).
+    if primary_raw.get("status") == 403:
+        return None
     print("[BD Orders] confirmation primaire échouée — tentative endpoint alternatif")
-    return secondary(page, order_id)
+    res = secondary(page, order_id)
+    if not res:
+        _last_raw = primary_raw     # le motif utile est celui de l'endpoint attendu
+    return res
 
 
 def execute_strategy(page, order_id: str) -> dict | None:

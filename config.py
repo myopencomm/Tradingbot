@@ -232,6 +232,11 @@ POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "1000"))
 # risque (RISK_PER_TRADE_PCT) n'est donc plus respecté sur un trade balayé. Le
 # nouveau risque est annoncé dans le message d'achat. 0 = désactivé.
 CASH_SWEEP_MIN_LEFTOVER = float(os.getenv("CASH_SWEEP_MIN_LEFTOVER", "500"))
+# Marge laissée sous le cash BD à l'achat. BD exige une « couverture » un peu
+# au-dessus de montant + frais : KBC.BR le 01/10/2026 (achat + frais = 99.3 %
+# du cash) et ABBV le 24/09 ont été refusés « Couverture insuffisante », PFE
+# accepté à 99.0 %. 1.5 % ≈ 17 € sur 1 150 €.
+BD_COVERAGE_MARGIN_PCT = float(os.getenv("BD_COVERAGE_MARGIN_PCT", "1.5"))
 
 # ── Frais Bourse Direct — BARÈME RÉEL, PAR ORDRE ──────────────────────────────
 # Tarifs publics BD (boursedirect.fr/fr/bourse/tarifs), VÉRIFIÉS au centime près
