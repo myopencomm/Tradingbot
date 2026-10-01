@@ -326,6 +326,21 @@ def _score_french_texts(texts: list[str]) -> int | None:
     """Score sentiment -100/+100 de textes français via le modèle IA économique."""
     if not texts:
         return None
+    # Jev d'abord : jugement typé sur du texte, son point fort — et sans coût
+    # de modèle de langage. Échelle 0-4 ramenée à -100/+100.
+    try:
+        import jev
+        ans = jev.ask({"messages": texts[:10]}, {"s": {
+            "type": "score",
+            "instructions": "Overall investor sentiment expressed in `messages` "
+                            "(French stock-forum posts) about the stock they discuss.",
+            "criteria": ["very bearish", "bearish", "neutral", "bullish", "very bullish"]}},
+            label="sentiment")
+        v = jev.score(ans, "s")
+        if v is not None:
+            return int(round((v - 2) * 50))
+    except Exception as e:
+        print(f"⚠️ Score sentiment Jev: {e}")
     try:
         from ai_provider import get_provider
         joined = "\n".join(f"- {t}" for t in texts[:10])

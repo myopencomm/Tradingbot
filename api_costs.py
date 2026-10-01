@@ -37,11 +37,14 @@ _lock = threading.Lock()
 PRICING = (
     # Anthropic
     ("haiku",       (1.0,  5.0)),
+    ("sonnet-5",    (2.0, 10.0)),    # Sonnet 5 / 5.5
     ("sonnet",      (3.0, 15.0)),
     ("fable",      (10.0, 50.0)),
     ("mythos",     (10.0, 50.0)),
+    ("opus-5-5",    (4.0, 20.0)),    # Opus 5.5 — modèle principal depuis le 01/10/2026
     ("opus",        (5.0, 25.0)),
     # Google — le plus spécifique d'abord
+    ("pro",         (2.0, 12.0)),    # Gemini 3.x Pro (≤200k) — estimation, la console fait foi
     ("flash-lite",  (0.3,  2.5)),
     ("flash",       (1.5,  7.5)),
     ("gemini",      (1.25, 10.0)),   # Gemini Pro

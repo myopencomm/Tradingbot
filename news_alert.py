@@ -127,26 +127,13 @@ def classify(company: str, articles: list[dict]) -> dict[str, dict]:
                             "price of `company` down: weak results, guidance cut, analyst "
                             "downgrade, lawsuit, regulatory action, recall, executive departure, "
                             "dilution, or an explained share drop?"}
-    body = {"model": "jev-latest", "state": state, "questions": questions}
-    for essai in range(3):
-        try:
-            r = requests.post(JEV_URL, json=body, timeout=30,
-                              headers={"Authorization": f"Bearer {key}"})
-            if r.status_code in (429, 529):
-                time.sleep(2 ** essai * 2)
-                continue
-            if r.status_code != 200:
-                print(f"[news] Jev HTTP {r.status_code} : {r.text[:200]}")
-                return {}
-            ans = r.json().get("answers", {})
-            return {a["id"]: {"about": ans.get(f"about{i}", {}).get("noul", 0.0),
-                              "negative": ans.get(f"neg{i}", {}).get("noul", 0.0)}
-                    for i, a in enumerate(articles)}
-        except Exception as e:
-            print(f"[news] Jev : {e}")
-            return {}
-    print("[news] Jev saturé, passage abandonné")
-    return {}
+    import jev
+    ans = jev.ask(state, questions, label="news")
+    if ans is None:
+        return {}
+    return {a["id"]: {"about": jev.noul(ans, f"about{i}") or 0.0,
+                      "negative": jev.noul(ans, f"neg{i}") or 0.0}
+            for i, a in enumerate(articles)}
 
 
 # ── Messages ──────────────────────────────────────────────────────────────────

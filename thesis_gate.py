@@ -137,3 +137,44 @@ def resume(f: dict) -> str:
     """Thèse mémorisée : la vraie, pas l'en-tête société (bug du 01/10/2026,
     où `val.splitlines()[0]` stockait « KBC Group NV — Financial Services »)."""
     return (f.get("these") or "").strip()
+
+
+# Seuil de veto : à ≤ 0.2, Jev dit clairement « non » — on agit sur ce non.
+# Entre 0.2 et 0.8, avis incertain : il ne bloque pas (la porte du code a déjà
+# exigé thèse + preuves).
+JEV_VETO = float(os.getenv("JEV_THESIS_VETO", "0.2"))
+
+
+def jev_review(f: dict, donnees: str, societe: str) -> dict | None:
+    """Contre-avis Jev sur une thèse ACHAT déjà passée par `check`.
+
+    Deux questions étroites, sur du texte (le terrain où Jev est fiable) :
+      - les faits cités figurent-ils vraiment dans les données de recherche ?
+      - la thèse est-elle une raison propre à la société, pas du générique ?
+    Renvoie {"ancrage": p, "specifique": p, "veto": motif|None}, ou None si
+    Jev n'a pas répondu.
+    """
+    import jev
+    state = {
+        "company": societe,
+        "research": (donnees or "")[:6000],
+        "analysis": {"thesis": f.get("these", ""), "why_now": f.get("maintenant", ""),
+                     "evidence": f.get("preuves", [])},
+    }
+    ans = jev.ask(state, {
+        "ancrage": {"type": "noul", "instructions":
+            "Are the facts cited in `analysis.evidence` actually stated in `research` "
+            "(news, web snippets, analyst data), rather than absent from it?"},
+        "specifique": {"type": "noul", "instructions":
+            "Does `analysis.thesis` give a reason specific to `company` for its share "
+            "price to rise, rather than generic momentum, sector or market commentary?"},
+    }, label="thesis")
+    p_anc, p_spec = jev.noul(ans, "ancrage"), jev.noul(ans, "specifique")
+    if p_anc is None and p_spec is None:
+        return None
+    veto = None
+    if p_anc is not None and p_anc <= JEV_VETO:
+        veto = f"preuves absentes des données (p={p_anc:.2f})"
+    elif p_spec is not None and p_spec <= JEV_VETO:
+        veto = f"thèse générique, rien de propre à la société (p={p_spec:.2f})"
+    return {"ancrage": p_anc, "specifique": p_spec, "veto": veto}

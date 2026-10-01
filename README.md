@@ -151,8 +151,8 @@ Votre Chat ID limite le bot à vous seul — il refuse tous les autres utilisate
 | Provider | Gratuit ? | Modèle par défaut | Inscription |
 |---|---|---|---|
 | **groq** | ✅ **Oui — recommandé** | llama-3.3-70b-versatile | [console.groq.com](https://console.groq.com) |
-| **gemini** | ✅ **Oui** | gemini-1.5-flash | [aistudio.google.com](https://aistudio.google.com) |
-| `anthropic` | Payant | claude-sonnet-4-6 | [console.anthropic.com](https://console.anthropic.com) |
+| **gemini** | ✅ Tier gratuit limité | gemini-pro-latest (dernier Pro — 3.1 Pro au 01/10/2026), Flash en repli | [aistudio.google.com](https://aistudio.google.com) |
+| `anthropic` | Payant | claude-opus-5-5 (effort xhigh) pour les décisions, Haiku 4.5 pour les tâches mineures | [console.anthropic.com](https://console.anthropic.com) |
 | `openai` | Payant | gpt-4o-mini | [platform.openai.com](https://platform.openai.com) |
 | `mistral` | Payant | mistral-small-latest | [console.mistral.ai](https://console.mistral.ai) |
 
@@ -225,6 +225,8 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Surveillance 4×/jour + sync horaire** | Checks 9h / 12h / 15h / 17h (alertes SL/TP) + sync BD silencieux chaque heure : détection automatique des exécutions |
 | **Séance US prolongée** | Wall Street tournant jusqu'à 22h Paris, le bot prolonge la surveillance des positions US (checks 18h / 20h / 21h40, alertes seules) et lance un **scan US** à 16h — plus seulement au briefing de 9h05 (`US_EXTENDED_HOURS`) |
 | **Pas d'achat sans analyse forte** | La charge de la preuve est sur l'ACHAT. L'IA doit écrire `VERDICT : ACHAT`, une thèse spécifique à la société, le « pourquoi maintenant », **deux preuves** chiffrées ou datées, le risque principal, un niveau d'invalidation et une conviction de 1 à 5. `thesis_gate.py` vérifie dans le code : verdict explicite (une réponse sans verdict n'est plus un achat), thèse non creuse, au moins une preuve **retrouvée dans les données de recherche** (news, web, catalyseurs, analystes — une preuve absente des données peut être inventée), conviction ≥ `MIN_CONVICTION` (4). Sinon : EXCLUS, motif affiché. Faute d'information sur la société, l'IA répond `EXCLUS — information insuffisante`. S'applique au scan, au briefing et au contrôle pré-achat ; la réponse IA complète est écrite au log (`[validate]`) et la vraie thèse est mémorisée (avant : l'en-tête « Société — Secteur »). Origine : KBC.BR, 01/10/2026, achat validé sans aucune raison, 8 candidats sur 8 validés ce matin-là |
+| **Modèle adapté à l'enjeu** | **Décisions** (validation d'achat, contrôle pré-achat, briefing, revue des SL, swap, `/research`) : **Claude Opus 5.5**, effort `AI_EFFORT_DECISION` (`xhigh` par défaut, ≈ 0,10 $ et 60-90 s par analyse), secours **Gemini dernier Pro** (`gemini-pro-latest`). **Tâches mineures** (résumés, blurb d'achat, description de graphique, texte du scan) : **Haiku 4.5**, secours Gemini Flash. Opus 5.5 réfléchit toujours et sa réflexion compte dans le plafond de sortie : le bot lit les blocs texte (et non `content[0]`) et laisse 16k tokens de marge ; un refus du modèle bascule sur le secours |
+| **Jev, second juge** | `jev.py` (TypeSafe, clé `TYPESAFE_API_KEY`) : jugements typés sur du texte, son point fort. **Contre-avis sur chaque thèse ACHAT** passée par la porte du code — les preuves figurent-elles dans les données de recherche ? la thèse est-elle propre à la société ? Veto si l'une des deux probabilités ≤ `JEV_THESIS_VETO` (0,2) ; jamais il ne transforme un EXCLUS en ACHAT ; Jev absent → la porte du code suffit. Aussi : **score de sentiment des forums** (avant : modèle de langage) et tri des news des positions détenues |
 | **Recherche réparée** | Les news Yahoo n'arrivaient plus à l'IA (nouveau format yfinance : **zéro** titre lu sur tous les titres) — lues à nouveau, avec date et résumé. La recherche DuckDuckGo, bridée par les rafales d'un scan (HTTP 202), espace ses requêtes et réessaie au lieu de rendre une recherche vide. Elle cherche sur le nom complet de la société, pas le seul ticker |
 | **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
 | **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
@@ -294,7 +296,8 @@ TradingBot/
 ├── prices.py                Prix temps réel + indicateurs techniques (RSI, momentum, volume)
 ├── ai_provider.py           Abstraction multi-providers avec vision (5 providers)
 ├── research.py              Recherche web DuckDuckGo : marché, actions, catalyseurs imminents
-├── thesis_gate.py           Porte d'achat : thèse + 2 preuves retrouvées dans les données, sinon EXCLUS
+├── thesis_gate.py           Porte d'achat : thèse + 2 preuves retrouvées dans les données, sinon EXCLUS ; contre-avis Jev
+├── jev.py                   Client Jev (TypeSafe) : jugements typés — veto thèse, sentiment, tri des news
 ├── gmail_sync.py            Sync IMAP Gmail : détecte les ordres BD finalisés et clôture auto
 ├── stats.py                 Historique des trades, P&L, win rate, profit factor
 │
@@ -1612,7 +1615,7 @@ Après la sortie au SL de JNJ (acheté au 5ᵉ jour d'une hausse de +4,3 %, au p
 
 ### 2026-07-17 — Coûts API réduits (~60-70%) sans toucher à la décision
 - **Résumé macro automatique** : `macro_analysis.md` (47 Ko ≈ 12k tokens) était injecté ENTIER dans chaque revue de positions (scan + briefing) — 60-70% de la facture API. Au-delà de 6 000 caractères, il est désormais **condensé (~2 500 chars) par le modèle cheap**, avec cache sur date de modification (regénéré uniquement quand le fichier change). Un dump de 47 Ko dilue l'attention du modèle : le condensé sert *mieux* la décision. En cas d'échec IA → texte intégral (jamais dégradé)
-- **Lecture de graphique sur le modèle cheap** (`complete_cheap_with_image`, Haiku côté Anthropic) : décrire chandeliers/supports/résistances est une tâche descriptive, pas un jugement — le verdict ACHAT/EXCLUS reste intégralement sur le modèle principal (Sonnet)
+- **Lecture de graphique sur le modèle cheap** (`complete_cheap_with_image`, Haiku côté Anthropic) : décrire chandeliers/supports/résistances est une tâche descriptive, pas un jugement — le verdict ACHAT/EXCLUS reste intégralement sur le modèle principal (Opus 5.5 depuis le 01/10/2026)
 - Combiné au plancher cash du scan US (ci-dessous), la facture attendue passe de ~10$/mois à ~3-4$/mois
 
 ### 2026-07-17 — Scan US auto : sauté quand aucun achat n'est possible
@@ -1808,6 +1811,8 @@ MIN_SL_PCT=3              # SL jamais plus serré (bruit du titre)
 MAX_SL_PCT=10             # au-delà : titre trop volatil → exclu
 MIN_RR=1.5                # TP ≥ 1.5× la distance du SL
 MIN_CONVICTION=4          # conviction IA minimale (1-5) pour un ACHAT — thesis_gate
+AI_EFFORT_DECISION=xhigh  # effort d'Opus 5.5 sur les décisions (low|medium|high|xhigh|max)
+JEV_THESIS_VETO=0.2       # veto Jev sur une thèse ACHAT si p(preuves ancrées) ou p(spécifique) ≤ ce seuil
 ENTRY_MIN_MOM_1M=-5       # plancher de momentum 1 mois à l'entrée (backtesté : -5 > -12 > 0)
 ENTRY_CRASH_MOM_1M=-12    # veto dur : un effondrement n'est jamais un repli
 EARNINGS_VETO_DAYS=6      # EXCLUS si résultats < N jours (gap non couvert par le SL) ; au-delà, non bloquant

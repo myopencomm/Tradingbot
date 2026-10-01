@@ -538,6 +538,16 @@ VERDICT : ACHAT
         verdict, reason = "EXCLUS", f"analyse insuffisante — {gate_reason}"
         print(f"[validate] {ticker} : ACHAT refusé par la porte — {gate_reason}")
 
+    # ── Contre-avis Jev : un second juge, indépendant du modèle qui a écrit
+    # la thèse. Veto seul (jamais il ne transforme un EXCLUS en ACHAT) ; avis
+    # absent (clé, panne) → la porte du code suffit.
+    jev_avis = None
+    if verdict == "ACHAT":
+        jev_avis = thesis_gate.jev_review(fields, donnees, company_label)
+        if jev_avis and jev_avis.get("veto"):
+            verdict, reason = "EXCLUS", f"contre-avis Jev — {jev_avis['veto']}"
+            print(f"[validate] {ticker} : ACHAT refusé par Jev — {jev_avis}")
+
     entry_m = re.search(r"Entr[ée]e?\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
     sl_m    = re.search(r"\bSL\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
     tp_m    = re.search(r"\bTP\s*:?\s*[$€£]?\s*(\d+(?:[.,]\d+)?)", val)
@@ -620,7 +630,7 @@ VERDICT : ACHAT
         "company_name": company_name, "company_sector": company_sector,
         "company_label": company_label, "tech": tech, "pctx": pctx, "funds": funds,
         "thesis": thesis, "evidence": fields.get("preuves", []),
-        "conviction": fields.get("conviction"),
+        "conviction": fields.get("conviction"), "jev": jev_avis,
         "context": _entry_ctx(tech, pctx, thesis, mode, regime),
     })
     return out
@@ -1729,7 +1739,7 @@ CONTEXTE MARCHÉ
 RÉGIME : CRISE (VIX > 40). Aucun nouveau trade.
 TÂCHE : Pour chaque position, évalue le risque de poursuite de la baisse.
 Donner : MAINTENIR / RÉDUIRE EXPOSITION / VENDRE — raison en 5 mots."""
-            portf_summary = _strip_markdown(ai.complete(portf_prompt, max_tokens=300))
+            portf_summary = _strip_markdown(ai.complete_cheap(portf_prompt, max_tokens=600))
             send_fn(
                 f"⛔ SCAN SUSPENDU — RÉGIME CRISE\n\n"
                 f"Nouveau trade impossible en panique de marché (VIX > 40).\n"
@@ -1776,7 +1786,7 @@ CONTEXTE MARCHÉ
 
 TÂCHE : Pour chaque position en portefeuille, donne 1 ligne :
 MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
-        portfolio_summary = _strip_markdown(ai.complete(portf_prompt, max_tokens=300))
+        portfolio_summary = _strip_markdown(ai.complete_cheap(portf_prompt, max_tokens=600))
 
         # ── Étape 2 : validation IA des top candidats filtrés ────────────────
         top_candidates = screened[:8]

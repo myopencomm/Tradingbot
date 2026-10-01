@@ -46,8 +46,22 @@ class AIProvider(ABC):
 
 
 class AnthropicProvider(AIProvider):
-    DEFAULT_MODEL = "claude-sonnet-4-6"
-    CHEAP_MODEL   = "claude-haiku-4-5-20251001"
+    # Opus 5.5 pour toutes les décisions (choix de l'utilisateur, 01/10/2026),
+    # Haiku pour les micro-tâches descriptives (lecture de graphique).
+    DEFAULT_MODEL = "claude-opus-5-5"
+    CHEAP_MODEL   = "claude-haiku-4-5"
+    # Opus 5.5 réfléchit toujours (thinking non désactivable) et cette réflexion
+    # compte dans max_tokens : un plafond de 400-900 tokens la tronquerait avant
+    # le texte. Plancher large — seuls les tokens réellement produits sont payés.
+    _MIN_OUTPUT = 16000
+    # DEUX NIVEAUX (01/10/2026) :
+    #   complete()        → DÉCISIONS (achat, contrôle pré-achat, briefing,
+    #                        revue des SL, swap, /research) : Opus 5.5, effort
+    #                        AI_EFFORT_DECISION (xhigh par défaut — le plus
+    #                        haut utile avant `max`).
+    #   complete_cheap()  → tâches mineures (résumés, blurb, description de
+    #                        graphique, texte du scan) : Haiku 4.5.
+    _EFFORT = os.getenv("AI_EFFORT_DECISION", "xhigh")
 
     def __init__(self):
         import anthropic
@@ -77,14 +91,31 @@ class AnthropicProvider(AIProvider):
             # TypeError et laissé le suivi des coûts mort en silence.
             print(f"[api costs] suivi anthropic impossible : {e}")
 
+    @staticmethod
+    def _text(msg) -> str:
+        """Texte de la réponse. `content[0]` n'est plus forcément du texte : les
+        modèles qui réfléchissent renvoient d'abord un bloc `thinking`. Un refus
+        (stop_reason « refusal ») lève : la chaîne de fallback prend le relais."""
+        if getattr(msg, "stop_reason", None) == "refusal":
+            raise RuntimeError("refus du modèle (stop_reason=refusal)")
+        txt = "".join(getattr(b, "text", "") or "" for b in msg.content
+                      if getattr(b, "type", "") == "text").strip()
+        if not txt:
+            raise RuntimeError(f"réponse sans texte (stop_reason={msg.stop_reason})")
+        return txt
+
+    def _main_kwargs(self, max_tokens: int) -> dict:
+        return {"max_tokens": max(max_tokens, self._MIN_OUTPUT),
+                "output_config": {"effort": self._EFFORT}}
+
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
         msg = self.client.messages.create(
             model=self.model,
-            max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
+            **self._main_kwargs(max_tokens),
         )
         self._track(self.model, msg)
-        return msg.content[0].text
+        return self._text(msg)
 
     def complete_cheap(self, prompt: str, max_tokens: int = 100) -> str:
         msg = self.client.messages.create(
@@ -93,7 +124,7 @@ class AnthropicProvider(AIProvider):
             messages=[{"role": "user", "content": prompt}],
         )
         self._track(self.CHEAP_MODEL, msg)
-        return msg.content[0].text
+        return self._text(msg)
 
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
         return self._vision(self.model, prompt, image_bytes)
@@ -106,16 +137,18 @@ class AnthropicProvider(AIProvider):
 
     def _vision(self, model: str, prompt: str, image_bytes: bytes) -> str:
         b64 = base64.standard_b64encode(image_bytes).decode()
+        extra = (self._main_kwargs(1000) if model == self.model
+                 else {"max_tokens": 1000})
         msg = self.client.messages.create(
             model=model,
-            max_tokens=1000,
+            **extra,
             messages=[{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}},
                 {"type": "text", "text": prompt},
             ]}],
         )
         self._track(model, msg)
-        return msg.content[0].text
+        return self._text(msg)
 
 
 class OpenAIProvider(AIProvider):
@@ -216,9 +249,13 @@ class GroqProvider(AIProvider):
 
 
 class GeminiProvider(AIProvider):
-    DEFAULT_MODEL = "gemini-flash-latest"   # alias evergreen (fallback si découverte KO)
-    # Ordre de préférence — un flash récent, stable de préférence.
-    _PREF = ["gemini-flash-latest", "gemini-3-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
+    # Le MEILLEUR modèle accessible, pas le moins cher, même en secours
+    # (choix de l'utilisateur, 01/10/2026 : Flash validait des achats sans
+    # thèse). `gemini-pro-latest` suit le dernier Pro (3.1 Pro au 01/10/2026).
+    DEFAULT_MODEL = "gemini-pro-latest"
+    CHEAP_MODEL = "gemini-flash-latest"
+    _PREF = ["gemini-pro-latest", "gemini-3.1-pro-preview", "gemini-2.5-pro",
+             "gemini-flash-latest", "gemini-2.5-flash"]
 
     def __init__(self):
         import google.generativeai as genai
@@ -231,6 +268,8 @@ class GeminiProvider(AIProvider):
         # available", cause de l'échec gemini-2.5-flash du 19/07).
         forced = AI_MODEL if AI_PROVIDER == "gemini" else ""
         self.model = genai.GenerativeModel(forced or self._discover(genai))
+        # Tâches mineures : Flash. Le Pro reste réservé aux décisions.
+        self.cheap_model = genai.GenerativeModel(self.CHEAP_MODEL)
 
     def _discover(self, genai) -> str:
         try:
@@ -242,9 +281,10 @@ class GeminiProvider(AIProvider):
         for pref in self._PREF:
             if pref in avail:
                 return pref
-        # sinon : un modèle 'flash' quelconque, en évitant preview/exp/thinking
-        flash = sorted((n for n in avail if "flash" in n),
-                       key=lambda n: ("preview" in n, "exp" in n, "thinking" in n, len(n)))
+        # sinon : un Pro de préférence, puis un Flash, en évitant exp/tts/image
+        flash = sorted((n for n in avail if ("pro" in n or "flash" in n)
+                        and not any(x in n for x in ("tts", "image", "exp", "lite"))),
+                       key=lambda n: ("pro" not in n, "preview" in n, len(n)))
         chosen = flash[0] if flash else (avail[0] if avail else self.DEFAULT_MODEL)
         print(f"[gemini] modèle auto-sélectionné : {chosen}")
         return chosen
@@ -253,7 +293,7 @@ class GeminiProvider(AIProvider):
     # tokens de sortie AVANT le texte. Un budget trop court → tout part en
     # réflexion, zéro texte, et r.text lève (cause de l'échec du 19/07 avec le
     # test à 10 tokens). On garantit une marge minimale au-dessus du besoin réel.
-    _MIN_OUTPUT = 4096
+    _MIN_OUTPUT = 8192      # Pro réfléchit plus longtemps que Flash
 
     @staticmethod
     def _track(model_name: str, r):
@@ -305,6 +345,24 @@ class GeminiProvider(AIProvider):
         self._track(self.model.model_name, r)
         return self._extract(r)
 
+    def complete_cheap(self, prompt: str, max_tokens: int = 100) -> str:
+        r = self.cheap_model.generate_content(
+            prompt,
+            generation_config={"max_output_tokens": max(max_tokens, 4096)},
+        )
+        self._track(self.CHEAP_MODEL, r)
+        return self._extract(r)
+
+    def complete_cheap_with_image(self, prompt: str, image_bytes: bytes) -> str:
+        import io
+        from PIL import Image
+        r = self.cheap_model.generate_content(
+            [prompt, Image.open(io.BytesIO(image_bytes))],
+            generation_config={"max_output_tokens": 4096},
+        )
+        self._track(self.CHEAP_MODEL, r)
+        return self._extract(r)
+
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
         import io
         from PIL import Image
@@ -326,11 +384,11 @@ _PROVIDERS = {
 }
 
 PROVIDER_INFO = {
-    "anthropic": {"free": False, "vision": True,  "default_model": "claude-sonnet-4-6"},
+    "anthropic": {"free": False, "vision": True,  "default_model": "claude-opus-5-5"},
     "openai":    {"free": False, "vision": True,  "default_model": "gpt-4o-mini"},
     "mistral":   {"free": False, "vision": True,  "default_model": "mistral-small-latest"},
     "groq":      {"free": True,  "vision": True,  "default_model": "llama-3.3-70b-versatile"},
-    "gemini":    {"free": True,  "vision": True,  "default_model": "auto (flash récent)"},
+    "gemini":    {"free": True,  "vision": True,  "default_model": "auto (dernier Pro)"},
 }
 
 
