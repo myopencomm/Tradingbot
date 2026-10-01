@@ -506,6 +506,8 @@ CATALYSEURS IMMINENTS
 {cats}
 
 Signal ACHAT ou EXCLUS ? La PREMIÈRE ligne est OBLIGATOIREMENT le verdict.
+Réponds UNIQUEMENT dans le format ci-dessous : aucune autre section, aucun titre,
+aucun champ omis — un champ manquant fait rejeter l'achat.
 Si EXCLUS : « VERDICT : EXCLUS — [raison 5 mots] » et rien d'autre.
 RÈGLE : données insuffisantes sur la société → VERDICT : EXCLUS — information insuffisante
 RÈGLE : ticker contraire au contexte personnel → VERDICT : EXCLUS — [raison]
