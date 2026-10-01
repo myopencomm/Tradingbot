@@ -250,10 +250,15 @@ def compute_indicators_bulk(tickers: list[str], batch: int = 200,
                     vol_ratio = None
                     if vols is not None and t in vols.columns:
                         v = vols[t].dropna()
-                        if len(v) > 20:
-                            avg20 = float(v.rolling(20).mean().iloc[-1])
+                        # DERNIER JOUR COMPLET, comme prices.get_technicals :
+                        # la barre du jour est partielle (volume à 0.08× la
+                        # moyenne à midi). Lue telle quelle, elle faisait
+                        # écarter par le veto volume 3 634 valeurs sur 3 737
+                        # (01/10/2026) — le scan mondial n'en gardait que 18.
+                        if len(v) > 21:
+                            avg20 = float(v.iloc[-21:-1].mean())
                             if avg20:
-                                vol_ratio = round(float(v.iloc[-1]) / avg20, 2)
+                                vol_ratio = round(float(v.iloc[-2]) / avg20, 2)
 
                     ret = c.pct_change().dropna()
                     vr20_250 = None

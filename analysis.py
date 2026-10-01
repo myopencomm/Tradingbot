@@ -1744,7 +1744,7 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
         # imposent un minimum par marché (≈ 130 € Paris, 930 € US, 1 500 €
         # Xetra, 1 630 € Londres…). L'IA ne valide que ce qu'on peut acheter ;
         # le reste est montré à part — repéré, pas ignoré.
-        hors_budget = []
+        hors_budget, us_pleins = [], []
         try:
             import sizing as _sz
             _cfg = portfolio.get_autonomous_config()
@@ -1756,6 +1756,14 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
             if hors_budget:
                 print(f"[scan] {len(hors_budget)} candidat(s) non rentables à "
                       f"{_taille:.0f} € de ligne (frais du marché)")
+            # Places US pleines (MAX_US_POSITIONS) : le moteur refuserait tout
+            # achat US. Les envoyer à l'IA, c'était 8 analyses pour rien — le
+            # top du classement mondial est presque toujours américain.
+            _us_bloc = _sz.us_slots_block()
+            if _us_bloc:
+                us_pleins = [c for c in viables if "." not in c["ticker"]]
+                viables   = [c for c in viables if "." in c["ticker"]]
+                print(f"[scan] {len(us_pleins)} candidat(s) US écartés — {_us_bloc}")
             screened = viables
         except Exception as _fe:
             print(f"[scan] tri par rentabilité indisponible : {_fe}")
@@ -2030,6 +2038,15 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
             no_opp = "Aucun candidat ne passe le filtre technique aujourd'hui."
             no_opp += "\n\n→ /research TICKER pour un avis ciblé sur un titre précis."
             result_parts.append(no_opp)
+        if us_pleins:
+            lignes_us = []
+            for c in us_pleins[:5]:
+                nom = world_names.get(c["ticker"], {}).get("name", c["ticker"])
+                lignes_us.append(f"- {nom} ({c['ticker']}) — momentum 12 mois "
+                                 f"{c.get('mom_12_1', 0):+.0f}%, RSI {c.get('rsi')}")
+            result_parts.append(
+                "🇺🇸 MEILLEURES US — non analysées : places US pleines "
+                "(MAX_US_POSITIONS)\n" + "\n".join(lignes_us))
         if hors_budget:
             lignes_hb = []
             for c in hors_budget[:5]:
