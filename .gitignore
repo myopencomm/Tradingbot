@@ -65,3 +65,4 @@ bd_blocklist.json
 
 # Alerte news : articles deja vus (news_alert.py)
 news_alert_state.json
+verdicts_history.json

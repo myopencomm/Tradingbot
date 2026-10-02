@@ -1404,6 +1404,87 @@ def cmd_news(args, cid):
     _run_long(cid, _do_news)
 
 
+_pending_exit: dict = {}          # cid → {"nom", "expires"}
+
+
+def cmd_sortir(args, cid):
+    """/sortir NOM [oui] — vendre une position PROPREMENT.
+
+    `/ordre vendre … marche` sur une position protégée vend par-dessus l'ordre
+    Expert SL/TP qui engage déjà les titres : doublon de vente. Ici, dans
+    l'ordre : annulation des protections, VÉRIFIÉE au carnet (BD annule en
+    asynchrone), puis vente au marché, puis sync. Si l'annulation n'est pas
+    confirmée, rien n'est vendu. Double confirmation, 120 s (02/10/2026 :
+    proposé par le briefing sur chaque ⚠️/🔴).
+    """
+    positions = portfolio.load().get("positions", {})
+    if not args:
+        send("Usage : /sortir NOM  (puis /sortir NOM oui pour confirmer)", cid)
+        return
+    nom = _find_position(args[0], positions)
+    if not nom:
+        send(f"Position « {args[0]} » introuvable.", cid)
+        return
+    pos = positions[nom]
+    confirme = len(args) > 1 and args[1].lower() in ("oui", "yes", "ok")
+
+    if not confirme:
+        v = position_view.view(nom, pos)
+        _pending_exit[cid] = {"nom": nom, "expires": time.time() + 120}
+        pnl = (f"{v['pnl_eur']:+.0f} € ({v['chg_eur']:+.2f}%)"
+               if v.get("pnl_eur") is not None else "?")
+        send(f"🚪 SORTIE DE {nom} ({pos['ticker']}) — {abs(int(pos['qty']))} titres\n"
+             f"Cours {v['sym']}{v['price']} | P&L {pnl}\n\n"
+             f"1. annulation des protections SL/TP sur BD (vérifiée au carnet)\n"
+             f"2. vente au MARCHÉ de toute la ligne\n\n"
+             f"Confirme sous 120 s : /sortir {nom} oui", cid)
+        return
+
+    att = _pending_exit.get(cid)
+    if not att or att["nom"] != nom or time.time() > att["expires"]:
+        send(f"Pas de sortie en attente pour {nom} (ou délai dépassé). "
+             f"Relance /sortir {nom}.", cid)
+        return
+    _pending_exit.pop(cid, None)
+    if not _check_playwright_ready(cid):
+        return
+    import market
+    if not market.is_open_now(pos["ticker"]):
+        send(f"⏳ Marché fermé pour {pos['ticker']} : une vente au marché "
+             f"n'y passerait pas. Relance /sortir {nom} à l'ouverture.", cid)
+        return
+
+    def _do_exit():
+        import stale_exit
+        import sync_engine
+        send(f"🚪 {nom} : annulation des protections…", cid)
+        if not stale_exit._annuler_protections(pos, nom):
+            send(f"⚠️ {nom} : annulation des protections NON confirmée au "
+                 f"carnet — vente abandonnée (pas de doublon). Vérifie le "
+                 f"carnet BD ; /sync pour relire.", cid)
+            return
+        send(f"🚪 {nom} : protections levées, vente au marché…", cid)
+        if stale_exit._vendre_au_marche(pos, nom, lambda m: send(m, cid)):
+            send(f"✅ {nom} : ordre de vente au marché envoyé. Le sync va "
+                 f"clôturer la position.", cid)
+            sync_engine.schedule_post_order_sync(cid)
+        else:
+            send(f"🚨 {nom} : protections annulées mais VENTE ÉCHOUÉE — la "
+                 f"position est SANS STOP.\nÀ faire tout de suite : "
+                 f"/ordre vendre {pos['ticker']} {abs(int(pos['qty']))} marche\n"
+                 f"ou reposer la protection : /ordre vendre {pos['ticker']} "
+                 f"{abs(int(pos['qty']))} expert {pos.get('target_low')} "
+                 f"{pos.get('target_high')}", cid)
+
+    _run_long(cid, _do_exit)
+
+
+def cmd_verdicts(args, cid):
+    """/verdicts — les verdicts du briefing ont-ils une valeur prédictive ?"""
+    import verdicts
+    send(verdicts.rapport(), cid)
+
+
 def cmd_stagnation(args, cid):
     """/stagnation — verdict de vitesse sur chaque position, à la demande.
 

@@ -982,6 +982,25 @@ ni ligne sur les positions HOLD.{opps_mission}"""
         geres = [n for n, c in portfolio.load().get("positions", {}).items()
                  if not c.get("hold") and c.get("qty")]
         lignes = briefing_lines(portfolio_analysis, geres)
+        # Verdicts NOTÉS pour être mesurés (verdicts.py, /verdicts) et rendus
+        # actionnables : distance au SL/TP, commande de sortie propre.
+        _pos = portfolio.load().get("positions", {})
+        try:
+            import verdicts
+            verdicts.enregistrer(lignes, _pos)
+            affichees = []
+            for l in lignes:
+                ic = verdicts.icone_de(l)
+                nom = l[len(ic):].strip().split(" — ")[0].strip() if ic else ""
+                cfg = _pos.get(nom) or {}
+                plan = ""
+                if cfg and ic in ("👀", "⚠️", "🔴"):
+                    plan = verdicts.plan_action(
+                        l, cfg, prices.get_quote(cfg["ticker"]).get("price"))
+                affichees.append(l + (f"\n{plan}" if plan else ""))
+            lignes = affichees
+        except Exception as _ve:
+            print(f"[briefing] verdicts : {_ve}")
         msg = f"🌅 BRIEFING — {date}\n\n" + "\n".join(lignes)
 
         if opportunities:
