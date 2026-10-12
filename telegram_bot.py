@@ -1556,7 +1556,8 @@ def cmd_securiser(args, cid):
             send(f"{nom} : le stop actuel ({pos.get('target_low')}) garantit déjà "
                  f"plus que +{gain:.0f} €. Rien à faire.", cid)
             return
-        _pending_secure[cid] = {"nom": nom, "stop": stop, "expires": time.time() + 120}
+        _pending_secure[cid] = {"nom": nom, "stop": stop, "gain": gain,
+                                "expires": time.time() + 120}
         send(f"🔐 SÉCURISER {nom} ({pos['ticker']}) — {abs(int(pos['qty']))} titres\n"
              f"Cours {v['sym']}{v['price']} | P&L actuel {v['pnl_eur']:+.0f} €\n"
              f"Stop : {pos.get('target_low')} → {stop} "
@@ -1577,6 +1578,7 @@ def cmd_securiser(args, cid):
     if not _check_playwright_ready(cid):
         return
     stop, tp, qty = att["stop"], pos.get("target_high"), abs(int(pos["qty"]))
+    gain = att.get("gain", 1.0)
 
     def _do_secure():
         import bourse_direct_orders as bd_orders
@@ -1614,8 +1616,8 @@ def cmd_securiser(args, cid):
             portfolio.save(d)
         send(f"🔐 GAIN MINIMUM SÉCURISÉ — {nom}\n"
              f"Stop sur BD : {adj.get('stop_loss') or stop} | objectif {adj.get('take_profit') or tp}\n"
-             f"Si le stop se déclenche : au moins +1 € net (sauf écart d'ouverture "
-             f"sous le stop).", cid)
+             f"Si le stop se déclenche : au moins +{gain:g} € net (sauf écart "
+             f"d'ouverture sous le stop).", cid)
 
     _run_long(cid, _do_secure)
 
