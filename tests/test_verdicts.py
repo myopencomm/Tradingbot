@@ -36,3 +36,24 @@ def test_enregistrement_puis_mesure(monkeypatch, tmp_path):
     b = verdicts.bilan()
     assert b["⚠️"][10] == [-10.0] and b["✅"][20] == [10.0]
     assert "⚠️ 1 verdict" in verdicts.rapport()
+
+
+def test_stop_gain_minimum_euros_et_devise(monkeypatch):
+    """+1 € net garanti : Euronext sur le PRU, devise sur le PRU brut BD en €."""
+    import prices
+    import telegram_bot as tb
+    monkeypatch.setattr(prices, "get_quote", lambda t: {"price": 77.46, "currency": "EUR"})
+    monkeypatch.setattr(prices, "fx_to_eur", lambda c: 1.0)
+    erf = {"ticker": "ERF.PA", "qty": 18, "entry_price": 75.9011}
+    stop = tb.stop_gain_minimum(erf)
+    assert 76.1 < stop < 76.2
+    # Vendre 18 titres au stop rapporte bien ≥ 1 € net de frais de vente
+    from config import order_fees
+    assert stop * 18 - order_fees("ERF.PA", stop * 18, "sell") - 75.9011 * 18 >= 1.0
+
+    monkeypatch.setattr(prices, "get_quote", lambda t: {"price": 261.44, "currency": "USD"})
+    monkeypatch.setattr(prices, "fx_to_eur", lambda c: 0.894)
+    jnj = {"ticker": "JNJ", "qty": 5, "entry_price": 264.0162, "bd_pru_raw": 228.638}
+    s = tb.stop_gain_minimum(jnj)
+    eur = s * 5 * 0.894 - order_fees("JNJ", s * 5 * 0.894, "sell")
+    assert eur - 228.638 * 5 >= 1.0 and s < 264.0     # gain venu du change

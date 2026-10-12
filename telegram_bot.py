@@ -1480,6 +1480,146 @@ def cmd_sortir(args, cid):
     _run_long(cid, _do_exit)
 
 
+_pending_secure: dict = {}        # cid → {"nom", "stop", "expires"}
+
+
+def stop_gain_minimum(pos: dict, gain_eur: float = 1.0) -> float | None:
+    """Cours de stop qui garantit AU MOINS `gain_eur` net, frais de vente
+    compris, dans la devise du titre. Le PRU de BD inclut déjà les frais
+    d'achat ; config.breakeven_price ajoute ceux de la sortie. Marge de 0,05 %
+    pour l'exécution : un stop déclenche une vente au marché, qui peut passer
+    un cran sous le seuil. Arrondi au pas de cotation, vers le HAUT."""
+    import prices
+    import ticks
+    from config import breakeven_price
+    qty = abs(int(pos.get("qty") or 0))
+    if not qty or not pos.get("entry_price"):
+        return None
+    from config import order_fees
+    cur = prices.get_quote(pos["ticker"]).get("currency") or "EUR"
+    fx = prices.fx_to_eur(cur)
+    if cur != "EUR" and pos.get("bd_pru_raw") and fx and fx != 1.0:
+        # Titre en devise : le gain se mesure EN EUROS, change compris, contre
+        # le PRU brut BD (frais d'achat inclus). Marge de 0,5 % : le dollar
+        # peut bouger entre la pose du stop et son déclenchement.
+        cout = pos["bd_pru_raw"] * qty
+        stop = (cout + gain_eur) / (qty * fx)
+        for _ in range(3):
+            stop = (cout + gain_eur + order_fees(pos["ticker"], stop * qty * fx, "sell")) / (qty * fx)
+        stop *= 1.005
+    else:
+        be = breakeven_price(pos["ticker"], pos["entry_price"], qty, fx)
+        stop = (be + gain_eur / fx / qty) * 1.0005
+    return ticks.round_to_tick(stop, ticks.tick_for(stop, cur), "up")
+
+
+def cmd_securiser(args, cid):
+    """/securiser NOM [GAIN€] [oui] — remonter le stop au cours qui garantit au
+    moins GAIN€ (1 € par défaut) de gain net, sur BD.
+
+    Demandé le 12/10/2026 : « si le potentiel n'est plus là, fais en sorte que
+    le bot sécurise une vente à au moins 1 € de gain ». Mécanique du trailing
+    et de /sortir : annulation de la protection VÉRIFIÉE au carnet, puis
+    nouvel ordre Expert (nouveau stop, même objectif). Rien n'est reposé si
+    l'annulation n'est pas confirmée — pas de doublon de vente.
+    """
+    positions = portfolio.load().get("positions", {})
+    if not args:
+        send("Usage : /securiser NOM [GAIN€]  (puis /securiser NOM oui)", cid)
+        return
+    nom = _find_position(args[0], positions)
+    if not nom:
+        send(f"Position « {args[0]} » introuvable.", cid)
+        return
+    pos = positions[nom]
+    reste = [a.lower() for a in args[1:]]
+    confirme = "oui" in reste or "ok" in reste
+    gain = 1.0
+    for a in reste:
+        try:
+            gain = float(a.replace(",", ".").rstrip("€"))
+        except ValueError:
+            pass
+
+    if not confirme:
+        stop = stop_gain_minimum(pos, gain)
+        v = position_view.view(nom, pos)
+        if not stop or not v.get("price"):
+            send(f"{nom} : calcul impossible (cours ou PRU indisponible).", cid)
+            return
+        if stop >= v["price"]:
+            send(f"{nom} : le cours ({v['sym']}{v['price']}) est SOUS le niveau qui "
+                 f"garantirait +{gain:.0f} € ({v['sym']}{stop}). Un stop là "
+                 f"vendrait tout de suite, à perte. Rien n'est changé.", cid)
+            return
+        if stop <= (pos.get("target_low") or 0):
+            send(f"{nom} : le stop actuel ({pos.get('target_low')}) garantit déjà "
+                 f"plus que +{gain:.0f} €. Rien à faire.", cid)
+            return
+        _pending_secure[cid] = {"nom": nom, "stop": stop, "expires": time.time() + 120}
+        send(f"🔐 SÉCURISER {nom} ({pos['ticker']}) — {abs(int(pos['qty']))} titres\n"
+             f"Cours {v['sym']}{v['price']} | P&L actuel {v['pnl_eur']:+.0f} €\n"
+             f"Stop : {pos.get('target_low')} → {stop} "
+             f"({(stop / v['price'] - 1) * 100:+.1f}% du cours) = au moins "
+             f"+{gain:.0f} € net si déclenché (hors écart d'ouverture)\n"
+             f"Objectif inchangé : {pos.get('target_high')}\n\n"
+             f"1. annulation de la protection actuelle (vérifiée au carnet)\n"
+             f"2. nouvelle protection SL {stop} / TP {pos.get('target_high')}\n\n"
+             f"Confirme sous 120 s : /securiser {nom} oui", cid)
+        return
+
+    att = _pending_secure.get(cid)
+    if not att or att["nom"] != nom or time.time() > att["expires"]:
+        send(f"Pas de sécurisation en attente pour {nom} (ou délai dépassé). "
+             f"Relance /securiser {nom}.", cid)
+        return
+    _pending_secure.pop(cid, None)
+    if not _check_playwright_ready(cid):
+        return
+    stop, tp, qty = att["stop"], pos.get("target_high"), abs(int(pos["qty"]))
+
+    def _do_secure():
+        import bourse_direct_orders as bd_orders
+        import stale_exit
+        send(f"🔐 {nom} : annulation de la protection actuelle…", cid)
+        if not stale_exit._annuler_protections(pos, nom):
+            send(f"⚠️ {nom} : annulation NON confirmée au carnet — rien n'est "
+                 f"reposé (pas de doublon). La protection actuelle "
+                 f"({pos.get('target_low')} / {tp}) reste en place.", cid)
+            return
+        od = conf = None
+        try:
+            od = playwright_session.run(
+                lambda page: bd_orders.create_expert_order(
+                    page, pos["ticker"], qty, stop, tp, "max"), timeout=30)
+            oid = od and (od.get("id") or od.get("order_id"))
+            if oid:
+                conf = playwright_session.run(
+                    lambda page: bd_orders.confirm_order_auto(page, oid, False),
+                    timeout=30)
+        except Exception as e:
+            print(f"[securiser] {nom} : {e}")
+        if not conf:
+            send(f"🚨 {nom} : ancienne protection annulée mais NOUVELLE NON "
+                 f"CONFIRMÉE — position SANS STOP.\nÀ faire tout de suite :\n"
+                 f"/ordre vendre {pos['ticker']} {qty} expert {stop} {tp}", cid)
+            return
+        adj = (od.get("_adjusted") or {})
+        d = portfolio.load()
+        if nom in d.get("positions", {}):
+            d["positions"][nom]["target_low"] = adj.get("stop_loss") or stop
+            d["positions"][nom]["protection_ids"] = [c for c in (od.get("children") or []) if c]
+            d["positions"][nom]["protected"] = True
+            d["positions"][nom].pop("pending_sl", None)
+            portfolio.save(d)
+        send(f"🔐 GAIN MINIMUM SÉCURISÉ — {nom}\n"
+             f"Stop sur BD : {adj.get('stop_loss') or stop} | objectif {adj.get('take_profit') or tp}\n"
+             f"Si le stop se déclenche : au moins +1 € net (sauf écart d'ouverture "
+             f"sous le stop).", cid)
+
+    _run_long(cid, _do_secure)
+
+
 def cmd_verdicts(args, cid):
     """/verdicts — les verdicts du briefing ont-ils une valeur prédictive ?"""
     import verdicts
