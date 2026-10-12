@@ -229,6 +229,23 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
             candidates.append((name, pos, change_pct, price))
             if fx_note:
                 fx_lines.append(f"  💱 {name} : {change_pct:+.2f}% en devise{fx_note}")
+        elif (pos.get("target_low") or 0) >= entry:
+            # Stop DÉJÀ au-dessus du PRU (/securiser, palier 1 passé) : dire
+            # « seuil +6 % non atteint » laissait croire le gain non protégé
+            # (ERF, 12/10/2026 : stop 76.94 verrouillant +15 €).
+            from config import order_fees
+            import prices as _px
+            sl_ = pos["target_low"]
+            q_ = abs(pos.get("qty") or 0)
+            fx_ = _px.fx_to_eur(_best.get("currency") or "EUR") if pos.get("bd_pru_raw") else 1.0
+            pru_eur = pos.get("bd_pru_raw") or entry
+            verrou = sl_ * q_ * fx_ - order_fees(pos["ticker"], sl_ * q_ * fx_, "sell") - pru_eur * q_
+            tp_ = pos.get("target_high")
+            p2 = (f" — palier 2 dès {entry + TRAIL_LOCK_TRIGGER_PCT / 100 * (tp_ - entry):.2f}"
+                  if tp_ else "")
+            skipped.append(
+                f"  🔐 {name} : {change_pct:+.2f}% — stop déjà au-dessus du PRU "
+                f"({sl_}), ≈ {verrou:+.0f} € net verrouillés{p2}{fx_note}")
         else:
             need = entry * (1 + threshold / 100)
             prog_note = f", {prog * 100:.0f}% du chemin vers le TP" if prog is not None else ""
