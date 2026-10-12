@@ -2,6 +2,7 @@
 Interface Telegram : polling + commandes interactives.
 Toutes les commandes sont disponibles depuis l'app iPhone/web.
 """
+import os
 import requests
 import time
 import threading
@@ -2365,16 +2366,36 @@ def _handle_csv(doc: dict, cid: str):
 
 # ─── Polling ────────────────────────────────────────────────────────────────
 
+# Panne Telegram continue au-delà de ce délai → le processus se termine et
+# launchd (KeepAlive) le relance. Le 12/10/2026, après une coupure DNS
+# (résolveur Tailscale), le processus est resté incapable de joindre Telegram
+# alors que le réseau était revenu : plus aucun message, briefing et STATUS
+# générés dans le vide — jusqu'à un redémarrage manuel.
+POLL_PANNE_MAX_S = 15 * 60
+
+
 def _poll():
     offset = None
     print("✅ Telegram polling demarre")
+    echecs, panne_depuis = 0, None
     while True:
         updates = tg.get_updates(offset)
         if updates is None:
             # Échec de l'appel : offset conservé intentionnellement, on reprend
-            # là où on s'était arrêté.
-            time.sleep(5)
+            # là où on s'était arrêté. Attente croissante (5 s → 60 s) : à 5 s
+            # fixes, une panne d'une nuit écrivait des dizaines de milliers de
+            # lignes d'erreur dans le log.
+            echecs += 1
+            panne_depuis = panne_depuis or time.time()
+            if time.time() - panne_depuis > POLL_PANNE_MAX_S:
+                print(f"[poll] Telegram injoignable depuis "
+                      f"{POLL_PANNE_MAX_S // 60} min — arrêt pour relance launchd")
+                os._exit(3)
+            time.sleep(min(5 * 2 ** min(echecs - 1, 4), 60))
             continue
+        if echecs:
+            print(f"[poll] Telegram de nouveau joignable après {echecs} échec(s)")
+            echecs, panne_depuis = 0, None
         for upd in updates:
             # Avance l'offset AVANT de traiter, pour éviter le double-envoi si
             # le handler crash ou si Telegram redélivre après un timeout.

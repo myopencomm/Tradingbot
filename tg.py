@@ -20,6 +20,14 @@ from config import TELEGRAM_TOKEN, CHAT_ID
 API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 
+def _sans_token(e) -> str:
+    """Message d'erreur SANS le token du bot. requests met l'URL complète dans
+    ses exceptions : le token s'écrivait en clair dans tradingbot.log à chaque
+    échec réseau (12/10/2026, des milliers de lignes)."""
+    m = str(e)
+    return m.replace(TELEGRAM_TOKEN, "***") if TELEGRAM_TOKEN else m
+
+
 def _post(methode: str, quoi: str = "", **kw):
     """Appel POST à l'API, échec journalisé et non propagé.
 
@@ -31,7 +39,7 @@ def _post(methode: str, quoi: str = "", **kw):
     try:
         return requests.post(f"{API}/{methode}", timeout=kw.pop("timeout", 10), **kw)
     except Exception as e:
-        print(f"Telegram {quoi or methode} error: {e}")
+        print(f"Telegram {quoi or methode} error: {_sans_token(e)}")
         return None
 
 
@@ -92,7 +100,7 @@ def download_photo(photos: list) -> bytes | None:
             f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{path}",
             timeout=20).content
     except Exception as e:
-        print(f"Photo download error: {e}")
+        print(f"Photo download error: {_sans_token(e)}")
         return None
 
 
@@ -114,7 +122,7 @@ def get_updates(offset: int | None, timeout: int = 30,
             return r.json().get("result", [])
         print(f"Polling HTTP {r.status_code}")
     except Exception as e:
-        print(f"Polling error: {e}")
+        print(f"Polling error: {_sans_token(e)}")
     return None
 
 

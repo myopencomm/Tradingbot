@@ -74,3 +74,32 @@ class TestTelegramMuet:
         assert any("FALLBACK IA ACTIF" in m for m in _coupe_circuit_reseau)
         # …mais il n'est jamais PARTI : c'est la capture qui l'a retenu.
         FallbackProvider._quarantaine.clear()
+
+
+def test_token_masque_dans_les_erreurs(monkeypatch):
+    """requests met l'URL (donc le token) dans ses exceptions."""
+    import tg
+    monkeypatch.setattr(tg, "TELEGRAM_TOKEN", "123:SECRET")
+    assert "SECRET" not in tg._sans_token(Exception("url: /bot123:SECRET/getUpdates"))
+
+
+def test_panne_longue_relance_le_processus(monkeypatch):
+    """Panne Telegram > POLL_PANNE_MAX_S → os._exit, relance par launchd."""
+    import telegram_bot as tb
+    t = [0.0]
+    monkeypatch.setattr(tb.tg, "get_updates", lambda off: None)
+    monkeypatch.setattr(tb.time, "time", lambda: t[0])
+    def dormir(s):
+        t[0] += s
+    monkeypatch.setattr(tb.time, "sleep", dormir)
+
+    class Sortie(Exception):
+        pass
+
+    def exit_(code):
+        raise Sortie(code)
+    monkeypatch.setattr(tb.os, "_exit", exit_)
+    import pytest
+    with pytest.raises(Sortie):
+        tb._poll()
+    assert t[0] > tb.POLL_PANNE_MAX_S

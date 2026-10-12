@@ -154,7 +154,7 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
   depuis les `AUTHORIZED_CHAT_IDS`. Pour une confidentialité maximale,
   éditez `.env` à la main à la place.
 - Permissions `600` sur les fichiers sensibles (forcées au démarrage).
-- Aucun secret ni PII n'est écrit dans `tradingbot.log`.
+- Aucun secret ni PII n'est écrit dans `tradingbot.log`. **Exception corrigée le 12/10/2026** : `requests` met l'URL complète (donc le token du bot) dans ses exceptions, et chaque échec réseau l'écrivait en clair dans le log. Les messages d'erreur de `tg.py` passent désormais par `_sans_token`. Les anciennes lignes restent dans le log local (permissions 600) tant qu'il n'est pas purgé.
 
 ### Réseau & déploiement
 - Le bot **sort** vers : API Telegram, Yahoo Finance, le provider IA configuré,
