@@ -175,12 +175,22 @@ def check_positions(send_fn, us_only: bool = False) -> None:
                 alerts.append({"type": "SL_BREACH", "name": name, "cfg": cfg,
                                "price": price, "trigger": low4h,
                                "change": change_pct, "pnl": pnl, "sym": sym})
-        elif low4h <= sl_zone:
-            # Anti-spam : une seule alerte par épisode d'approche du SL.
+        elif (price <= sl_zone
+              and cfg["target_low"] < (cfg.get("entry_price") or 0)):
+            # « SL proche » sur le cours ACTUEL, pas sur le plus bas des 4 h :
+            # le 12/10/2026, CBLL était passé à 23.27 le matin puis remonté à
+            # 24.68 (+4.4 %) quand l'alerte est partie. Le plus bas intraday
+            # reste utile pour détecter un SL FRANCHI (branche du dessus),
+            # pas pour prévenir d'une approche déjà terminée.
+            # Et jamais pour un stop AU-DESSUS du PRU (gain verrouillé par
+            # /securiser ou le trailing) : son déclenchement est une prise de
+            # bénéfice, pas un danger (ERF, même jour).
             if not cfg.get("sl_proche_notified", False):
                 alerts.append({"type": "SL_PROCHE", "name": name, "cfg": cfg,
                                "price": price, "trigger": low4h,
-                               "change": change_pct, "pnl": pnl, "sym": sym})
+                               "change": v["chg_eur"] if v["chg_eur"] is not None else change_pct,
+                               "pnl_eur": v["pnl_eur"], "pnl": pnl, "sym": sym,
+                               "protected": v["protected"]})
 
         # Trailing stop : quand la position atteint +BREAKEVEN_THRESHOLD% au-dessus du PRU,
         # propose (et enregistre) un relevé du SL au PRU — zéro perte garanti.
@@ -257,15 +267,21 @@ def check_positions(send_fn, us_only: bool = False) -> None:
                 + orders.expert_protection(cfg["ticker"], cfg["qty"], entry, cfg["target_high"])
             )
         else:
+            dist = (cfg["target_low"] / a["price"] - 1) * 100
+            pnl_txt = (f"{a['pnl_eur']:+.0f} € ({a['change']:+.2f}%)"
+                       if a.get("pnl_eur") is not None else f"{sym}{a['pnl']:+.0f}")
+            if a.get("protected") is False:
+                # Seul cas où il y a quelque chose à FAIRE : aucun ordre au carnet.
+                prot = ("🚨 AUCUN ordre SL/TP actif sur BD au dernier sync — à poser :\n"
+                        f"/ordre vendre {cfg['ticker']} {cfg['qty']} expert "
+                        f"{cfg['target_low']} {cfg['target_high']}")
+            else:
+                prot = ("✅ Protection active sur BD (dernier sync) : le stop vendra "
+                        "de lui-même s'il est touché. Rien à faire.")
             msg = (
                 f"⚠️ SL PROCHE — {a['name']} (alerte unique par épisode)\n\n"
-                f"Low 4h : {sym}{trigger} — Seuil SL : {sym}{cfg['target_low']}\n"
-                f"Cours actuel : {sym}{a['price']} ({a['change']:+.2f}%) | P&L : {sym}{a['pnl']:+.0f}\n\n"
-                f"Vérifie que ta protection est active sur Bourse Direct :\n\n"
-                + orders.expert_protection(
-                    cfg["ticker"], cfg["qty"],
-                    cfg["target_low"], cfg["target_high"]
-                )
+                f"Cours : {sym}{a['price']} — stop à {sym}{cfg['target_low']} ({dist:+.1f}%)\n"
+                f"P&L : {pnl_txt}\n\n{prot}"
             )
             portfolio.mark_sl_proche(a["name"])
         send_fn(msg)

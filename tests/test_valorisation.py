@@ -251,3 +251,36 @@ class TestBacASableEtat:
         if avant is not None:
             assert vrai.read_text() == avant, "l'état réel a été modifié"
             assert "FICTIF" not in json.loads(avant).get("positions", {})
+
+
+class TestSlProche:
+    """« SL proche » : sur le cours ACTUEL, et jamais pour un stop qui
+    verrouille un gain (CBLL et ERF, 12/10/2026)."""
+
+    def _run(self, monkeypatch, cfg, prix, bas_4h):
+        import monitor
+        import prices
+        monkeypatch.setattr(prices, "get_quote", lambda t: {
+            "price": prix, "currency": "USD", "stale": False,
+            "as_of": "2026-10-12", "status": "ok"})
+        monkeypatch.setattr(prices, "fx_to_eur", lambda c: 0.9)
+        monkeypatch.setattr(prices, "get_intraday_range",
+                            lambda t, hours=4: {"high": prix, "low": bas_4h})
+        monkeypatch.setattr(portfolio, "load", lambda: {"positions": {"CBLL": dict(cfg)}})
+        envoyes = []
+        monitor.check_positions(envoyes.append)
+        return [m for m in envoyes if "SL PROCHE" in m]
+
+    CBLL = {"ticker": "CBLL", "qty": 31, "entry_price": 24.7268, "bd_pru_raw": 21.3887,
+            "target_low": 22.6, "target_high": 28.0, "protected": True}
+
+    def test_cours_remonte_pas_d_alerte(self, monkeypatch):
+        assert not self._run(monkeypatch, self.CBLL, 24.685, 23.27)
+
+    def test_cours_dans_la_zone_alerte_sans_mode_d_emploi(self, monkeypatch):
+        m = self._run(monkeypatch, self.CBLL, 23.20, 23.10)
+        assert m and "Rien à faire" in m[0] and "EXPERTS" not in m[0]
+
+    def test_stop_au_dessus_du_pru_jamais(self, monkeypatch):
+        cfg = dict(self.CBLL, entry_price=75.9, target_low=76.94, target_high=84.0)
+        assert not self._run(monkeypatch, cfg, 77.5, 77.0)
