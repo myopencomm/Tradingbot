@@ -88,9 +88,13 @@ def perimetre() -> dict:
         lignes.append(v["name"])
     cash = d.get("cash_available", 0) or 0
     reserve = d.get("cash_reserved", 0) or 0
+    # Produit d'une vente exécutée que BD n'a pas encore crédité (sync_engine,
+    # « cash_pending ») : sans lui, la part chutait le temps du crédit.
+    attente = sum(a.get("montant", 0) for a in (d.get("cash_pending") or []))
     return {"cash": round(cash, 2), "reserve": round(reserve, 2),
+            "attente": round(attente, 2),
             "positions": round(valeur, 2),
-            "total": round(cash + reserve + valeur, 2), "latent": round(latent, 2),
+            "total": round(cash + reserve + attente + valeur, 2), "latent": round(latent, 2),
             "lignes": lignes}
 
 

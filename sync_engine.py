@@ -94,8 +94,22 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
     changed = False
 
     # ── Cash ────────────────────────────────────────────────────────────────
+    cash_bouge = False
     if bd["cash"] is not None:
         old_cash = data.get("cash_available", 0)
+        cash_bouge = abs(bd["cash"] - old_cash) >= 0.01
+        # Produit de vente EN ATTENTE de crédit (voir plus bas) : soldé dès
+        # que BD crédite au moins la moitié du montant attendu, ou après 5 j.
+        attente = data.get("cash_pending") or []
+        if attente:
+            du = sum(a.get("montant", 0) for a in attente)
+            hausse = bd["cash"] - old_cash
+            from datetime import datetime as _dt, timedelta as _td
+            vieux = [a for a in attente if (a.get("depuis") or "") <
+                     (_dt.now() - _td(days=5)).isoformat()]
+            if (du and hausse >= 0.5 * du) or len(vieux) == len(attente):
+                data["cash_pending"] = []
+                changed = True
         if abs(bd["cash"] - old_cash) >= 0.01:
             data["cash_available"] = bd["cash"]
             changed = True
@@ -435,6 +449,27 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
         data["positions"].pop(local_key, None)
         changed = True
         sold_keys.append(local_key)
+        # Vente exécutée mais cash BD INCHANGÉ sur ce relevé : BD crédite
+        # parfois une vente US plus tard dans la soirée. Sans ce poste, la
+        # position disparaissait du fonds sans que son produit n'y entre —
+        # part tombée de ~110 à 91,75 après la sortie de CBLL (13/10/2026),
+        # au risque d'être figée par le relevé de 22h15.
+        if not cash_bouge:
+            try:
+                from config import order_fees
+                import prices as _px2
+                cur = (exec_order.get("currency") or market.currency(cfg["ticker"])
+                       or "EUR").replace("$US", "USD")
+                fx = _px2.fx_to_eur(cur)
+                brut = exit_price * abs(cfg["qty"]) * fx
+                net = round(brut - order_fees(cfg["ticker"], brut, "sell"), 2)
+                data.setdefault("cash_pending", []).append({
+                    "nom": local_key, "montant": net,
+                    "depuis": datetime.now().isoformat(timespec="seconds")})
+                lines.append(f"   ⏳ produit ≈ {net:.0f} € pas encore crédité par BD — "
+                             f"compté dans le fonds en attendant")
+            except Exception as _pe:
+                print(f"[sync] produit de vente en attente {local_key} : {_pe}")
         tag = "WIN ✅" if pnl > 0 else "LOSS 🔻"
         lines.append(
             f"💰 {local_key} VENDU — clôturé automatiquement ({tag})\n"

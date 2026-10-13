@@ -168,3 +168,34 @@ def test_cash_reserve_par_un_achat_en_attente(sync, monkeypatch):
              "profit": 324.0, "currency": "EUR", "order_entries": []}
     _, saved = sync([bd([ORDRE_AIR, achat], True)])
     assert saved["cash_reserved"] == pytest.approx(868.5 + 5.37, abs=1.0)
+
+
+def test_vente_pas_encore_creditee_comptee_puis_soldee(monkeypatch):
+    """CBLL vendu, cash BD inchangé : le produit est mis en attente (le fonds
+    ne chute pas), puis soldé quand BD le crédite."""
+    import prices
+    import stats
+    monkeypatch.setattr(prices, "fx_to_eur", lambda c: 0.9)
+    monkeypatch.setattr(stats, "record_close", lambda *a, **k: 50.0)
+    etat = {"cash_available": 244.13, "auto_pending_orders": {},
+            "positions": dict(copy.deepcopy(LOCAL), CBLL={
+                "ticker": "CBLL", "qty": 31, "entry_price": 24.7268,
+                "target_low": 24.54, "target_high": 28.0})}
+    monkeypatch.setattr(portfolio, "load", lambda: copy.deepcopy(etat))
+    monkeypatch.setattr(portfolio, "save", lambda d: etat.update(copy.deepcopy(d)))
+    vente = {"statut": "Exécuté", "sens": "Vente", "bd_ticker": "CBLL",
+             "name": "CERIBELL INC", "exec_price": 26.39, "currency": "USD",
+             "order_entries": []}
+    seq = [bd([ORDRE_AIR, vente], True)]
+    monkeypatch.setattr(reader, "get_portfolio",
+                        lambda page, send_fn=None: seq.pop(0) if seq else None)
+    sync_engine.sync(None, lambda m: None, silent=True)
+    assert "CBLL" not in etat["positions"]
+    att = etat["cash_pending"]
+    assert len(att) == 1 and 700 < att[0]["montant"] < 740       # 26.39×31×0.9 − frais
+
+    credite = bd([ORDRE_AIR], True)
+    credite["cash"] = 244.13 + 720
+    seq.append(credite)
+    sync_engine.sync(None, lambda m: None, silent=True)
+    assert etat["cash_pending"] == []

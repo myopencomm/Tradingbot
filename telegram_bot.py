@@ -558,6 +558,8 @@ def cmd_nav(args, cid):
         f"  cash      {p['cash']:.2f}",
         *([f"  réservé   {p['reserve']:.2f}  (achat en attente au carnet)"]
           if p.get("reserve") else []),
+        *([f"  en attente {p['attente']:.2f}  (vente pas encore créditée par BD)"]
+          if p.get("attente") else []),
         f"  positions {p['positions']:.2f}  ({', '.join(p['lignes']) or 'aucune'})",
         "",
         "Perimetre : ce que le bot PILOTE. Les lignes en hold long",

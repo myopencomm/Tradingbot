@@ -548,6 +548,7 @@ function redrawCharts() {
   document.getElementById('navcompo').textContent = navP
     ? `Fonds : ${navP.total.toFixed(2)}€ = ${navP.cash.toFixed(2)}€ de cash `
       + (navP.reserve ? `+ ${navP.reserve.toFixed(2)}€ réservés (achat en attente) ` : '')
+      + (navP.attente ? `+ ${navP.attente.toFixed(2)}€ de vente pas encore créditée ` : '')
       + `+ ${navP.positions.toFixed(2)}€ sur ${navP.lignes.length} position(s) `
       + `gérée(s)${navP.lignes.length ? ' (' + navP.lignes.join(', ') + ')' : ''}.`
     : '';
