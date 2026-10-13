@@ -379,6 +379,7 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
     tech   = prices.get_technicals(ticker) or {}
     funds  = prices.get_fundamentals(ticker) or {}
     pctx   = prices.get_price_context(ticker) or {}
+    ltc    = prices.get_long_term_context(ticker) or {}
     yf_news = prices.get_yf_news(ticker, max_items=6)
     # Le nom complet, pas le seul ticker : « KBC » ramenait des pages de
     # navigation, « KBC Group » ramène l'actualité de la société.
@@ -447,7 +448,26 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
     ctx_v = (f"\nCONTEXTE PERSONNEL — règles et contraintes à respecter "
              f"IMPÉRATIVEMENT (toute violation → EXCLUS) :\n{ctx}\n") if ctx else ""
 
-    data_blocks = f"{pctx_block}{tech_block}{funds_block}{news_block}{social_block}{chart_block}"
+    # Contexte 10 ans + bilan : sans eux, TEVA a été validé à 3 % de son plus
+    # haut de 10 ans avec un objectif au-delà (13/10/2026).
+    ltc_block = ""
+    if ltc:
+        ltc_block = (f"\nCONTEXTE LONG TERME ({ltc['years']:.0f} ans, mensuel)\n"
+                     f"- Plus haut : {ltc['high']} ({ltc['high_date']}) — cours à {ltc['from_high_pct']:+}%\n"
+                     f"- Plus bas : {ltc['low']} ({ltc['low_date']}) — cours à {ltc['from_low_pct']:+}%\n"
+                     + (f"- Performance 3 ans : {ltc['perf_3y']:+}% | 5 ans : {ltc.get('perf_5y', 'N/A')}%\n"
+                        if "perf_3y" in ltc else "")
+                     + (f"- Résistance historique la plus proche au-dessus du cours : {ltc['next_resistance']}\n"
+                        if ltc.get("next_resistance") else
+                        "- Aucun plus haut des 10 ans au-dessus du cours (zone inexplorée)\n"))
+    bilan = []
+    if funds.get("debt_ebitda") is not None:
+        bilan.append(f"dette / EBITDA {funds['debt_ebitda']}×")
+    if funds.get("debt_to_equity") is not None:
+        bilan.append(f"dette / capitaux propres {funds['debt_to_equity']:.0f} %")
+    bilan_block = ("\nBILAN\n- " + " | ".join(bilan) + "\n") if bilan else ""
+    data_blocks = (f"{pctx_block}{ltc_block}{tech_block}{funds_block}{bilan_block}"
+                   f"{news_block}{social_block}{chart_block}")
 
     # ── Prompt selon le mode — la stratégie d'analyse reste celle du scan ────
     if mode == "gain_reduit":
@@ -519,7 +539,12 @@ VERDICT : ACHAT
 - Pourquoi maintenant : [1 phrase — ce qui rend l'entrée opportune AUJOURD'HUI]
 - Preuve 1 : [fait précis TIRÉ DES DONNÉES ci-dessus, avec chiffre ou date, et sa source]
 - Preuve 2 : [autre fait précis tiré des données, avec chiffre ou date, et sa source]
+- Contexte long terme : [où est le cours dans son histoire de 10 ans, quelle résistance
+  historique se trouve entre le cours et le TP, et pourquoi elle serait franchie —
+  un TP au-delà d'une résistance proche SANS raison de la franchir = EXCLUS]
 - Risque principal : [scénario précis et falsifiable qui invaliderait la thèse]
+- Autres risques : [au moins un risque de bilan, de valorisation ou d'événement daté
+  (résultats, journée investisseurs…) tiré des données]
 - Invalidation : [niveau de cours ou événement qui prouverait la thèse fausse]
 - Conviction : [1 à 5 — 5 = thèse forte et étayée ; 3 ou moins = ne pas acheter]
 - Risque : LOW / MEDIUM / HIGH"""

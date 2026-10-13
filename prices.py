@@ -130,6 +130,13 @@ def get_fundamentals(ticker: str) -> dict:
             result["week52_low"]  = round(float(low52), 2)
             result["week52_high"] = round(float(high52), 2)
 
+        # Endettement : une thèse de croissance sur un bilan fragile ne vaut
+        # pas la même chose (TEVA : 16,6 Md$ de dette, 13/10/2026).
+        debt, ebitda = info.get("totalDebt"), info.get("ebitda")
+        if debt and ebitda and ebitda > 0:
+            result["debt_ebitda"] = round(float(debt) / float(ebitda), 1)
+        if info.get("debtToEquity"):
+            result["debt_to_equity"] = round(float(info["debtToEquity"]), 0)
         cap = info.get("marketCap")
         if cap:
             result["market_cap_m"] = round(cap / 1_000_000, 0)
@@ -343,6 +350,41 @@ def get_price_context(ticker: str) -> dict:
         return out
     except Exception as e:
         print(f"⚠️ Price context error {ticker}: {e}")
+        return {}
+
+
+def get_long_term_context(ticker: str) -> dict:
+    """Où se situe le cours dans son histoire (10 ans, mensuel).
+
+    Ajouté le 13/10/2026 : TEVA a été proposé à l'achat à 41 $ avec un
+    objectif à 45,50 $, sans voir que le titre avait fait +550 % depuis son
+    plus bas de 2019 et revenait sous sa zone d'effondrement de 2017-2018
+    (~42-44 $) — une résistance majeure, pile sous l'objectif. Le contexte
+    52 semaines seul ne le montre pas.
+    """
+    try:
+        h = yf.Ticker(ticker).history(period="10y", interval="1mo").dropna(subset=["Close"])
+        if len(h) < 24:
+            return {}
+        div = price_divisor(ticker)
+        hi, lo = float(h["High"].max()) / div, float(h["Low"].min()) / div
+        cur = float(h["Close"].iloc[-1]) / div
+        out = {"years": round(len(h) / 12, 1),
+               "high": round(hi, 2), "high_date": h["High"].idxmax().strftime("%m/%Y"),
+               "low": round(lo, 2), "low_date": h["Low"].idxmin().strftime("%m/%Y"),
+               "from_high_pct": round((cur / hi - 1) * 100, 1),
+               "from_low_pct": round((cur / lo - 1) * 100, 1)}
+        for ans in (3, 5):
+            if len(h) > ans * 12:
+                out[f"perf_{ans}y"] = round((cur / (float(h["Close"].iloc[-ans * 12 - 1]) / div) - 1) * 100, 1)
+        # Plus hauts mensuels au-dessus du cours, dans les 10 ans : zone où des
+        # acheteurs piégés revendront. La plus proche est la résistance utile.
+        hauts = sorted({round(float(x) / div, 1) for x in h["High"] if float(x) / div > cur * 1.01})
+        if hauts:
+            out["next_resistance"] = hauts[0]
+        return out
+    except Exception as e:
+        print(f"⚠️ Long-term context error {ticker}: {e}")
         return {}
 
 

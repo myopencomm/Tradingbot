@@ -32,6 +32,8 @@ MIN_PREUVES = 2
 # Champs attendus, dans l'ordre du format demandé à l'IA.
 _CHAMPS = {
     "these":       r"th[eè]se",
+    "long_terme":  r"contexte long terme",
+    "autres_risques": r"autres risques",
     "maintenant":  r"pourquoi maintenant",
     "risque_txt":  r"risque principal",
     "invalidation": r"invalidation",
@@ -83,7 +85,8 @@ def parse(val: str) -> dict:
                 break
     conv = re.search(r"\d", out.get("conviction", "") or "")
     out["conviction"] = int(conv.group()) if conv else None
-    for key in ("these", "maintenant", "risque_txt", "invalidation"):
+    for key in ("these", "maintenant", "risque_txt", "invalidation",
+                "long_terme", "autres_risques"):
         out.setdefault(key, "")
     return out
 
@@ -124,6 +127,12 @@ def check(val: str, donnees: str, nom_societe: str = "") -> tuple[bool, str, dic
         return False, "« pourquoi maintenant » absent", f
     if _creux(f["risque_txt"], 6, nom_societe):
         return False, "risque principal non identifié", f
+    # Analyse COMPLÈTE exigée (13/10/2026) : contexte 10 ans et risques de
+    # bilan / d'événement, sinon pas d'achat — TEVA avait été proposé sans.
+    if _creux(f["long_terme"], 8, nom_societe):
+        return False, "contexte long terme absent (résistances historiques)", f
+    if _creux(f["autres_risques"], 5, nom_societe):
+        return False, "risques de bilan / d'événement absents", f
     if len(f["preuves"]) < MIN_PREUVES:
         return False, f"moins de {MIN_PREUVES} preuves concrètes", f
     if not any(preuve_ancree(p, donnees, nom_societe) for p in f["preuves"]):

@@ -12,7 +12,9 @@ Société X (X.BR) — Entrée : 128.4€  SL : 122.8€ (-4.4%)  TP : 141.2€ 
 - Pourquoi maintenant : repli de 5 % sur le support des 128 € sans nouvelle négative.
 - Preuve 1 : guidance relevée, croissance du chiffre d'affaires de 12 % (communiqué du 24/09/2026)
 - Preuve 2 : Kepler relève son objectif à 145 € avec une recommandation Achat
+- Contexte long terme : le cours reste 20 % sous son plus haut de 10 ans, la résistance la plus proche à 150 € est au-delà du TP.
 - Risque principal : un ralentissement des volumes au T3 publié le 12/11 démentirait la guidance relevée.
+- Autres risques : dette élevée à 3 fois l'EBITDA, et résultats du 12/11 pouvant provoquer un écart.
 - Invalidation : clôture sous 122.8 €
 - Conviction : 4
 - Risque : MEDIUM"""
@@ -119,3 +121,16 @@ def test_roles_ia_budget(monkeypatch):
     monkeypatch.setenv("AI_USE_CLAUDE_CLI", "0")
     assert ai_provider.role_chain("final") == ["anthropic", "gemini"]
     assert ai_provider.role_chain("decision") == ["gemini"]
+
+
+def test_sans_contexte_long_terme_refuse():
+    """TEVA, 13/10/2026 : proposé à 3 % de son plus haut de 10 ans sans le voir."""
+    val = "\n".join(l for l in FORTE.splitlines() if "Contexte long terme" not in l)
+    ok, motif, _ = thesis_gate.check(val, DONNEES, "Société X")
+    assert not ok and "long terme" in motif
+
+
+def test_sans_autres_risques_refuse():
+    val = "\n".join(l for l in FORTE.splitlines() if "Autres risques" not in l)
+    ok, motif, _ = thesis_gate.check(val, DONNEES, "Société X")
+    assert not ok and "risques" in motif
