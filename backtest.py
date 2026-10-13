@@ -117,7 +117,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              be_atr: float | None = None,
              review: dict | None = None,
              fx: pd.Series | None = None, be_eur: bool = False,
-             max_sl_pct: float = 10.0) -> dict:
+             max_sl_pct: float = 10.0,
+             lock: tuple | None = None) -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
 
     `stale` = ((j1, p1), (j2, p2)) — jalons de la sortie sur stagnation : à j1
@@ -148,6 +149,12 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     `max_sl_pct` = veto des titres dont le stop (2×ATR) serait plus loin que
     ce % : la perte au SL d'un titre volatil est plus grosse quand la taille
     de position est imposée par le plancher de frais plutôt que par le risque.
+
+    `lock` = (déclencheur %, gain net %) — « petits gains sûrs plus souvent »
+    (demandé le 13/10/2026) : dès qu'une CLÔTURE atteint +déclencheur % au-
+    dessus de l'entrée, le SL monte au cours qui garantit +gain net %, frais
+    aller-retour compris. Une seule fois par position ; le trailing breakeven
+    reste actif en parallèle.
 
     `be_atr` = le MÊME seuil exprimé en multiples d'ATR d'entrée ; prime sur
     `be_pct` quand il est fourni. Un seuil en % fixe ne veut pas dire la même
@@ -232,6 +239,16 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                         p["exit_next_open"] = True
                     elif not np.isnan(row["low10"]):
                         p["sl"] = max(p["sl"], float(row["low10"]))
+            # Verrou de gain (variante --lock)
+            if lock and not p.get("lock_done"):
+                trig, net = lock
+                if row["close"] >= p["entry"] * (1 + trig / 100):
+                    frais_titre = _fee_pair(p["ticker"], fee,
+                                            p["entry"] * p["qty"]) / p["qty"]
+                    niveau = p["entry"] * (1 + net / 100) + frais_titre
+                    if niveau < row["close"]:
+                        p["sl"] = max(p["sl"], niveau)
+                        p["lock_done"] = True
             # Trailing breakeven (optionnel — testé avec/sans)
             if be_trail and not p["be_done"]:
                 if be_atr is not None:
@@ -478,6 +495,9 @@ def main():
     ap.add_argument("--slcap", action="store_true",
                     help="compare des plafonds de distance au SL (veto des "
                          "titres trop volatils)")
+    ap.add_argument("--lock", action="store_true",
+                    help="« petits gains sûrs » : verrou de gain dès +X %% "
+                         "et TP rapprochés, contre la stratégie livrée")
     ap.add_argument("--max-pos", type=int, default=2,
                     help="positions simultanées (production : 4)")
     args = ap.parse_args()
@@ -524,7 +544,20 @@ def main():
     regime_ok.index = pd.DatetimeIndex(all_dates)
 
     base = dict(mode="new", risk_pct=1.0, max_pos=args.max_pos, max_cost_pct=30)
-    if args.slcap:
+    if args.lock:
+        # 13/10/2026 : après une série de pertes, « mieux vaut de petits gains
+        # souvent ». Sur les 21 trades réels, 5 perdants sur 11 étaient passés
+        # à +3 % avant de finir sous l'eau — mais les gros gagnants venaient
+        # de positions laissées courir. Le juge : ce backtest, pas l'intuition.
+        configs = [("L0. référence (production)", dict(base))]
+        for trig, net in ((2, 0.5), (3, 0.5), (3, 1), (4, 1), (4, 2), (5, 2), (6, 3)):
+            configs.append((f"L. verrou dès +{trig}% → +{net}% net",
+                            dict(base, lock=(trig, net))))
+        for k in (1.0, 1.5):
+            configs.append((f"T. TP rapproché à {k}R", dict(base, tp_mult_r=k)))
+        configs.append(("LT. verrou +3%→+1% ET TP 1.5R",
+                        dict(base, lock=(3, 1), tp_mult_r=1.5)))
+    elif args.slcap:
         # 24/09/2026 : les plus grosses pertes (AGRO -9.7%, EXENS -9.8%) sont
         # des stops à ~9-10%. Refuser ces titres réduit-il les pertes SANS
         # couper plus de gains qu'il n'en sauve ?

@@ -1790,6 +1790,20 @@ Limites : constituants actuels (biais du survivant, identique pour toutes les co
 
 Un plafond plus serré fait **un peu mieux** dans la plupart des cas, mais sans ordre régulier (7 % moins bon que 6 % et 8 % sur le premier univers), avec un win rate quasi inchangé (30-35 %) et des intervalles bootstrap qui se chevauchent tous. **Non activé** : l'effet ne se distingue pas du bruit. `MAX_SL_PCT=6` dans `.env` est le levier si on veut l'essayer en réel.
 
+**Petits gains sûrs plus souvent (`--lock`, 13/10/2026)** — question, après une série de stops : vaut-il mieux verrouiller vite un petit gain ? Règle testée : dès qu'une clôture atteint +X %, le SL monte au cours qui garantit +Y % net, frais compris (`lock=(X, Y)`), plus deux variantes à TP rapproché (1 R et 1,5 R).
+
+| Règle (2023 → 10/2026, 149 titres) | 2 positions | 4 positions |
+|---|---|---|
+| Référence (production) | -784 € | -1 793 € |
+| verrou +2 % → +0,5 % net | -1 231 € | -2 260 € |
+| verrou +3 % → +1 % net | -1 133 € | -2 051 € |
+| verrou +4 % → +2 % net | -871 € | -1 988 € |
+| verrou +6 % → +3 % net | -675 € | -1 909 € |
+| TP à 1 R | -1 252 € | -2 565 € |
+| verrou +3 %→+1 % ET TP 1,5 R | — | -2 367 € |
+
+Le verrou fait monter le taux de réussite (27 % → 47 %) mais **le gain moyen fond (+28 € → +9 €) et la perte moyenne reste la même (-24 €)** : il coupe des gagnants sans sauver les vrais perdants, qui baissent dès l'entrée (sur les 21 trades réels, 6 des 7 derniers perdants n'avaient jamais dépassé +1,5 %). La seule variante meilleure à 2 positions (+6 %→+3 %) est pire à 4 : pas d'effet robuste. **Non activé.** Seule exception gardée : `/securiser`, décision manuelle position par position.
+
 ## Règles de trading par défaut
 
 - **Stop-loss** : technique, ≈ 2×ATR sous l'entrée, borné 3-10% (fallback -7% fixe pour les positions manuelles sans ATR)
