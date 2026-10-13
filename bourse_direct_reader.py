@@ -791,7 +791,12 @@ def _parse_order(text: str) -> dict | None:
     m_ex = (re.search(rf'Profit\s*Exé\.?\s*{_AMT}', flat)
             or re.search(rf'Seuil\s*Exé\.?\s*{_AMT}', flat)
             or re.search(rf'Lim(?:ite)?\.?\s*Exé\.?\s*{_AMT}', flat)
-            or re.search(rf'Ordre exécuté\s*\d+\s*/\s*\d+\s*Lim\.\s*{_AMT_NC}\s*{_AMT}', flat))
+            or re.search(rf'Ordre exécuté\s*\d+\s*/\s*\d+\s*Lim\.\s*{_AMT_NC}\s*{_AMT}', flat)
+            # Vente AU MARCHÉ (/sortir) : « Ordre exécuté 31/31 Marché 26.39 $US
+            # 26.39 $US ». Non lue, elle laissait le sync prendre le niveau du TP
+            # ANNULÉ comme prix de sortie (CBLL clôturé à 28 $ au lieu de 26,39 $
+            # le 13/10/2026, P&L gonflé de ~+50 €).
+            or re.search(rf'Ordre exécuté\s*\d+\s*/\s*\d+\s*Marché\s*(?:{_AMT_NC}|-)?\s*{_AMT}', flat))
     if m_ex:
         order["exec_price"] = _parse_float(m_ex.group(1))
 

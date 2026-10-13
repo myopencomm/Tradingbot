@@ -37,3 +37,14 @@ def test_pas_d_annonce_quand_rien_n_est_achetable(monkeypatch):
     monkeypatch.setattr(sizing, "us_slots_block", lambda: None)
     assert "disponibles" in ae._blocage_silencieux("AAPL", 290.0)
     assert ae._blocage_silencieux("AAPL", 5000.0) is None
+
+
+def test_vente_au_marche_prix_reel_lu():
+    """/sortir CBLL : le sync prenait le TP ANNULÉ (28 $) pour prix de sortie."""
+    import bourse_direct_reader as r
+    raw = ("CI | CERIBELL INC(XNGS) | XNGS › CBLL | 26.440 USD | +4.65 % | | | "
+           "Vente(CPT)\t\t0/31\t\t-\t30/10/2026 à 22:00:00 | Take Profit\tSeuil24.54 $US\t"
+           "Annulé\tProfit28.00 $US\tAnnulé\t | | | Vente(CPT)\tOrdre exécuté\t31/31\t"
+           "Marché 26.39 $US\t26.39 $US\t13/10/2026 à 22:00:00")
+    o = r._parse_order(raw)
+    assert o["statut"] == "Exécuté" and o["exec_price"] == 26.39
