@@ -87,6 +87,8 @@ ALL = [
             help="cash dispo  |  /cash 1234 — le definir"),
     Command("stats", "cmd_stats", "Bilan : win rate, P&L, profit factor", "portefeuille",
             help="bilan (win rate, P&L, profit factor)"),
+    Command("apprentissage", "cmd_apprentissage", "Ce que le bot apprend de ses décisions + critère d'arrêt",
+            "portefeuille", help="décisions mesurées (achats ET rejets), pistes prouvées, bot vs S&P 500"),
     Command("verdicts", "cmd_verdicts", "Les verdicts du briefing prédisent-ils quelque chose ?",
             "portefeuille", help="bilan mesuré des verdicts ✅/👀/⚠️/🔴 du briefing (10 et 20 séances)"),
     Command("dashboard", "cmd_dashboard", "Graphique P&L + resume visuel", "portefeuille",

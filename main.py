@@ -33,6 +33,7 @@ JOB_TIMEOUTS = {
     "us_scan":          900,    # même travail sur l'univers US
     "weekly_swap":      900,    # compare chaque position à des candidats
     "monthly_breach":   600,
+    "learning_report":  600,    # 1 an d'historique par titre du journal
     "universe_refresh": 2400,   # ~4000 valeurs mondiales, 2 ans d'historique
     # Le cycle horaire enchaîne sync + annulations + trailing + entrées. Une
     # fois par mois il porte en plus la repose des protections expirées, qui
@@ -289,6 +290,12 @@ def run_scheduler():
     schedule.every().day.at("09:15").do(
         _bounded(lambda: analysis.monthly_breach_review(telegram_bot.send)
                  if _market_day() and datetime.now().day == 1 else None, "monthly_breach")
+    )
+    # Bilan d'apprentissage le 1er du mois (decisions.py) : décisions mesurées,
+    # pistes prouvées, et où en est le critère d'arrêt bot vs S&P 500.
+    schedule.every().day.at("09:30").do(
+        _bounded(lambda: telegram_bot.send(__import__("decisions").rapport())
+                 if datetime.now().day == 1 else None, "learning_report")
     )
     schedule.every().monday.at("09:20").do(_bounded(_weekly_version_check, "version_check"))
     # News négatives et résultats imminents sur les positions détenues : alerte

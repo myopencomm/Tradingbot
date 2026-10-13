@@ -73,6 +73,12 @@ def _etat_en_bac_a_sable(tmp_path, monkeypatch):
         monkeypatch.setattr(api_costs, "COSTS_PATH", bac / "api_costs.json")
     except Exception:
         pass
+    # Journaux d'apprentissage : sans ça, chaque validate_candidate d'un test
+    # écrivait une « décision » fictive dans le vrai journal (13/10/2026).
+    import decisions
+    import verdicts
+    monkeypatch.setattr(decisions, "PATH", bac / "decisions_journal.json")
+    monkeypatch.setattr(verdicts, "PATH", bac / "verdicts_history.json")
     return bac
 
 

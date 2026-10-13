@@ -635,6 +635,13 @@ VERDICT : ACHAT
         "conviction": fields.get("conviction"), "jev": jev_avis,
         "context": _entry_ctx(tech, pctx, thesis, mode, regime),
     })
+    # Boucle d'apprentissage : CHAQUE décision est notée pour être mesurée
+    # (decisions.py, /apprentissage) — achats comme rejets.
+    try:
+        import decisions
+        decisions.enregistrer(out, mode)
+    except Exception as _de:
+        print(f"[validate] journal des décisions : {_de}")
     return out
 
 

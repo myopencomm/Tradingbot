@@ -1622,6 +1622,16 @@ def cmd_securiser(args, cid):
     _run_long(cid, _do_secure)
 
 
+def cmd_apprentissage(args, cid):
+    """/apprentissage — ce que mesurent les décisions du bot, et le critère
+    d'arrêt fixé le 13/10/2026."""
+    import decisions
+
+    def _do():
+        send(decisions.rapport(), cid)
+    _run_long(cid, _do)
+
+
 def cmd_verdicts(args, cid):
     """/verdicts — les verdicts du briefing ont-ils une valeur prédictive ?"""
     import verdicts
