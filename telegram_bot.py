@@ -1582,46 +1582,137 @@ def cmd_securiser(args, cid):
     stop, tp, qty = att["stop"], pos.get("target_high"), abs(int(pos["qty"]))
     gain = att.get("gain", 1.0)
 
-    def _do_secure():
-        import bourse_direct_orders as bd_orders
-        import stale_exit
-        send(f"🔐 {nom} : annulation de la protection actuelle…", cid)
-        if not stale_exit._annuler_protections(pos, nom):
-            send(f"⚠️ {nom} : annulation NON confirmée au carnet — rien n'est "
-                 f"reposé (pas de doublon). La protection actuelle "
-                 f"({pos.get('target_low')} / {tp}) reste en place.", cid)
-            return
-        od = conf = None
-        try:
-            od = playwright_session.run(
-                lambda page: bd_orders.create_expert_order(
-                    page, pos["ticker"], qty, stop, tp, "max"), timeout=30)
-            oid = od and (od.get("id") or od.get("order_id"))
-            if oid:
-                conf = playwright_session.run(
-                    lambda page: bd_orders.confirm_order_auto(page, oid, False),
-                    timeout=30)
-        except Exception as e:
-            print(f"[securiser] {nom} : {e}")
-        if not conf:
-            send(f"🚨 {nom} : ancienne protection annulée mais NOUVELLE NON "
-                 f"CONFIRMÉE — position SANS STOP.\nÀ faire tout de suite :\n"
-                 f"/ordre vendre {pos['ticker']} {qty} expert {stop} {tp}", cid)
-            return
-        adj = (od.get("_adjusted") or {})
-        d = portfolio.load()
-        if nom in d.get("positions", {}):
-            d["positions"][nom]["target_low"] = adj.get("stop_loss") or stop
-            d["positions"][nom]["protection_ids"] = [c for c in (od.get("children") or []) if c]
-            d["positions"][nom]["protected"] = True
-            d["positions"][nom].pop("pending_sl", None)
-            portfolio.save(d)
+    def _ok(od, adj):
         send(f"🔐 GAIN MINIMUM SÉCURISÉ — {nom}\n"
              f"Stop sur BD : {adj.get('stop_loss') or stop} | objectif {adj.get('take_profit') or tp}\n"
              f"Si le stop se déclenche : au moins +{gain:g} € net (sauf écart "
              f"d'ouverture sous le stop).", cid)
 
-    _run_long(cid, _do_secure)
+    _run_long(cid, lambda: _remplacer_protection(nom, pos, stop, tp, cid, "securiser", _ok))
+
+
+def _remplacer_protection(nom: str, pos: dict, stop: float, tp: float, cid,
+                          label: str, on_ok) -> None:
+    """Remplace la protection SL/TP d'une position sur BD — mécanique commune
+    à /securiser et /sortie_mini. Annulation VÉRIFIÉE au carnet d'abord (rien
+    n'est reposé sinon : pas de doublon de vente), puis nouvel ordre Expert.
+    Si le nouvel ordre échoue, la position est signalée SANS STOP avec la
+    commande pour la reprotéger."""
+    import bourse_direct_orders as bd_orders
+    import stale_exit
+    qty = abs(int(pos["qty"]))
+    send(f"🔁 {nom} : annulation de la protection actuelle…", cid)
+    if not stale_exit._annuler_protections(pos, nom):
+        send(f"⚠️ {nom} : annulation NON confirmée au carnet — rien n'est "
+             f"reposé (pas de doublon). La protection actuelle "
+             f"({pos.get('target_low')} / {pos.get('target_high')}) reste en place.", cid)
+        return
+    od = conf = None
+    try:
+        od = playwright_session.run(
+            lambda page: bd_orders.create_expert_order(
+                page, pos["ticker"], qty, stop, tp, "max"), timeout=30)
+        oid = od and (od.get("id") or od.get("order_id"))
+        if oid:
+            conf = playwright_session.run(
+                lambda page: bd_orders.confirm_order_auto(page, oid, False),
+                timeout=30)
+    except Exception as e:
+        print(f"[{label}] {nom} : {e}")
+    if not conf:
+        send(f"🚨 {nom} : ancienne protection annulée mais NOUVELLE NON "
+             f"CONFIRMÉE — position SANS STOP.\nÀ faire tout de suite :\n"
+             f"/ordre vendre {pos['ticker']} {qty} expert {stop} {tp}", cid)
+        return
+    adj = (od.get("_adjusted") or {})
+    d = portfolio.load()
+    if nom in d.get("positions", {}):
+        d["positions"][nom]["target_low"] = adj.get("stop_loss") or stop
+        d["positions"][nom]["target_high"] = adj.get("take_profit") or tp
+        d["positions"][nom]["protection_ids"] = [c for c in (od.get("children") or []) if c]
+        d["positions"][nom]["protected"] = True
+        d["positions"][nom].pop("pending_sl", None)
+        portfolio.save(d)
+    on_ok(od, adj)
+
+
+_pending_mini: dict = {}          # cid → {"nom", "tp", "gain", "expires"}
+
+
+def cmd_sortie_mini(args, cid):
+    """/sortie_mini NOM [GAIN€] [oui] — revendre dès que la position revient à
+    au moins GAIN€ (1 € par défaut) de gain net : l'objectif (TP) est abaissé
+    à ce niveau sur BD, le stop reste en place.
+
+    Demandé le 14/10/2026 pour KRT : « attendre qu'elle remonte au-dessus de
+    zéro, et vendre avec au moins 1 € de gain ». Inverse de /securiser, qui
+    remonte le STOP d'une position déjà en gain.
+    """
+    positions = portfolio.load().get("positions", {})
+    if not args:
+        send("Usage : /sortie_mini NOM [GAIN€]  (puis /sortie_mini NOM oui)", cid)
+        return
+    nom = _find_position(args[0], positions)
+    if not nom:
+        send(f"Position « {args[0]} » introuvable.", cid)
+        return
+    pos = positions[nom]
+    reste = [a.lower() for a in args[1:]]
+    confirme = "oui" in reste or "ok" in reste
+    gain = 1.0
+    for a in reste:
+        try:
+            gain = float(a.replace(",", ".").rstrip("€"))
+        except ValueError:
+            pass
+
+    if not confirme:
+        niveau = stop_gain_minimum(pos, gain)
+        v = position_view.view(nom, pos)
+        if not niveau or not v.get("price"):
+            send(f"{nom} : calcul impossible (cours ou PRU indisponible).", cid)
+            return
+        if niveau <= v["price"]:
+            send(f"{nom} : le cours ({v['sym']}{v['price']}) est DÉJÀ au-dessus du "
+                 f"niveau qui rapporte +{gain:g} € ({v['sym']}{niveau}). Un objectif "
+                 f"là vendrait tout de suite : utilise /sortir {nom} pour encaisser, "
+                 f"ou /securiser {nom} pour garder la position avec un gain garanti.", cid)
+            return
+        if pos.get("target_high") and niveau >= pos["target_high"]:
+            send(f"{nom} : l'objectif actuel ({pos['target_high']}) est déjà sous ce "
+                 f"niveau. Rien à faire.", cid)
+            return
+        _pending_mini[cid] = {"nom": nom, "tp": niveau, "gain": gain,
+                              "expires": time.time() + 120}
+        send(f"🎯 SORTIE AU PREMIER GAIN — {nom} ({pos['ticker']}) — "
+             f"{abs(int(pos['qty']))} titres\n"
+             f"Cours {v['sym']}{v['price']} | P&L actuel {v['pnl_eur']:+.0f} €\n"
+             f"Objectif : {pos.get('target_high')} → {niveau} "
+             f"({(niveau / v['price'] - 1) * 100:+.1f}% du cours) = vente automatique "
+             f"dès +{gain:g} € net\n"
+             f"Stop inchangé : {pos.get('target_low')}\n"
+             f"⚠️ Tu renonces au gain au-delà : si le titre file, la vente se fait "
+             f"quand même à {niveau}.\n\n"
+             f"Confirme sous 120 s : /sortie_mini {nom} oui", cid)
+        return
+
+    att = _pending_mini.get(cid)
+    if not att or att["nom"] != nom or time.time() > att["expires"]:
+        send(f"Pas de sortie au premier gain en attente pour {nom} (ou délai "
+             f"dépassé). Relance /sortie_mini {nom}.", cid)
+        return
+    _pending_mini.pop(cid, None)
+    if not _check_playwright_ready(cid):
+        return
+    tp, g = att["tp"], att["gain"]
+
+    def _ok(od, adj):
+        send(f"🎯 SORTIE AU PREMIER GAIN PROGRAMMÉE — {nom}\n"
+             f"Objectif sur BD : {adj.get('take_profit') or tp} (vente dès +{g:g} € net) | "
+             f"stop {adj.get('stop_loss') or pos.get('target_low')}", cid)
+
+    _run_long(cid, lambda: _remplacer_protection(
+        nom, pos, pos.get("target_low"), tp, cid, "sortie_mini", _ok))
 
 
 def cmd_apprentissage(args, cid):

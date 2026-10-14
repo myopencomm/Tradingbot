@@ -76,3 +76,23 @@ def test_un_seul_achat_autonome_par_jour(monkeypatch):
     monkeypatch.setattr(ae.portfolio, "get_autonomous_config",
                         lambda: {"entrees": [ae._jour(), "2026-01-01"]})
     assert ae.entrees_du_jour() == 1
+
+
+def test_sortie_mini(monkeypatch):
+    """KRT en perte : objectif abaissé au cours qui rapporte +1 € net."""
+    import telegram_bot as tb
+    import portfolio
+    msgs = []
+    monkeypatch.setattr(tb, "send", lambda m, cid=None: msgs.append(m))
+    pos = {"ticker": "KRT", "qty": 29, "entry_price": 54.08, "bd_pru_raw": 48.589,
+           "target_low": 50.6, "target_high": 59.3}
+    monkeypatch.setattr(portfolio, "load", lambda: {"positions": {"KRT": dict(pos)}})
+    monkeypatch.setattr(tb, "stop_gain_minimum", lambda p, g=1.0: 54.73)
+    monkeypatch.setattr(tb.position_view, "view", lambda n, c: {
+        "price": 53.61, "sym": "$", "pnl_eur": -8.0})
+    tb.cmd_sortie_mini(["KRT"], "1")
+    assert "59.3 → 54.73" in msgs[-1] and "Stop inchangé : 50.6" in msgs[-1]
+    monkeypatch.setattr(tb.position_view, "view", lambda n, c: {
+        "price": 55.0, "sym": "$", "pnl_eur": 12.0})
+    tb.cmd_sortie_mini(["KRT"], "1")
+    assert "DÉJÀ au-dessus" in msgs[-1]
