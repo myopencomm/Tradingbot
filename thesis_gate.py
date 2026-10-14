@@ -51,6 +51,10 @@ stock stocks share shares price market sector analyst analysts results quarter
 """.split())
 
 
+_SOCIAL = re.compile(r"stocktwits|reddit|twitter|\bx\.com|forum|boursorama messages|"
+                     r"signal social|sentiment social|rumeur|non confirm|non officiel")
+
+
 def _norm(txt: str) -> str:
     txt = unicodedata.normalize("NFKD", txt or "").encode("ascii", "ignore").decode()
     return txt.lower()
@@ -133,9 +137,16 @@ def check(val: str, donnees: str, nom_societe: str = "") -> tuple[bool, str, dic
         return False, "contexte long terme absent (résistances historiques)", f
     if _creux(f["autres_risques"], 5, nom_societe):
         return False, "risques de bilan / d'événement absents", f
-    if len(f["preuves"]) < MIN_PREUVES:
-        return False, f"moins de {MIN_PREUVES} preuves concrètes", f
-    if not any(preuve_ancree(p, donnees, nom_societe) for p in f["preuves"]):
+    # Une preuve tirée d'un réseau social ou de forum, ou que l'IA dit elle-même
+    # « non confirmée », ne prouve rien : DGII acheté le 14/10/2026 sur une
+    # preuve n°1 « StockTwits, signal social, non confirmé par une source
+    # officielle ».
+    fiables = [p for p in f["preuves"] if not _SOCIAL.search(_norm(p))]
+    f["preuves_fiables"] = fiables
+    if len(fiables) < MIN_PREUVES:
+        return False, (f"moins de {MIN_PREUVES} preuves de source fiable "
+                       f"(réseaux sociaux / non confirmé exclus)"), f
+    if not any(preuve_ancree(p, donnees, nom_societe) for p in fiables):
         return False, "aucune preuve retrouvée dans les données de recherche", f
     if f["conviction"] is None or f["conviction"] < MIN_CONVICTION:
         return False, (f"conviction {f['conviction'] or '?'}/5 < {MIN_CONVICTION}"), f

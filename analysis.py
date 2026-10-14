@@ -566,6 +566,15 @@ VERDICT : ACHAT
         verdict, reason = "EXCLUS", f"analyse insuffisante — {gate_reason}"
         print(f"[validate] {ticker} : ACHAT refusé par la porte — {gate_reason}")
 
+    # ── Profil historique sous la moyenne → pas d'achat (14/10/2026) ────────
+    profil = None
+    if verdict == "ACHAT":
+        profil = profil_score(tech)
+        if profil and profil[0] < profil[1]:
+            verdict, reason = "EXCLUS", (f"profil historique sous la moyenne "
+                                         f"({profil[0]:.0f} % de TP atteints vs {profil[1]:.0f} %)")
+            print(f"[validate] {ticker} : ACHAT refusé — {reason}")
+
     # ── Contre-avis Jev : un second juge, indépendant du modèle qui a écrit
     # la thèse. Veto seul (jamais il ne transforme un EXCLUS en ACHAT) ; avis
     # absent (clé, panne) → la porte du code suffit.
@@ -2196,6 +2205,30 @@ def profil_historique(tech: dict, ma200_dist: float | None = None) -> str:
             + "\n".join(lignes) + "\n"
             "→ Ta conviction doit REFLÉTER ces taux : un profil sous la moyenne exige des "
             "preuves plus fortes ; une conviction 5 n'est pas crédible sur un profil faible.\n")
+
+
+def profil_score(tech: dict) -> tuple[float, float] | None:
+    """(taux moyen de TP des tranches du profil, taux moyen global), ou None.
+    Sert de VETO depuis le 14/10/2026 : « éviter d'acheter une action dont les
+    chances d'atteindre l'objectif sont faibles ». DGII avait été acheté avec
+    un profil à ~34 % contre 36 % en moyenne."""
+    profil_historique(tech)                       # charge _BASE_RATES
+    br = _BASE_RATES or {}
+    if not br.get("profils"):
+        return None
+    vals = {"ma200_dist": tech.get("ma200_dist_pct"), "mom_1m": tech.get("momentum_1m"),
+            "rsi": tech.get("rsi"), "atr_pct": tech.get("atr_pct")}
+    taux = []
+    for champ, v in vals.items():
+        if v is None:
+            continue
+        for t in br["profils"].get(champ, []):
+            if t["de"] < v <= t["a"]:
+                taux.append(t["tp_pct"])
+                break
+    if len(taux) < 2:
+        return None
+    return round(sum(taux) / len(taux), 1), br["tp_pct"]
 
 
 _MIN_LIGNE_CACHE: dict = {}

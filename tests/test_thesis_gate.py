@@ -134,3 +134,20 @@ def test_sans_autres_risques_refuse():
     val = "\n".join(l for l in FORTE.splitlines() if "Autres risques" not in l)
     ok, motif, _ = thesis_gate.check(val, DONNEES, "Société X")
     assert not ok and "risques" in motif
+
+
+def test_preuve_reseau_social_ne_compte_pas():
+    """DGII, 14/10/2026 : preuve n°1 « StockTwits … non confirmé »."""
+    val = FORTE.replace(
+        "- Preuve 1 : guidance relevée, croissance du chiffre d'affaires de 12 % (communiqué du 24/09/2026)",
+        "- Preuve 1 : chiffre d'affaires de 12 % en hausse (StockTwits, signal social, non confirmé par une source officielle)")
+    ok, motif, _ = thesis_gate.check(val, DONNEES, "Société X")
+    assert not ok and "source fiable" in motif
+
+
+def test_veto_profil_sous_la_moyenne(monkeypatch):
+    import analysis
+    monkeypatch.setattr(analysis, "_BASE_RATES", {"n": 400, "tp_pct": 36.0, "profils": {
+        "ma200_dist": [{"de": 10, "a": 20, "n": 90, "tp_pct": 33.0, "ret_moy": 0}],
+        "rsi": [{"de": 0, "a": 45, "n": 120, "tp_pct": 35.0, "ret_moy": 0}]}})
+    assert analysis.profil_score({"ma200_dist_pct": 19.6, "rsi": 38}) == (34.0, 36.0)
