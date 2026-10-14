@@ -169,6 +169,22 @@ def cancel_auto_order_if_rejected(ticker: str, reason: str, send_fn=None) -> Non
 
 # ─── Cycle d'entrée ─────────────────────────────────────────────────────────
 
+def _jour() -> str:
+    return datetime.now(PARIS).strftime("%Y-%m-%d")
+
+
+def entrees_du_jour() -> int:
+    """Achats autonomes passés aujourd'hui (autonomous_config.entrees)."""
+    return sum(1 for d in portfolio.get_autonomous_config().get("entrees", []) if d == _jour())
+
+
+def noter_entree() -> None:
+    d = portfolio.load()
+    cfg = d.setdefault("autonomous_config", {})
+    cfg["entrees"] = [x for x in cfg.get("entrees", []) if x >= _jour()] + [_jour()]
+    portfolio.save(d)
+
+
 def _blocage_silencieux(ticker: str, available: float) -> str | None:
     """Raison pour laquelle aucun achat de `ticker` n'est possible MAINTENANT,
     connue sans rien demander à BD ni à l'IA — ou None. L'opportunité reste en
@@ -463,6 +479,7 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         # order_id + expires_at : un ordre d'entrée non exécuté à la clôture du
         # marché du titre sera ANNULÉ AUTO (cancel_stale_entry_orders) — un
         # limite qui traîne ne se remplit que si le momentum s'est retourné.
+        noter_entree()
         portfolio.add_auto_pending_order(
             ticker, qty, round(entry, 4), round(sl, 4), round(tp, 4),
             order_id=order_id,
@@ -542,6 +559,15 @@ def run_entry_cycle(send_fn) -> None:
         if len(auto_pos) + len(auto_pending) >= max_pos:
             print(f"[Auto] Max positions atteint ({len(auto_pos)} positions "
                   f"+ {len(auto_pending)} ordres en attente / {max_pos})")
+            return
+
+        # Au plus AUTO_MAX_ENTRIES_PER_DAY achats autonomes par jour (14/10/2026 :
+        # KRT puis DGII, issus du même scan, à quelques minutes d'écart — deux
+        # paris corrélés pris d'un coup, 80 % du fonds sur deux titres US).
+        from config import AUTO_MAX_ENTRIES_PER_DAY
+        if entrees_du_jour() >= AUTO_MAX_ENTRIES_PER_DAY:
+            print(f"[Auto] {AUTO_MAX_ENTRIES_PER_DAY} achat(s) autonome(s) déjà passé(s) "
+                  f"aujourd'hui — suivant demain")
             return
 
         budget_info = get_budget_info()

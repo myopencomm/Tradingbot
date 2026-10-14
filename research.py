@@ -495,3 +495,73 @@ def get_social_sentiment(ticker: str) -> str:
     return "\n".join(lines) if lines else "Sentiment social : aucune donnée disponible."
 
 
+
+
+# ── Recherche approfondie (Claude + recherche web), 14/10/2026 ───────────────
+# La recherche DuckDuckGo ci-dessus ne ramène presque que des titres de pages
+# (« Earnings Date and Reports… », « Stock Forecast… ») et elle est bridée à
+# chaque scan (73 requêtes bridées pour 43 validations le 14/10). L'IA décidait
+# donc presque à l'aveugle — DGII a été acheté sur une preuve StockTwits.
+# Ici, Claude cherche lui-même (outil WebSearch seul, sur l'abonnement) et rend
+# un dossier daté et sourcé. Mis en cache pour la journée : le scan et le
+# contrôle pré-achat du même titre ne paient qu'une recherche.
+_DEEP_CACHE = Path(__file__).parent / "research_cache.json"
+
+DEEP_PROMPT = """Fais une recherche web sur {nom} ({ticker}) et rends un dossier factuel.
+Date du jour : {date}. Chaque fait : date + source. Si une rubrique n'a rien de
+vérifiable, écris « rien de vérifié ». N'invente rien, ne recommande rien.
+
+ACTUALITÉS (30 derniers jours, les plus importantes, max 5)
+- JJ/MM/AAAA — fait précis, chiffré — source
+
+ÉVÉNEMENTS À VENIR (dates exactes : résultats, journée investisseurs,
+décision réglementaire, fin d'offre, assemblée)
+- JJ/MM/AAAA — événement — source
+
+ANALYSTES (objectif moyen, nombre d'analystes, révisions récentes datées)
+
+QUALITÉ DE LA CROISSANCE (ce qui est RÉCURRENT et ce qui est EXCEPTIONNEL dans
+les derniers résultats : gains ponctuels, remboursements, cessions, effets de
+change — avec montants)
+
+RISQUES SPÉCIFIQUES (dette, dilution, litiges, dépendance client, réglementaire)
+
+POURQUOI LE COURS A BOUGÉ (explication sourcée des mouvements des 3 derniers mois)
+"""
+
+
+def deep_research(ticker: str, company_name: str = "") -> str:
+    """Dossier de recherche sourcé du jour, ou "" si la CLI claude est
+    indisponible (limite d'usage, absente) — l'appelant doit alors refuser
+    d'acheter : pas d'achat sans recherche fiable."""
+    import os
+    from datetime import datetime
+    if os.getenv("DEEP_RESEARCH", "1") == "0":
+        return ""
+    jour = datetime.now().strftime("%Y-%m-%d")
+    cle = f"{ticker.upper()}|{jour}"
+    try:
+        cache = json.loads(_DEEP_CACHE.read_text(encoding="utf-8"))
+    except Exception:
+        cache = {}
+    if cache.get(cle):
+        return cache[cle]
+    try:
+        import ai_provider
+        if not ai_provider.cli_path():
+            return ""
+        txt = ai_provider.ClaudeCliProvider().research(DEEP_PROMPT.format(
+            nom=company_name or ticker, ticker=ticker,
+            date=datetime.now().strftime("%d/%m/%Y")))
+    except Exception as e:
+        print(f"⚠️ Recherche approfondie {ticker} : {e}")
+        return ""
+    if len(txt or "") < 300:
+        return ""
+    cache = {k: v for k, v in cache.items() if k.endswith(jour)}   # purge des jours passés
+    cache[cle] = txt
+    try:
+        _DEEP_CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+    return txt

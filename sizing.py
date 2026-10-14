@@ -155,9 +155,9 @@ def compute_position_size(ticker: str, entry: float, sl: float,
     # S'il reste moins de CASH_SWEEP_MIN_LEFTOVER après l'achat, on agrandit la
     # position pour l'absorber, frais inclus.
     #
-    # PRIME délibérément sur cost_cap : sans ça le balayage serait sans effet
-    # dès que le plafond de taille est la contrainte active. La contrepartie est
-    # réelle et annoncée — la perte au SL grandit dans la même proportion.
+    # Borné depuis le 14/10/2026 par le plafond de taille (cost_cap) et par
+    # +25 % du risque prévu : il ne PRIME plus sur cost_cap — il absorbait
+    # jusqu'à la moitié du fonds sur un seul titre.
     swept_from = 0
     if qty >= 1 and CASH_SWEEP_MIN_LEFTOVER > 0 and entry_eur > 0:
         base_cost = qty * entry_eur
@@ -167,6 +167,11 @@ def compute_position_size(ticker: str, entry: float, sl: float,
             while True:
                 trial = (qty + extra + 1) * entry_eur
                 if trial + order_fees(ticker, trial) > cash_cap:
+                    break
+                # Plus jamais au-delà du plafond de taille ni de +25 % du risque
+                # prévu (14/10/2026) : le balayage a porté DGII à 1 845 €, 45 %
+                # du fonds, pour une perte au SL de ~120 € au lieu de ~99 €.
+                if trial > cost_cap or (qty + extra + 1) * sl_dist_eur > risk_eur * 1.25:
                     break
                 extra += 1
             if extra:

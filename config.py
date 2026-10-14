@@ -232,6 +232,10 @@ POSITION_BUDGET_MAX = float(os.getenv("POSITION_BUDGET_MAX", "1000"))
 # risque (RISK_PER_TRADE_PCT) n'est donc plus respecté sur un trade balayé. Le
 # nouveau risque est annoncé dans le message d'achat. 0 = désactivé.
 CASH_SWEEP_MIN_LEFTOVER = float(os.getenv("CASH_SWEEP_MIN_LEFTOVER", "500"))
+# Au plus N achats autonomes par jour : deux paris pris dans la même heure sur
+# le même scan sont souvent corrélés (KRT + DGII, 14/10/2026).
+AUTO_MAX_ENTRIES_PER_DAY = int(os.getenv("AUTO_MAX_ENTRIES_PER_DAY", "1"))
+
 # Marchés où le mode autonome peut ACHETER seul. Le scan voit le monde entier
 # (market_universe.refresh_world), mais un ordre n'a été vérifié en réel sur BD
 # qu'à Euronext et aux US : ailleurs (Xetra, Londres, Madrid, Suisse), la

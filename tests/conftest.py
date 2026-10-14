@@ -82,6 +82,11 @@ def _etat_en_bac_a_sable(tmp_path, monkeypatch):
     return bac
 
 
+DOSSIER_FICTIF = ("ACTUALITÉS\n- 01/10/2026 — la société relève sa guidance de croissance "
+                  "à 12 % — communiqué\n" * 3 + "ÉVÉNEMENTS À VENIR\n- 12/11/2026 — résultats "
+                  "trimestriels — calendrier société\n" + "rien de vérifié\n" * 10)
+
+
 @pytest.fixture(autouse=True)
 def _coupe_circuit_reseau(monkeypatch):
     """Aucune sortie réseau depuis les tests — Telegram en premier.
@@ -100,6 +105,12 @@ def _coupe_circuit_reseau(monkeypatch):
     for nom in ("get", "post", "put", "patch", "delete", "head", "request"):
         monkeypatch.setattr(requests, nom, refus, raising=False)
     monkeypatch.setattr(requests.Session, "request", refus, raising=False)
+
+    # Recherche approfondie = sous-processus `claude -p` avec recherche web :
+    # jamais depuis un test. Un dossier fictif tient lieu de recherche réussie.
+    import research
+    monkeypatch.setattr(research, "deep_research",
+                        lambda ticker, company_name="": DOSSIER_FICTIF)
 
     # Telegram : neutralisé À LA SOURCE, sans même tenter le POST. Un test qui
     # veut observer les messages remplace `telegram_bot.send` de son côté ;

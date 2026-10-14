@@ -416,14 +416,20 @@ class ClaudeCliProvider(AIProvider):
         env["PATH"] = os.path.dirname(self.binary) + ":" + env.get("PATH", "/usr/bin:/bin")
         return env
 
-    def _call(self, prompt: str, model: str, effort: str | None) -> str:
+    def _call(self, prompt: str, model: str, effort: str | None,
+              tools: str = "", system: str | None = None) -> str:
         import json
         import subprocess
         import tempfile
         cmd = [self.binary, "-p", "--model", model, "--output-format", "json",
-               "--system-prompt", self.SYSTEM, "--tools", "",
+               "--system-prompt", system or self.SYSTEM, "--tools", tools,
                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                "--setting-sources", "", "--no-session-persistence"]
+        if tools:
+            # Outils explicitement autorisés (sinon refus en mode -p). Seule la
+            # recherche web l'est jamais : lecture seule, aucun fichier, aucune
+            # commande.
+            cmd += ["--allowedTools", tools]
         if effort:
             cmd += ["--effort", effort]
         try:
@@ -460,6 +466,16 @@ class ClaudeCliProvider(AIProvider):
 
     def complete_cheap(self, prompt: str, max_tokens: int = 100) -> str:
         return self._call(prompt, self.CHEAP_MODEL, None)
+
+    def research(self, prompt: str) -> str:
+        """Recherche web SOURCÉE par Claude (outil WebSearch seul). Remplace la
+        recherche DuckDuckGo, qui ne ramenait que des titres de pages (et
+        était bridée à chaque scan) : le 14/10/2026, faute de vraie
+        information, l'IA a validé DGII sur une preuve StockTwits."""
+        return self._call(prompt, self.MODEL, "medium", tools="WebSearch",
+                          system=("Analyste financier. Tu cherches sur le web et ne "
+                                  "rapportes que des faits datés et sourcés. Aucun "
+                                  "fait de mémoire. Aucune recommandation."))
 
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
         # Outils coupés : la CLI ne lit pas d'image ici → provider suivant.

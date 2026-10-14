@@ -384,9 +384,27 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
     # Le nom complet, pas le seul ticker : « KBC » ramenait des pages de
     # navigation, « KBC Group » ramène l'actualité de la société.
     _name  = funds.get("name") or ""
-    web    = research.research_stock(ticker, _name)
-    cats   = research.search_catalysts(ticker, _name)
-    social = research.get_social_sentiment(ticker)
+    # Recherche SOURCÉE du jour (Claude + recherche web). Sans elle, pas
+    # d'achat : DuckDuckGo ne ramène que des titres de pages et l'IA finissait
+    # par s'appuyer sur StockTwits (DGII, 14/10/2026). DDG reste en complément.
+    deep   = research.deep_research(ticker, _name)
+    web    = research.research_stock(ticker, _name) if not deep else ""
+    cats   = research.search_catalysts(ticker, _name) if not deep else ""
+    # Le sentiment des réseaux sociaux n'entre plus dans la décision d'achat :
+    # ce n'est pas une preuve, et il servait de béquille faute de vraie info.
+    social = ""
+    if not deep:
+        out.update({"reason": "recherche web fiable indisponible — pas d'achat à l'aveugle",
+                    "tech": tech, "pctx": pctx, "funds": funds, "currency": cur,
+                    "sym": sym, "fx": fx, "company_name": _name or ticker,
+                    "company_label": _name or ticker})
+        print(f"[validate] {ticker} : {out['reason']}")
+        try:
+            import decisions
+            decisions.enregistrer(out, mode)
+        except Exception:
+            pass
+        return out
 
     company_name = funds.get("name", ticker)
     company_sector = funds.get("sector", "")
@@ -520,11 +538,11 @@ AUJOURD'HUI : {today_str}
 SOCIÉTÉ ANALYSÉE : {company_label} — JE NE DÉTIENS PAS. CASH DISPONIBLE : {cash}€.
 Cours actuel : {price}{sym} (devise {cur})
 {data_blocks}
-RECHERCHE WEB
-{web}
-
-CATALYSEURS IMMINENTS
-{cats}
+RECHERCHE WEB — DOSSIER SOURCÉ DU JOUR (recherche web de Claude : la source
+principale ; les preuves doivent en venir ou des données ci-dessus)
+{deep}
+{("RECHERCHE COMPLÉMENTAIRE" + chr(10) + web) if web else ""}
+{("CATALYSEURS" + chr(10) + cats) if cats else ""}
 
 Signal ACHAT ou EXCLUS ? La PREMIÈRE ligne est OBLIGATOIREMENT le verdict.
 Réponds UNIQUEMENT dans le format ci-dessous : aucune autre section, aucun titre,
@@ -559,12 +577,25 @@ VERDICT : ACHAT
     # ── Porte « analyse forte » : pas d'ACHAT sans thèse prouvée ─────────────
     # Avant : toute réponse sans le mot EXCLU valait ACHAT, thèse ou pas.
     import thesis_gate
-    donnees = "\n".join([web or "", cats or "", news_block, funds_block, social_block])
+    donnees = "\n".join([deep or "", web or "", cats or "", news_block, funds_block])
     gate_ok, gate_reason, fields = thesis_gate.check(val, donnees, company_name)
     thesis = thesis_gate.resume(fields)
     if verdict == "ACHAT" and not gate_ok:
         verdict, reason = "EXCLUS", f"analyse insuffisante — {gate_reason}"
         print(f"[validate] {ticker} : ACHAT refusé par la porte — {gate_reason}")
+
+    # ── Cours au-dessus de l'objectif moyen des analystes → pas d'achat ──────
+    # KRT acheté le 14/10/2026 à 54 $ pour un objectif moyen de 46,50 $ : le
+    # marché avait déjà payé plus que ce que les analystes estiment. Règle de
+    # prudence (non backtestable : pas d'historique des objectifs), seulement
+    # quand au moins 3 analystes suivent le titre.
+    if verdict == "ACHAT":
+        _n_an = sum(funds.get(k, 0) or 0 for k in ("analyst_buy", "analyst_hold", "analyst_sell"))
+        _tgt = funds.get("analyst_target")
+        if _tgt and _n_an >= MIN_ANALYSTES_OBJECTIF and price > _tgt:
+            verdict, reason = "EXCLUS", (f"cours au-dessus de l'objectif moyen de {_n_an} "
+                                         f"analystes ({price} > {_tgt})")
+            print(f"[validate] {ticker} : ACHAT refusé — {reason}")
 
     # ── Profil historique sous la moyenne → pas d'achat (14/10/2026) ────────
     profil = None
@@ -2157,6 +2188,8 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
 
 
+import os as _os
+MIN_ANALYSTES_OBJECTIF = int(_os.getenv("MIN_ANALYSTES_OBJECTIF", "3"))
 _BASE_RATES: dict | None = None
 _PROFIL_NOMS = {"ma200_dist": "écart au-dessus de la MM200",
                 "mom_1m": "momentum 1 mois", "rsi": "RSI", "atr_pct": "volatilité (ATR)"}

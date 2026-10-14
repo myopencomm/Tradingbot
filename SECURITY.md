@@ -115,6 +115,11 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
   répondre au texte reçu. `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` sont
   **retirés de son environnement** : sinon la CLI facturerait la clé API au lieu
   de l'abonnement.
+- **Exception unique : la recherche approfondie** (`research.deep_research`) lance la CLI avec
+  l'outil **WebSearch seul** (`--tools WebSearch --allowedTools WebSearch`) : pas de lecture de
+  fichier, pas de commande, pas de MCP. Le contenu web lu peut contenir des instructions
+  malveillantes : il n'en sort que du texte, qui passe ensuite par la porte d'achat du code
+  (thèse, preuves ancrées, vetos chiffrés) et le contre-avis Jev — jamais directement un ordre.
 - Les entrées Telegram sont parsées en tokens ; les montants/quantités sont
   convertis via `float()`/`int()` sous `try/except`.
 - Les ordres réels exigent une **double confirmation** (`/ordre …` → récap →
