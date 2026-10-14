@@ -26,6 +26,7 @@ Usage : venv/bin/python3 backtest.py [--start 2023-01-01] [--fast]
 """
 import argparse
 import sys
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import yfinance as yf
@@ -471,6 +472,46 @@ def walk_forward(ind: dict, dates: pd.DatetimeIndex, regime_ok: pd.Series,
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+# Tranches des taux historiques par profil (base_rates.json). Bornes choisies
+# sur le test du 14/10/2026 : 468 trades, TP atteint 37 % en moyenne, de 27 %
+# (cours < +10 % au-dessus de la MM200) à 46 % (momentum 1 mois > +10 %).
+PROFILS = {
+    "ma200_dist": [0, 10, 20, 30, 45, 1e9],
+    "mom_1m":     [-99, 0, 5, 10, 999],
+    "rsi":        [0, 45, 55, 65.01],
+    "atr_pct":    [0, 2, 3, 4, 99],
+}
+
+
+def base_rates(closed: list[dict], ind: dict) -> dict:
+    """Taux d'atteinte du TP et rendement moyen, par tranche d'indicateur à
+    l'entrée. Écrit dans base_rates.json pour validate_candidate : l'IA juge
+    alors un candidat avec la statistique de SON profil, pas une impression."""
+    rows = []
+    for c in closed:
+        df = ind[c["ticker"]]
+        prev = df.index[df.index < c["entry_date"]]
+        if not len(prev):
+            continue
+        x = df.loc[prev[-1]]
+        rows.append({"tp": c["why"] == "TP", "ret": c["ret_pct"],
+                     "ma200_dist": (x["close"] / x["ma200"] - 1) * 100,
+                     "mom_1m": x["mom_1m"], "rsi": x["rsi"], "atr_pct": x["atr_pct"]})
+    d = pd.DataFrame(rows)
+    out = {"n": len(d), "tp_pct": round(d.tp.mean() * 100, 1),
+           "ret_moy": round(d.ret.mean(), 2), "profils": {}}
+    for champ, bornes in PROFILS.items():
+        tr = []
+        for a, b in zip(bornes[:-1], bornes[1:]):
+            g = d[(d[champ] > a) & (d[champ] <= b)]
+            if len(g):
+                tr.append({"de": a, "a": b, "n": int(len(g)),
+                           "tp_pct": round(g.tp.mean() * 100, 1),
+                           "ret_moy": round(g.ret.mean(), 2)})
+        out["profils"][champ] = tr
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2023-01-01", help="début de la simulation")
@@ -498,6 +539,9 @@ def main():
     ap.add_argument("--lock", action="store_true",
                     help="« petits gains sûrs » : verrou de gain dès +X %% "
                          "et TP rapprochés, contre la stratégie livrée")
+    ap.add_argument("--base-rates", action="store_true",
+                    help="écrit base_rates.json : taux historique d'atteinte du "
+                         "TP par profil d'entrée (lu par validate_candidate)")
     ap.add_argument("--max-pos", type=int, default=2,
                     help="positions simultanées (production : 4)")
     args = ap.parse_args()
@@ -544,6 +588,19 @@ def main():
     regime_ok.index = pd.DatetimeIndex(all_dates)
 
     base = dict(mode="new", risk_pct=1.0, max_pos=args.max_pos, max_cost_pct=30)
+    if args.base_rates:
+        # Beaucoup de positions, petites : on veut un GRAND échantillon de
+        # trades, pas un P&L réaliste.
+        r = simulate(ind, dates, regime_ok, mode="new", risk_pct=1.0,
+                     max_pos=8, max_cost_pct=15)
+        br = base_rates(r["closed"], ind)
+        br["periode"] = f"{dates[0].date()} → {dates[-1].date()}"
+        br["univers"] = len(ind)
+        import json
+        Path(__file__).with_name("base_rates.json").write_text(
+            json.dumps(br, indent=1, ensure_ascii=False), encoding="utf-8")
+        print(json.dumps(br, indent=1, ensure_ascii=False))
+        return
     if args.lock:
         # 13/10/2026 : après une série de pertes, « mieux vaut de petits gains
         # souvent ». Sur les 21 trades réels, 5 perdants sur 11 étaient passés

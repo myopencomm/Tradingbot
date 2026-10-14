@@ -34,6 +34,7 @@ JOB_TIMEOUTS = {
     "weekly_swap":      900,    # compare chaque position à des candidats
     "monthly_breach":   600,
     "learning_report":  600,    # 1 an d'historique par titre du journal
+    "base_rates":       1200,   # backtest complet (~4 min mesurées)
     "universe_refresh": 2400,   # ~4000 valeurs mondiales, 2 ans d'historique
     # Le cycle horaire enchaîne sync + annulations + trailing + entrées. Une
     # fois par mois il porte en plus la repose des protections expirées, qui
@@ -291,6 +292,18 @@ def run_scheduler():
         _bounded(lambda: analysis.monthly_breach_review(telegram_bot.send)
                  if _market_day() and datetime.now().day == 1 else None, "monthly_breach")
     )
+    # Taux historiques par profil (base_rates.json), recalculés le 1er du mois
+    # avant l'ouverture : l'IA juge chaque candidat avec la statistique de son
+    # profil (analysis.profil_historique).
+    def _refresh_base_rates():
+        if datetime.now().day != 1:
+            return
+        import subprocess, sys as _sys
+        from config import BASE_DIR
+        subprocess.run([_sys.executable, "backtest.py", "--base-rates", "--wide"],
+                       cwd=str(BASE_DIR), capture_output=True, timeout=1100)
+        analysis._BASE_RATES = None      # relu au prochain appel
+    schedule.every().day.at("06:45").do(_bounded(_refresh_base_rates, "base_rates"))
     # Bilan d'apprentissage le 1er du mois (decisions.py) : décisions mesurées,
     # pistes prouvées, et où en est le critère d'arrêt bot vs S&P 500.
     schedule.every().day.at("09:30").do(

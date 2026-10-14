@@ -36,3 +36,14 @@ def test_piste_seulement_si_prouvee():
             for i, r in enumerate(bruit * 2)]
     e = decisions.bilan(fort)["achat_vs_exclus"]
     assert e["prouve"] and e["diff"] > 0
+
+
+def test_profil_historique(monkeypatch):
+    import analysis
+    monkeypatch.setattr(analysis, "_BASE_RATES", {"n": 100, "tp_pct": 36.0, "periode": "x", "profils": {
+        "ma200_dist": [{"de": 45, "a": 1e9, "n": 89, "tp_pct": 45.0, "ret_moy": 2.1}],
+        "rsi": [{"de": 45, "a": 55, "n": 50, "tp_pct": 33.0, "ret_moy": 0.0}]}})
+    txt = analysis.profil_historique({"ma200_dist_pct": 61.0, "rsi": 47.5})
+    assert "45 % des 89 trades" in txt and "+9 pts" in txt and "33 %" in txt
+    monkeypatch.setattr(analysis, "_BASE_RATES", {})
+    assert analysis.profil_historique({"rsi": 50}) == ""

@@ -466,8 +466,9 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
     if funds.get("debt_to_equity") is not None:
         bilan.append(f"dette / capitaux propres {funds['debt_to_equity']:.0f} %")
     bilan_block = ("\nBILAN\n- " + " | ".join(bilan) + "\n") if bilan else ""
-    data_blocks = (f"{pctx_block}{ltc_block}{tech_block}{funds_block}{bilan_block}"
-                   f"{news_block}{social_block}{chart_block}")
+    profil_block = profil_historique(tech)
+    data_blocks = (f"{pctx_block}{ltc_block}{tech_block}{profil_block}{funds_block}"
+                   f"{bilan_block}{news_block}{social_block}{chart_block}")
 
     # ── Prompt selon le mode — la stratégie d'analyse reste celle du scan ────
     if mode == "gain_reduit":
@@ -2145,6 +2146,56 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 
 
 US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
+
+
+_BASE_RATES: dict | None = None
+_PROFIL_NOMS = {"ma200_dist": "écart au-dessus de la MM200",
+                "mom_1m": "momentum 1 mois", "rsi": "RSI", "atr_pct": "volatilité (ATR)"}
+
+
+def profil_historique(tech: dict, ma200_dist: float | None = None) -> str:
+    """Bloc de prompt : comment ont fini, au backtest, les trades dont le profil
+    d'entrée ressemblait à celui-ci (base_rates.json, `backtest.py --base-rates`).
+
+    Demandé le 14/10/2026 : « le bot devrait penser comme toi » — juger un
+    candidat avec la statistique de SON profil plutôt qu'avec une impression.
+    Constat du même jour : les titres très au-dessus de leur MM200 (> +45 %)
+    ont atteint le TP 45 % du temps contre 36 % en moyenne ; ceux à moins de
+    +10 %, 30 %. Information, pas veto : aucun profil ne dépasse ~46 %.
+    """
+    global _BASE_RATES
+    if _BASE_RATES is None:
+        try:
+            import json as _json
+            from pathlib import Path as _P
+            _BASE_RATES = _json.loads((_P(__file__).with_name("base_rates.json"))
+                                      .read_text(encoding="utf-8"))
+        except Exception:
+            _BASE_RATES = {}
+    br = _BASE_RATES
+    if not br.get("profils"):
+        return ""
+    valeurs = {"ma200_dist": ma200_dist if ma200_dist is not None else tech.get("ma200_dist_pct"),
+               "mom_1m": tech.get("momentum_1m"), "rsi": tech.get("rsi"),
+               "atr_pct": tech.get("atr_pct")}
+    lignes = []
+    for champ, v in valeurs.items():
+        if v is None:
+            continue
+        for t in br["profils"].get(champ, []):
+            if t["de"] < v <= t["a"]:
+                ecart = t["tp_pct"] - br["tp_pct"]
+                lignes.append(f"- {_PROFIL_NOMS[champ]} {v:+.1f} : {t['tp_pct']:.0f} % des "
+                              f"{t['n']} trades de ce profil ont atteint le TP "
+                              f"({ecart:+.0f} pts vs moyenne), rendement moyen {t['ret_moy']:+.1f} %")
+                break
+    if not lignes:
+        return ""
+    return (f"\nSTATISTIQUE HISTORIQUE DU PROFIL (backtest {br.get('periode', '')}, "
+            f"{br['n']} trades ; en moyenne {br['tp_pct']:.0f} % atteignent le TP)\n"
+            + "\n".join(lignes) + "\n"
+            "→ Ta conviction doit REFLÉTER ces taux : un profil sous la moyenne exige des "
+            "preuves plus fortes ; une conviction 5 n'est pas crédible sur un profil faible.\n")
 
 
 _MIN_LIGNE_CACHE: dict = {}
