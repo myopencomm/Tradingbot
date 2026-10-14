@@ -161,6 +161,8 @@ ALL = [
             "playwright", usage="NOM [GAIN€] [oui]",
             help="stop remonté : +1 € net garanti",
             playwright=True),
+    Command("reanalyse", "cmd_reanalyse", "Réanalyser les positions : thèse cassée → sortie au 1er gain",
+            "playwright", help="thèse revue ; cassée → sortie au 1er gain", playwright=True),
     Command("sortie_mini", "cmd_sortie_mini", "Vendre dès le premier gain (1 € par défaut) : TP abaissé",
             "playwright", usage="NOM [GAIN€] [oui]",
             help="vend dès +1 € net (TP abaissé)",

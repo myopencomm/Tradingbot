@@ -65,6 +65,12 @@ def categorie_motif(reason: str) -> str:
         return "achat"
     if "contre-avis jev" in r:
         return "veto Jev"
+    if "recherche web fiable indisponible" in r:
+        return "sans recherche"
+    if "profil historique" in r:
+        return "veto profil"
+    if "objectif moyen" in r:
+        return "au-dessus de l'objectif analystes"
     if "information insuffisante" in r:
         return "information insuffisante"
     if "analyse insuffisante" in r:
@@ -187,6 +193,9 @@ def bilan(rows: list[dict] | None = None, cle: str = "x20") -> dict:
     # Une ligne par (date, titre) pour les comparaisons de verdict : le
     # contrôle pré-achat redoublerait le scan du même jour.
     uniques = {}
+    # Les re-validations de positions détenues (mode « review », reanalyse.py)
+    # ne sont pas des décisions d'achat : elles fausseraient la comparaison.
+    rows = [r for r in rows if r.get("mode") != "review"]
     for r in rows:
         k = (r["date"], r["ticker"])
         if k not in uniques or r["mode"] == "standard":

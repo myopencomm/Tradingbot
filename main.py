@@ -35,6 +35,7 @@ JOB_TIMEOUTS = {
     "monthly_breach":   600,
     "learning_report":  600,    # 1 an d'historique par titre du journal
     "base_rates":       1200,   # backtest complet (~4 min mesurées)
+    "reanalyse":        1500,   # ~2 min par position (recherche + jugement)
     "universe_refresh": 2400,   # ~4000 valeurs mondiales, 2 ans d'historique
     # Le cycle horaire enchaîne sync + annulations + trailing + entrées. Une
     # fois par mois il porte en plus la repose des protections expirées, qui
@@ -203,6 +204,13 @@ def _hourly_bd_sync():
         )
     except Exception as e:
         print(f"[hourly sync] {e}")
+    # Positions à thèse cassée (reanalyse.py) : stop remonté à +1 € net dès que
+    # la marge le permet — sans IA, à chaque sync.
+    try:
+        import reanalyse
+        reanalyse.ajuster_cassees(telegram_bot.send)
+    except Exception as e:
+        print(f"[hourly sync] réanalyse : {e}")
     # Ordres d'entrée autonomes périmés (non exécutés après la clôture de leur
     # marché) : annulation sur BD — un limite qui traîne ne se remplit que
     # quand le momentum s'est retourné contre nous.
@@ -292,6 +300,12 @@ def run_scheduler():
         _bounded(lambda: analysis.monthly_breach_review(telegram_bot.send)
                  if _market_day() and datetime.now().day == 1 else None, "monthly_breach")
     )
+    # Réanalyse des positions : thèse d'achat confrontée aux faits du jour ;
+    # cassée → sortie au premier gain (reanalyse.py). Jours ouvrés, 10h15 :
+    # Euronext ouvert, BD accepte la repose d'une protection US hors séance.
+    schedule.every().day.at("10:15").do(_bounded(
+        lambda: __import__("reanalyse").cycle(telegram_bot.send)
+        if _market_day() else None, "reanalyse"))
     # Taux historiques par profil (base_rates.json), recalculés le 1er du mois
     # avant l'ouverture : l'IA juge chaque candidat avec la statistique de son
     # profil (analysis.profil_historique).
