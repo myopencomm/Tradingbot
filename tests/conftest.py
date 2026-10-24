@@ -110,7 +110,7 @@ def _coupe_circuit_reseau(monkeypatch):
     # jamais depuis un test. Un dossier fictif tient lieu de recherche réussie.
     import research
     monkeypatch.setattr(research, "deep_research",
-                        lambda ticker, company_name="": DOSSIER_FICTIF)
+                        lambda ticker, company_name="", api=False: DOSSIER_FICTIF)
 
     # Telegram : neutralisé À LA SOURCE, sans même tenter le POST. Un test qui
     # veut observer les messages remplace `telegram_bot.send` de son côté ;

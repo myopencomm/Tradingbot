@@ -120,6 +120,12 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
   fichier, pas de commande, pas de MCP. Le contenu web lu peut contenir des instructions
   malveillantes : il n'en sort que du texte, qui passe ensuite par la porte d'achat du code
   (thèse, preuves ancrées, vetos chiffrés) et le contre-avis Jev — jamais directement un ordre.
+- **Secours de la recherche approfondie** : clé API Anthropic avec l'outil serveur `web_search`
+  (contrôle pré-achat seulement), puis Gemini avec l'ancrage Google Search (appel REST, clé dans
+  l'en-tête `x-goog-api-key`, jamais dans l'URL). Mêmes garanties : du texte seulement, aucun
+  outil local. Le prompt envoyé ne contient que le nom et le ticker de la société.
+- `CLAUDE_CODE_OAUTH_TOKEN` (jeton CLI d'un an, `claude setup-token`) est un secret : `.env`
+  uniquement, jamais commité. Il donne accès à l'abonnement claude.ai.
 - Les entrées Telegram sont parsées en tokens ; les montants/quantités sont
   convertis via `float()`/`int()` sous `try/except`.
 - Les ordres réels exigent une **double confirmation** (`/ordre …` → récap →

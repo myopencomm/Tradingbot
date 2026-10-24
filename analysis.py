@@ -387,7 +387,7 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
     # Recherche SOURCÉE du jour (Claude + recherche web). Sans elle, pas
     # d'achat : DuckDuckGo ne ramène que des titres de pages et l'IA finissait
     # par s'appuyer sur StockTwits (DGII, 14/10/2026). DDG reste en complément.
-    deep   = research.deep_research(ticker, _name)
+    deep   = research.deep_research(ticker, _name, api=(mode == "confirm"))
     web    = research.research_stock(ticker, _name) if not deep else ""
     cats   = research.search_catalysts(ticker, _name) if not deep else ""
     # Le sentiment des réseaux sociaux n'entre plus dans la décision d'achat :

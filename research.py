@@ -530,36 +530,178 @@ POURQUOI LE COURS A BOUGÉ (explication sourcée des mouvements des 3 derniers m
 """
 
 
-def deep_research(ticker: str, company_name: str = "") -> str:
-    """Dossier de recherche sourcé du jour, ou "" si la CLI claude est
-    indisponible (limite d'usage, absente) — l'appelant doit alors refuser
-    d'acheter : pas d'achat sans recherche fiable."""
+# ── Secours : Gemini + Google Search (24/10/2026) ────────────────────────────
+# Du 12 au 23/10, les 40 validations ont TOUTES été refusées pour « recherche
+# web fiable indisponible » : la session OAuth de la CLI claude avait expiré et
+# ne se rafraîchissait plus sous launchd. Aucun achat possible pendant 11 jours,
+# sans que rien ne le signale. Désormais : la CLI d'abord (abonnement), puis
+# la clé API Anthropic au seul contrôle pré-achat, puis Gemini avec
+# l'ancrage Google Search, et une alerte Telegram si la CLI est
+# déconnectée. Une réponse Gemini SANS recherche réellement effectuée (aucune
+# requête, aucune source dans groundingMetadata) est rejetée : ce serait de la
+# mémoire du modèle, pas un dossier du jour.
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+_DEEP_SYSTEM = ("Analyste financier. Tu cherches sur le web et ne rapportes que des "
+                "faits datés et sourcés. Aucun fait de mémoire. Aucune recommandation.")
+_last_cli_alert = 0.0
+
+
+def _alerte_cli(err: Exception) -> None:
+    """Une alerte Telegram toutes les 6 h au plus quand la CLI est déconnectée."""
+    global _last_cli_alert
+    import time
+    m = str(err).lower()
+    if not any(s in m for s in ("authenticate", "oauth", "not logged in", "login")):
+        return
+    if time.time() - _last_cli_alert < 6 * 3600:
+        return
+    _last_cli_alert = time.time()
+    try:
+        import tg
+        tg.send("🔑 CLI claude déconnectée (session expirée)\n"
+                "La recherche web avant achat bascule sur Gemini + Google Search.\n"
+                "Réparer : dans un terminal, claude setup-token, puis mettre le "
+                "jeton dans .env (CLAUDE_CODE_OAUTH_TOKEN=...) et ./bot.sh restart.")
+    except Exception as e:
+        print(f"[deep research] alerte Telegram impossible : {e}")
+
+
+def _deep_gemini(prompt: str, ticker: str) -> str:
+    """Dossier via Gemini Pro + Google Search, ou "" si pas de recherche réelle."""
+    import os
+    from config import GEMINI_API_KEY
+    key = os.environ.get("GEMINI_API_KEY") or GEMINI_API_KEY
+    if not key or os.getenv("DEEP_RESEARCH_GEMINI", "1") == "0":
+        return ""
+    model = os.getenv("DEEP_RESEARCH_GEMINI_MODEL", "gemini-pro-latest")
+    for essai in (1, 2):
+        try:
+            r = requests.post(_GEMINI_URL.format(m=model),
+                              headers={"x-goog-api-key": key}, timeout=240,
+                              json={"contents": [{"parts": [{"text": prompt}]}],
+                                    "tools": [{"google_search": {}}],
+                                    "systemInstruction": {"parts": [{"text": _DEEP_SYSTEM}]}})
+            d = r.json()
+            if r.status_code != 200:
+                print(f"⚠️ Recherche Gemini {ticker} : HTTP {r.status_code} "
+                      f"{str(d.get('error', {}).get('message', ''))[:150]}")
+                continue
+        except Exception as e:
+            print(f"⚠️ Recherche Gemini {ticker} : {e}")
+            continue
+        try:
+            import api_costs
+            u = d.get("usageMetadata") or {}
+            cache = u.get("cachedContentTokenCount", 0) or 0
+            # Les jetons de réflexion sont facturés comme la sortie.
+            api_costs.record(d.get("modelVersion") or model,
+                             max(0, (u.get("promptTokenCount", 0) or 0) - cache),
+                             (u.get("candidatesTokenCount", 0) or 0)
+                             + (u.get("thoughtsTokenCount", 0) or 0), 0, cache)
+        except Exception as e:
+            print(f"[api costs] suivi recherche Gemini impossible : {e}")
+        c = (d.get("candidates") or [{}])[0]
+        txt = "".join(p.get("text", "") for p in (c.get("content") or {}).get("parts", [])).strip()
+        gm = c.get("groundingMetadata") or {}
+        sources = [ch.get("web", {}).get("title", "") for ch in gm.get("groundingChunks", [])]
+        sources = list(dict.fromkeys(s for s in sources if s))
+        if not gm.get("webSearchQueries") or not sources:
+            print(f"⚠️ Recherche Gemini {ticker} : réponse sans recherche web "
+                  f"(essai {essai}) — rejetée")
+            continue
+        if len(txt) < 300:
+            continue
+        return (txt + "\n\nSOURCES CONSULTÉES (Google Search via Gemini)\n"
+                + "\n".join(f"- {s}" for s in sources[:15]))
+    return ""
+
+
+def _deep_api(prompt: str, ticker: str) -> str:
+    """Dossier via la clé API Anthropic (Opus 5.5 + web search serveur), ou "".
+
+    Payant (~0,25 $ : recherches + résultats lus en entrée) : réservé au
+    CONTRÔLE PRÉ-ACHAT (au plus AUTO_MAX_ENTRIES_PER_DAY par jour), comme le
+    reste de la chaîne de secours (budget clé API ≈ 10 $/an). Rejeté si aucune
+    recherche n'a réellement abouti."""
+    import os
+    if os.getenv("DEEP_RESEARCH_API", "1") == "0":
+        return ""
+    try:
+        import ai_provider
+        if not ai_provider._env_key("ANTHROPIC_API_KEY"):
+            return ""
+        prov = ai_provider.AnthropicProvider()
+        messages = [{"role": "user", "content": prompt}]
+        sources, txt = [], ""
+        for _ in range(3):        # pause_turn : le serveur rend la main, on relance
+            msg = prov.client.messages.create(
+                model=prov.DEFAULT_MODEL, max_tokens=16000, system=_DEEP_SYSTEM,
+                output_config={"effort": "medium"}, messages=messages,
+                tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 6}])
+            prov._track(prov.DEFAULT_MODEL, msg)
+            for b in msg.content:
+                if getattr(b, "type", "") == "web_search_tool_result" and isinstance(b.content, list):
+                    sources += [getattr(r, "url", "") for r in b.content]
+            if msg.stop_reason != "pause_turn":
+                txt = prov._text(msg)
+                break
+            messages = [messages[0], {"role": "assistant", "content": msg.content}]
+    except Exception as e:
+        print(f"⚠️ Recherche API Anthropic {ticker} : {str(e)[:200]}")
+        return ""
+    domaines = list(dict.fromkeys(re.sub(r"^https?://(www\.)?([^/]+).*$", r"\2", u)
+                                  for u in sources if u))
+    if not domaines or len(txt) < 300:
+        print(f"⚠️ Recherche API Anthropic {ticker} : sans recherche web aboutie — rejetée")
+        return ""
+    return (txt + "\n\nSOURCES CONSULTÉES (recherche web Claude, clé API)\n"
+            + "\n".join(f"- {d}" for d in domaines[:15]))
+
+
+def deep_research(ticker: str, company_name: str = "", api: bool = False) -> str:
+    """Dossier de recherche sourcé du jour. Chaîne : CLI claude (abonnement)
+    → clé API Anthropic (seulement si `api`, c.-à-d. au contrôle pré-achat)
+    → Gemini + Google Search. "" si tout échoue — l'appelant doit alors
+    refuser d'acheter : pas d'achat sans recherche fiable."""
     import os
     from datetime import datetime
     if os.getenv("DEEP_RESEARCH", "1") == "0":
         return ""
     jour = datetime.now().strftime("%Y-%m-%d")
     cle = f"{ticker.upper()}|{jour}"
+    cle_src = f"{ticker.upper()}|src|{jour}"
     try:
         cache = json.loads(_DEEP_CACHE.read_text(encoding="utf-8"))
     except Exception:
         cache = {}
-    if cache.get(cle):
+    # Un dossier Gemini du scan ne dispense pas le contrôle pré-achat de
+    # retenter Claude (CLI puis clé API) : c'est la chaîne de l'achat.
+    if cache.get(cle) and not (api and cache.get(cle_src) == "gemini"):
         return cache[cle]
+    prompt = DEEP_PROMPT.format(nom=company_name or ticker, ticker=ticker,
+                                date=datetime.now().strftime("%d/%m/%Y"))
+    txt, src = "", "claude"
     try:
         import ai_provider
-        if not ai_provider.cli_path():
-            return ""
-        txt = ai_provider.ClaudeCliProvider().research(DEEP_PROMPT.format(
-            nom=company_name or ticker, ticker=ticker,
-            date=datetime.now().strftime("%d/%m/%Y")))
+        if ai_provider.cli_path():
+            txt = ai_provider.ClaudeCliProvider().research(prompt)
     except Exception as e:
         print(f"⚠️ Recherche approfondie {ticker} : {e}")
-        return ""
+        _alerte_cli(e)
+    if len(txt or "") < 300 and api:
+        txt, src = _deep_api(prompt, ticker), "api"
+        if txt:
+            print(f"[deep research] {ticker} : dossier via la clé API Anthropic")
+    if len(txt or "") < 300 and cache.get(cle):
+        return cache[cle]                  # le dossier Gemini du jour reste valable
+    if len(txt or "") < 300:
+        txt, src = _deep_gemini(prompt, ticker), "gemini"
+        if txt:
+            print(f"[deep research] {ticker} : dossier via Gemini + Google Search")
     if len(txt or "") < 300:
         return ""
     cache = {k: v for k, v in cache.items() if k.endswith(jour)}   # purge des jours passés
-    cache[cle] = txt
+    cache[cle], cache[cle_src] = txt, src
     try:
         _DEEP_CACHE.write_text(json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
