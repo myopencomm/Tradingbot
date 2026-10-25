@@ -94,6 +94,10 @@ DASHBOARD_TOKEN=<openssl rand -hex 16>
 
 ### Secrets & identifiants
 - **Tout secret vit dans `.env`** (jamais dans le code) — chargé via `python-dotenv`.
+  Option : une clé partagée avec d'autres outils peut rester dans un `.env` commun hors du
+  dépôt (`SHARED_ENV_FILE`) ; seules les clés nommées dans `SHARED_ENV_KEYS` en sont lues,
+  jamais le fichier entier, pour ne pas exposer au bot (ni aux sous-processus qu'il lance)
+  les autres secrets de ce fichier.
 - `.env`, `positions.json`, `trades_history.json`, `CLAUDE_TRADING_CONTEXT.md`,
   `nav_history.json`, `*.log` sont dans `.gitignore` et **n'ont jamais été commités** (vérifié sur
   l'historique complet via `git log --all --diff-filter=A`).

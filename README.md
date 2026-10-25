@@ -190,6 +190,8 @@ TELEGRAM_TOKEN=***REMOVED***
 CHAT_ID=***REMOVED***
 ```
 
+> 💡 **Clés partagées avec d'autres outils** : si une clé (par exemple `TYPESAFE_API_KEY`) vit déjà dans un fichier `.env` commun à plusieurs projets, ne la recopiez pas. Indiquez ce fichier avec `SHARED_ENV_FILE=~/chemin/vers/.env.local` et la liste des clés à y lire avec `SHARED_ENV_KEYS=TYPESAFE_API_KEY`. Seules ces clés sont lues, et une valeur présente dans le `.env` du bot reste prioritaire.
+
 Éditez `positions.json` pour définir votre cash de départ :
 
 ```json

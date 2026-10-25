@@ -1,8 +1,18 @@
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 load_dotenv()
+
+# Clés partagées avec d'autres outils (ex. TYPESAFE_API_KEY) : lues dans un fichier
+# .env commun (SHARED_ENV_FILE), seulement celles listées dans SHARED_ENV_KEYS. Une clé
+# déjà présente dans le .env du bot ou l'environnement reste prioritaire.
+_shared_file = os.getenv("SHARED_ENV_FILE", "").strip()
+if _shared_file:
+    _shared = dotenv_values(os.path.expanduser(_shared_file))
+    for _key in (k.strip() for k in os.getenv("SHARED_ENV_KEYS", "").split(",")):
+        if _key and not os.environ.get(_key) and _shared.get(_key):
+            os.environ[_key] = _shared[_key]
 
 BASE_DIR = Path(__file__).parent
 
