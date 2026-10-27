@@ -1262,7 +1262,10 @@ def cmd_connect(args, cid):
             # login s'exécute dans le thread worker via run()
             success = playwright_session.run(
                 lambda page: bourse_direct_auth.login(page, _log_and_send),
-                timeout=140,  # > OTP_TIMEOUT (90s) pour laisser le temps au 2FA
+                # OTP_TIMEOUT (90 s) + redirection (15 s) + chargement, purge des
+                # cookies et 2e chargement (~40 s) : 140 s coupait une connexion
+                # encore en cours (27/10/2026, « Opération Playwright expirée »).
+                timeout=200,
             )
             print(f"[connect] login() -> {success}")
         except Exception as e:

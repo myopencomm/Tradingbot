@@ -44,6 +44,15 @@ def _champ_identifiant(page, timeout_ms: int = 12000):
         return None
 
 
+def _capture(page, legende: str) -> None:
+    """Capture de la page envoyée sur Telegram, pour voir ce que BD affiche."""
+    try:
+        import tg
+        tg.send_photo(page.screenshot(full_page=False), caption=legende)
+    except Exception as e:
+        print(f"[BD Auth] capture impossible : {e}")
+
+
 def _message_page(page) -> str:
     """Messages d'erreur visibles sur la page de login (alertes, champs en
     erreur), ou une invite à vérifier les identifiants."""
@@ -144,12 +153,7 @@ def login(page, send_fn) -> bool:
             # Capture : BD peut afficher un message (compte bloqué après trop
             # d'essais, captcha, maintenance) que le bot ne sait pas lire
             # (27/10/2026, login bloqué sans explication).
-            try:
-                import tg
-                tg.send_photo(page.screenshot(full_page=False),
-                              caption="Page BD après « Se connecter »")
-            except Exception as e:
-                print(f"[BD Auth] capture impossible : {e}")
+            _capture(page, "Page BD après « Se connecter »")
             return False
 
         # ── TOTP détecté ─────────────────────────────────────────────────────
@@ -189,7 +193,8 @@ def login(page, send_fn) -> bool:
         if _is_logged_in(page):
             return True
 
-        send_fn(f"Connexion échouée. URL : {page.url[:80]}")
+        send_fn(f"Connexion échouée. URL : {page.url[:80]}\n{_message_page(page)}")
+        _capture(page, "Page BD après le code TOTP")
         return False
 
     except Exception as e:
