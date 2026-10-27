@@ -51,6 +51,11 @@ EMPTY_ORDERS_MARKERS = (
     "n'avez aucun ordre",
     "n’avez aucun ordre",
     "aucun résultat",
+    # Texte réel de BD constaté le 27/10/2026 (« votre liste d’ordres est vide
+    # pour l’instant ») : sans lui, un carnet vide passait pour illisible et
+    # bloquait toute annulation/repose de protection.
+    "liste d'ordres est vide",
+    "liste d’ordres est vide",
 )
 
 

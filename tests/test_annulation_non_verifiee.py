@@ -35,3 +35,9 @@ def test_annulation_refusee_protection_reste_en_place(monkeypatch):
     _prep(monkeypatch, False, [{"orders_read": False}] * 3)
     assert stale_exit._annuler_protections(POS, "XYZ") is False
     assert "reste en place" in stale_exit.message_echec_annulation(POS, "XYZ", "vente")
+
+
+def test_carnet_vide_texte_reel_bd_reconnu():
+    corps = ("mes ordres mes investissements programmés votre liste d’ordres est "
+             "vide pour l’instant. les ordres que vous passerez seront affichés ici.")
+    assert any(m in corps for m in reader.EMPTY_ORDERS_MARKERS)
