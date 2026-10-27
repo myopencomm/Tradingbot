@@ -1220,9 +1220,20 @@ def cmd_mode(args, cid):
         )
 
 
+# Un seul /connect à la fois. Le 27/10/2026, deux /connect lancés coup sur coup
+# se sont marché dessus : le premier a réussi, le second a attendu un code TOTP
+# jusqu'au délai puis fermé la session ; les tentatives suivantes restaient
+# bloquées sur la page de login (BD refusait les identifiants répétés).
+_connect_lock = threading.Lock()
+
+
 def cmd_connect(args, cid):
     if bot_mode.is_playwright() and playwright_session.is_connected():
         send(f"Deja connecte a Bourse Direct (session active depuis {playwright_session.session_age_str()}).", cid)
+        return
+    if not _connect_lock.acquire(blocking=False):
+        send("Connexion déjà en cours — attends la demande de code TOTP "
+             "(ou son échec) avant de relancer /connect.", cid)
         return
 
     send("Lancement de la connexion a Bourse Direct...", cid)
@@ -1289,7 +1300,13 @@ def cmd_connect(args, cid):
         else:
             playwright_session.stop()
 
-    threading.Thread(target=_do_connect, daemon=True).start()
+    def _do_connect_unique():
+        try:
+            _do_connect()
+        finally:
+            _connect_lock.release()
+
+    threading.Thread(target=_do_connect_unique, daemon=True).start()
 
 
 def cmd_disconnect(args, cid):

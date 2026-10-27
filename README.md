@@ -410,7 +410,7 @@ TradingBot/
 | Commande | Description |
 |---|---|
 | `/mode` | Afficher le mode actuel (Classic ou Playwright) et l'état de la session |
-| `/connect` | Activer le mode Playwright — connexion à Bourse Direct avec relay TOTP |
+| `/connect` | Activer le mode Playwright — connexion à Bourse Direct avec relay TOTP. Une seule connexion à la fois : un second `/connect` pendant qu'une connexion attend le code est refusé (deux logins simultanés se marchaient dessus) |
 | `/disconnect` | Fermer la session Playwright et revenir en mode Classic |
 | `/sync` | Synchroniser le portefeuille depuis Bourse Direct — détecte et clôture automatiquement les ventes exécutées (TP/SL touchés), ajoute les positions issues d'achats exécutés. Les messages d'étape sont **éphémères** (supprimés dès que le résultat s'affiche) ; ils ne restent que si le sync échoue. Si le contrôle de protection trouve une position à nu, **la repose est tentée dans la foulée** — constater sans réparer n'a pas de sens quand la réparation existe (01/09/2026 : `/sync` annonçait deux positions sans protection et attendait le cycle de 9h35) |
 | `/trailing` | Forcer une vérification du trailing stop (SL au PRU) **maintenant**, avec le détail de chaque position et la raison d'un non-déclenchement. Pour un titre en devise, ajoute le % en euros vu par BD et la part due au change Le cycle automatique tourne chaque heure à **:35** (jours de marché, 9h-22h, session BD connectée) et dès qu'une position franchit son seuil aux checks 9h/12h/15h/17h — mais il reste silencieux s'il n'a rien à faire, contrairement à `/trailing` qui répond toujours |
