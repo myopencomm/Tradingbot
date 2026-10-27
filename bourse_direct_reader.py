@@ -458,6 +458,11 @@ def get_portfolio(page, send_fn=None) -> dict | None:
                     else:
                         log("Onglet ordres illisible (aucun bloc ET aucun état vide "
                             "reconnu) — ordres NON lus, protections non vérifiables.")
+                        # Extrait pour reconnaître le prochain état inconnu
+                        # (carnet vide affiché autrement, page transitoire).
+                        i = body.find("mes ordres")
+                        print(f"[BD Reader] onglet ordres, texte : "
+                              f"{body[max(i, 0):max(i, 0) + 400]!r}")
 
                 for block in blocks:
                     raw_text = block.inner_text(timeout=2000)

@@ -52,9 +52,7 @@ def remplacer_protection(nom: str, pos: dict, stop: float, tp: float, send_fn,
     qty = abs(int(pos["qty"]))
     send_fn(f"🔁 {nom} : annulation de la protection actuelle…")
     if not stale_exit._annuler_protections(pos, nom):
-        send_fn(f"⚠️ {nom} : annulation NON confirmée au carnet — rien n'est "
-             f"reposé (pas de doublon). La protection actuelle "
-             f"({pos.get('target_low')} / {pos.get('target_high')}) reste en place.")
+        send_fn(stale_exit.message_echec_annulation(pos, nom, "nouvelle protection"))
         return
     od = conf = None
     try:

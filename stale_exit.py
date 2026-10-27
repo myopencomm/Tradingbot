@@ -178,6 +178,28 @@ def verdict(pos: dict, price: float, now: datetime,
         f"{pt_mort} — on encaisse et le capital repart.")
 
 
+# Nom de position → nombre d'annulations ACCEPTÉES par BD lors du dernier
+# _annuler_protections non vérifié. > 0 : la protection est probablement levée
+# et la position À NU — l'appelant ne doit surtout pas dire « reste protégée ».
+annulation_acceptee: dict = {}
+
+
+def message_echec_annulation(pos: dict, name: str, quoi: str) -> str:
+    """Message honnête après un _annuler_protections en échec. `quoi` dit ce
+    qui a été abandonné (« vente », « nouvelle protection »)."""
+    n = annulation_acceptee.get(name, 0)
+    sl, tp = pos.get("target_low"), pos.get("target_high")
+    if n:
+        return (f"🚨 {name} : Bourse Direct a ACCEPTÉ l'annulation de la protection "
+                f"({n} ordre(s)), mais le carnet n'a pas pu être relu — {quoi} "
+                f"abandonnée par sécurité.\nLa position est probablement SANS "
+                f"PROTECTION.\n1. /sync pour vérifier le carnet\n"
+                f"2. si aucune protection : /ordre vendre {pos['ticker']} "
+                f"{abs(int(pos.get('qty') or 0))} expert {sl} {tp}")
+    return (f"⚠️ {name} : annulation NON confirmée au carnet — {quoi} abandonnée "
+            f"(pas de doublon). La protection actuelle ({sl} / {tp}) reste en place.")
+
+
 def _annuler_protections(pos: dict, name: str) -> bool:
     """Annule les jambes SL/TP avant de vendre.
 
@@ -189,11 +211,14 @@ def _annuler_protections(pos: dict, name: str) -> bool:
     import bourse_direct_reader as reader
 
     oids = [o for o in (pos.get("protection_ids") or []) if o]
+    acceptees = 0
+    annulation_acceptee.pop(name, None)
     if oids:
         for oid in oids:
             try:
-                playwright_session.run(
-                    lambda page, o=oid: bd_orders.cancel_order(page, o), timeout=30)
+                if playwright_session.run(
+                        lambda page, o=oid: bd_orders.cancel_order(page, o), timeout=30):
+                    acceptees += 1
             except Exception as e:
                 print(f"[Stagnation] {name} cancel {oid} : {e}")
 
@@ -213,12 +238,22 @@ def _annuler_protections(pos: dict, name: str) -> bool:
 
     # BD annule en ASYNCHRONE : on vérifie que plus rien ne porte de seuil sur
     # ce titre avant d'envoyer la vente.
+    # Relu jusqu'à 3 fois : juste après une annulation, l'onglet « Mes ordres »
+    # peut s'afficher dans un état transitoire que le lecteur ne reconnaît pas
+    # (KRT, 27/10/2026 : annulation ACCEPTÉE par BD, onglet illisible, et le
+    # bot annonçait à tort « la protection reste en place »).
     import time
-    time.sleep(5)
-    etat = playwright_session.run(
-        lambda page: reader.get_portfolio(page, send_fn=None), timeout=90) or {}
+    etat = {}
+    for attente in (5, 10, 15):
+        time.sleep(attente)
+        etat = playwright_session.run(
+            lambda page: reader.get_portfolio(page, send_fn=None), timeout=90) or {}
+        if etat.get("orders_read"):
+            break
     if not etat.get("orders_read"):
-        print(f"[Stagnation] {name} : carnet illisible après annulation — vente abandonnée")
+        annulation_acceptee[name] = acceptees
+        print(f"[Stagnation] {name} : carnet illisible après annulation "
+              f"({acceptees}/{len(oids)} annulation(s) acceptée(s) par BD) — abandon")
         return False
     base = pos["ticker"].upper().split(".")[0]
     reste = [o for o in etat.get("orders", [])
@@ -315,9 +350,7 @@ def stale_exit_cycle(send_fn, verbose: bool = False,
                 f"protection puis vente au marché…")
         if not _annuler_protections(pos, name):
             _sell_failed.add(name)
-            send_fn(f"⚠️ {name} : protection NON annulée de façon certaine — "
-                    f"vente abandonnée (vendre par-dessus une protection active "
-                    f"créerait un doublon).\n✅ La position reste protégée.")
+            send_fn(message_echec_annulation(pos, name, "vente"))
             continue
         if _vendre_au_marche(pos, name, send_fn):
             _notified_stuck.pop(name, None)

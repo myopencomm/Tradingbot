@@ -1462,9 +1462,7 @@ def cmd_sortir(args, cid):
         import sync_engine
         send(f"🚪 {nom} : annulation des protections…", cid)
         if not stale_exit._annuler_protections(pos, nom):
-            send(f"⚠️ {nom} : annulation des protections NON confirmée au "
-                 f"carnet — vente abandonnée (pas de doublon). Vérifie le "
-                 f"carnet BD ; /sync pour relire.", cid)
+            send(stale_exit.message_echec_annulation(pos, nom, "vente"), cid)
             return
         send(f"🚪 {nom} : protections levées, vente au marché…", cid)
         if stale_exit._vendre_au_marche(pos, nom, lambda m: send(m, cid)):
