@@ -2188,6 +2188,25 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
 US_UNIVERSE = [t for t in SCAN_UNIVERSE if "." not in t]
 
 
+def us_scan_universe() -> tuple[list, dict]:
+    """Univers du scan US : les valeurs en USD de l'univers MONDIAL (rafraîchi
+    chaque matin, ~3 000 actions US), plus les 36 curatées. Le cache 'us' n'est
+    plus rafraîchi depuis l'univers mondial : s'y fier laissait le scan US
+    sur les 36 seules (27/10/2026). Repli : cache 'us', puis liste manuelle."""
+    univ, ind = list(US_UNIVERSE), {}
+    try:
+        import market_universe as _mu
+        usd = {e["ticker"] for e in _mu.load_cache("world", max_age_days=8)
+               if e.get("currency") == "USD"}
+        ind = {t: v for t, v in (_mu.load_indicators("world") or {}).items() if t in usd}
+        if not ind:
+            ind = _mu.load_indicators("us") or {}
+        univ = sorted(set(univ) | set(ind))
+    except Exception as e:
+        print(f"[scan US] univers étendu indisponible : {e}")
+    return univ, ind
+
+
 import os as _os
 MIN_ANALYSTES_OBJECTIF = int(_os.getenv("MIN_ANALYSTES_OBJECTIF", "3"))
 _BASE_RATES: dict | None = None
@@ -2364,7 +2383,8 @@ def scan_us_opportunities(send_fn) -> None:
         print(f"[scan US] sauté — {blocked}")
         _notify_scan_skipped(send_fn, "Scan US 🇺🇸", blocked)
         return
-    scan_opportunities(send_fn, universe=US_UNIVERSE, scan_label="🇺🇸 ")
+    univ, ind = us_scan_universe()
+    scan_opportunities(send_fn, universe=univ, precomputed=ind, scan_label="🇺🇸 ")
 
 
 def _parse_vision_output(raw: str) -> list[dict]:

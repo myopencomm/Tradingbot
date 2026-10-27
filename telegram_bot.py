@@ -1086,19 +1086,12 @@ def cmd_scan(args, cid):
                          "opportunités validées attendront l'ouverture.", cid)
                 # Pas de plancher de cash ici : contrairement au scan US
                 # PLANIFIÉ, une demande explicite doit toujours répondre.
-                # Univers US : cache découvert automatiquement si frais
-                # (~2500 valeurs liquides issues de la liste officielle
-                # Nasdaq Trader), sinon repli sur les 36 curatées.
-                us_univ, us_ind = list(analysis.US_UNIVERSE), {}
-                try:
-                    import market_universe
-                    us_ind = market_universe.load_indicators("us")
-                    if us_ind:
-                        us_univ = sorted(set(us_univ) | set(us_ind))
-                        send(f"🇺🇸 Univers US étendu : {len(us_univ)} valeurs "
-                             f"(liste officielle Nasdaq Trader, filtrées par liquidité).", cid)
-                except Exception as e:
-                    print(f"[scan us] univers etendu indisponible : {e}")
+                # Univers US : actions en USD de l'univers mondial (rafraîchi
+                # chaque matin), sinon repli sur les 36 curatées.
+                us_univ, us_ind = analysis.us_scan_universe()
+                if us_ind:
+                    send(f"🇺🇸 Univers US étendu : {len(us_univ)} valeurs "
+                         f"(univers mondial du matin, actions en USD).", cid)
                 analysis.scan_opportunities(
                     send_final, universe=us_univ, precomputed=us_ind,
                     scan_label="🇺🇸 ", update_fn=update_fn,

@@ -394,7 +394,7 @@ TradingBot/
 |---|---|
 | `/morning` | Déclencher manuellement le briefing matinal |
 | `/scan` | Scanner des opportunités — catalyseurs + indicateurs techniques |
-| `/scan us` | Scan limité aux **36 valeurs US** — plus rapide et bien moins coûteux en appels IA que le scan complet (~100 tickers). Utile pendant la séance de Wall Street (15h35-22h), le scan US automatique ne tournant qu'à `US_SCAN_TIME` (16h). Contrairement au scan planifié, il n'applique **pas** le plancher de cash : une demande explicite répond toujours |
+| `/scan us` | Scan limité aux **actions US** (~2 900 valeurs en USD de l'univers mondial du matin, repli sur les 36 curatées si le cache est périmé) — même univers que le scan US automatique de 16h ; seuls les meilleurs candidats passent à l'IA. Utile pendant la séance de Wall Street (15h35-22h), le scan US automatique ne tournant qu'à `US_SCAN_TIME` (16h). Contrairement au scan planifié, il n'applique **pas** le plancher de cash : une demande explicite répond toujours |
 | `/research TICKER` | Analyse approfondie : RSI, momentum, catalyseurs imminents |
 
 ### Clôture de trades
