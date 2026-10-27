@@ -44,6 +44,21 @@ def _champ_identifiant(page, timeout_ms: int = 12000):
         return None
 
 
+def _message_page(page) -> str:
+    """Messages d'erreur visibles sur la page de login (alertes, champs en
+    erreur), ou une invite à vérifier les identifiants."""
+    try:
+        textes = page.locator('[role="alert"], [class*="error" i], [class*="Error"], '
+                              '[class*="alert" i], [class*="message" i]').all_inner_texts()
+        textes = [" ".join(t.split()) for t in textes if t and t.strip()]
+        textes = list(dict.fromkeys(textes))[:4]
+        if textes:
+            return "Message BD : " + " | ".join(t[:200] for t in textes)
+    except Exception:
+        pass
+    return "Aucun message d'erreur lisible — vérifier les identifiants .env"
+
+
 def login(page, send_fn) -> bool:
     """
     Exécute le flow de connexion sur `page`.
@@ -124,7 +139,17 @@ def login(page, send_fn) -> bool:
                 send_fn(f"En attente... URL={url[-40:]} spin={nb_spin} num={nb_num}")
 
         if not totp_detected and "login" in page.url.lower():
-            send_fn(f"Aucun formulaire TOTP détecté après 12s.\nURL : {page.url}\nVérifier credentials .env")
+            send_fn(f"Aucun formulaire TOTP détecté après 12s.\nURL : {page.url}\n"
+                    f"{_message_page(page)}")
+            # Capture : BD peut afficher un message (compte bloqué après trop
+            # d'essais, captcha, maintenance) que le bot ne sait pas lire
+            # (27/10/2026, login bloqué sans explication).
+            try:
+                import tg
+                tg.send_photo(page.screenshot(full_page=False),
+                              caption="Page BD après « Se connecter »")
+            except Exception as e:
+                print(f"[BD Auth] capture impossible : {e}")
             return False
 
         # ── TOTP détecté ─────────────────────────────────────────────────────
