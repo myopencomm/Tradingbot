@@ -433,7 +433,7 @@ TradingBot/
 | `/ordre acheter TICKER QTE expert ENTREE SL TP [validite]` | Achat Expert — entrée + stop-loss + take-profit en un seul ordre |
 | `/ordre vendre TICKER QTE marche [validite]` | Vente au marché |
 | `/ordre vendre TICKER QTE limite PRIX [validite]` | Vente à cours limité |
-| `/ordre vendre TICKER QTE expert SL TP [validite]` | Vente Expert — stop-loss + take-profit en un seul ordre |
+| `/ordre vendre TICKER QTE expert SL TP [validite]` | Vente Expert — stop-loss + take-profit en un seul ordre ; la position enregistre les ids et seuils de cette protection, pour que `/securiser`, `/sortir` et le trailing puissent l'annuler ensuite |
 | `/oui` | Confirmer et envoyer l'ordre affiché (irréversible) |
 | `/non` | Annuler l'ordre affiché |
 | `/annuler_bd TICKER` | Annuler un ordre en cours sur Bourse Direct |

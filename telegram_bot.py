@@ -2072,6 +2072,14 @@ def cmd_ordre(args, cid):
                     "summary":   summary,
                     "expires":   time.time() + 120,
                 }
+                if is_expert and side == "sell":
+                    # Ids des jambes SL/TP : sans eux, /securiser et /sortir
+                    # annulaient les ids de la protection PRÉCÉDENTE (403 BD).
+                    _pending_order["protection"] = {
+                        "children": [c for c in (order_data.get("children") or []) if c],
+                        "adjusted": order_data.get("_adjusted") or {},
+                        "sl": sl, "tp": tp,
+                    }
 
             send(
                 f"RECAPITULATIF ORDRE\n"
@@ -2128,6 +2136,8 @@ def cmd_oui(args, cid):
             if not result:
                 send("Envoi echoue — verifier sur BD directement.", cid)
                 return
+            if pending.get("protection"):
+                _enregistrer_protection(pending["ticker"], pending["protection"])
 
             # ── Vérification post-ordre : relit le carnet pour confirmer ──────
             import bourse_direct_reader as reader
@@ -2162,6 +2172,30 @@ def cmd_oui(args, cid):
             send(f"Erreur envoi : {e}", cid)
 
     _run_long(cid, _do_send)
+
+
+def _enregistrer_protection(ticker: str, prot: dict) -> None:
+    """Après un /ordre vendre … expert confirmé : la position garde les ids et
+    les seuils de SA protection. KRT, 28/10/2026 : l'ordre posé à la main
+    n'était pas enregistré, et /securiser annulait les ids de l'ancienne
+    protection (déjà annulée) — 403 BD, sécurisation impossible."""
+    base = ticker.upper().split(".")[0]
+    d = portfolio.load()
+    for nom, p in d.get("positions", {}).items():
+        if (p.get("ticker") or "").upper().split(".")[0] != base:
+            continue
+        adj = prot.get("adjusted") or {}
+        p["target_low"] = adj.get("stop_loss") or prot["sl"]
+        p["target_high"] = adj.get("take_profit") or prot["tp"]
+        if prot.get("children"):
+            p["protection_ids"] = prot["children"]
+        else:
+            p.pop("protection_ids", None)
+        p["protected"] = True
+        portfolio.save(d)
+        print(f"[ordre] {nom} : protection enregistrée {p['target_low']} / "
+              f"{p['target_high']} ids={prot.get('children')}")
+        return
 
 
 def cmd_annuler_bd(args, cid):
