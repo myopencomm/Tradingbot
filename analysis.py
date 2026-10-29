@@ -975,9 +975,11 @@ ni ligne sur les positions HOLD.{opps_mission}"""
             quant = []
             try:
                 regime_data = prices.get_market_regime()
+                _univ, _pre, _ = world_scan_universe()
                 quant = _quant_screen(
-                    SCAN_UNIVERSE, held_tickers,
+                    _univ, held_tickers,
                     regime_data["label"], regime_data.get("index_mom_avg", 0.0) or 0.0,
+                    precomputed=_pre,
                 )
                 quant_tickers = [c["ticker"] for c in quant[:6]]
                 print(f"[briefing] quant screen ({regime_data['label']}): "
@@ -1723,6 +1725,45 @@ def _extract_tickers(text: str) -> list[str]:
     )))
 
 
+def world_scan_universe() -> tuple[list, dict, dict]:
+    """Univers du scan complet : liste manuelle + univers MONDIAL (toutes les
+    bourses que BD traite en ligne, rafraîchi chaque matin) avec ses
+    indicateurs précalculés. Repli sur le gisement US, puis sur la liste
+    manuelle seule : jamais de scan sur des données mortes.
+
+    Partagé par /scan, le briefing et le repli du mode autonome : le briefing
+    ne regardait que les 149 valeurs manuelles (6 candidats, 28-29/10/2026)."""
+    universe, ind, world_names = list(SCAN_UNIVERSE), {}, {}
+    try:
+        import market_universe as _mu
+        _ind = _mu.load_indicators("world")
+        if _ind:
+            world_names = {e["ticker"]: e for e in _mu.load_cache("world", max_age_days=8)}
+            # Seulement les tickers de l'univers courant (dédoublonné) :
+            # le cache d'indicateurs peut en garder d'un passage antérieur.
+            if world_names:
+                _ind = {t: v for t, v in _ind.items() if t in world_names}
+            src = "mondiaux"
+        else:
+            from config import SCAN_US_MIN_DOLLAR_VOLUME as _MINDV
+            _ind = _mu.load_indicators("us") if _MINDV > 0 else {}
+            if _ind:
+                _liq = {e["ticker"]: e["dollar_volume"] for e in _mu.load_cache("us")}
+                _ind = {t: v for t, v in _ind.items() if _liq.get(t, 0) >= _MINDV}
+            src = "US"
+        if _ind:
+            extra = [t for t in _ind if t not in set(universe)]
+            universe += extra
+            ind = _ind
+            print(f"[scan] univers étendu : {len(SCAN_UNIVERSE)} manuels "
+                  f"+ {len(extra)} {src} = {len(universe)}")
+        else:
+            print("[scan] caches univers absents/périmés — liste manuelle seule")
+    except Exception as _ue:
+        print(f"[scan] univers étendu indisponible : {_ue}")
+    return universe, ind, world_names
+
+
 def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=None,
                        universe: list = None, scan_label: str = "",
                        precomputed: dict | None = None) -> None:
@@ -1747,37 +1788,7 @@ def scan_opportunities(send_fn, ticker: str = None, progress_fn=None, update_fn=
     precomputed_tech: dict = precomputed or {}
     world_names: dict = {}
     if universe is None:
-        universe = list(SCAN_UNIVERSE)
-        try:
-            import market_universe as _mu
-            # Univers MONDIAL (toutes les bourses que BD traite en ligne,
-            # rafraîchi chaque matin) ; repli sur le gisement US, puis sur la
-            # liste manuelle. Jamais de scan sur des données mortes.
-            _ind = _mu.load_indicators("world")
-            if _ind:
-                world_names = {e["ticker"]: e for e in _mu.load_cache("world", max_age_days=8)}
-                # Seulement les tickers de l'univers courant (dédoublonné) :
-                # le cache d'indicateurs peut en garder d'un passage antérieur.
-                if world_names:
-                    _ind = {t: v for t, v in _ind.items() if t in world_names}
-                src = "mondiaux"
-            else:
-                from config import SCAN_US_MIN_DOLLAR_VOLUME as _MINDV
-                _ind = _mu.load_indicators("us") if _MINDV > 0 else {}
-                if _ind:
-                    _liq = {e["ticker"]: e["dollar_volume"] for e in _mu.load_cache("us")}
-                    _ind = {t: v for t, v in _ind.items() if _liq.get(t, 0) >= _MINDV}
-                src = "US"
-            if _ind:
-                extra = [t for t in _ind if t not in set(universe)]
-                universe += extra
-                precomputed_tech = _ind
-                print(f"[scan] univers étendu : {len(SCAN_UNIVERSE)} manuels "
-                      f"+ {len(extra)} {src} = {len(universe)}")
-            else:
-                print("[scan] caches univers absents/périmés — liste manuelle seule")
-        except Exception as _ue:
-            print(f"[scan] univers étendu indisponible : {_ue}")
+        universe, precomputed_tech, world_names = world_scan_universe()
     # Compat : progress_fn ancienne API → update_fn
     if progress_fn and not update_fn:
         _pf = progress_fn

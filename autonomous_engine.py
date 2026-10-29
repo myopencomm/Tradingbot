@@ -792,9 +792,11 @@ def run_entry_cycle(send_fn) -> None:
             if regime_data["label"] == "CRISIS":
                 print("[Auto] Régime CRISIS — pas de fallback gain réduit.")
                 return
+            _univ, _pre, _ = analysis.world_scan_universe()
             quant = analysis._quant_screen(
-                analysis.SCAN_UNIVERSE, held,
+                _univ, held,
                 regime_data["label"], regime_data.get("index_mom_avg", 0.0) or 0.0,
+                precomputed=_pre,
             )
             quant = [c for c in quant if market_open_for(c["ticker"])]
             if not quant:
