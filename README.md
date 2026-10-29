@@ -367,6 +367,7 @@ TradingBot/
 | `/news` | News négatives et résultats imminents sur les positions détenues — **alerte seule, jamais de vente**. Rend compte de chaque position (le passage planifié ne parle que s'il trouve quelque chose) — voir *Alerte news* dans les fonctionnalités |
 | `/lessons` | Ce que le bot a appris de ses trades passés + garde-fous actifs — voir section [Apprentissage](#boucle-dapprentissage) |
 | `/fantome` | Bilan des **entrées précoces** suivies en mode fantôme (repli sur MM20, cassure de base, gap post-résultats) contre le momentum de production : cas clos, % gagnants, gain net moyen et IC 95 %. Rien n'est acheté — voir [Entrées précoces](#entrées-précoces--mode-fantôme) |
+| `/pronostics` | Bilan des **pronostics de résultats** : avant chaque publication d'un titre du screen ou d'une position, l'IA lit les news et annonce hausse ou baisse ; vérifié le lendemain. Rien n'est acheté — voir [Pronostics de résultats](#pronostics-de-résultats--essai-fantôme) |
 
 ### Positions
 
@@ -1842,6 +1843,25 @@ Question du 29/10/2026 : les candidats sortent toujours **au plus haut** (le cla
 **Entrer plus tôt ne bat pas le momentum** : c'est en achetant la force que se trouve le (petit) edge. Seule nuance : parmi les trades momentum, ceux pris à moins de 3 % du plus haut de 52 semaines rapportent le moins (+0,24 %, 75 trades) et ceux à 7-15 % sous le plus haut le plus (+1,29 %, 272 trades), mais en règle autonome cet écart disparaît (+0,99 %). Le vrai mur est ailleurs : **~1 % brut par trade, moins que les frais BD hors Euronext** (30-37 € l'aller-retour sur 600 € à Xetra, Londres, Madrid, Suisse ; ~18 € aux US), et proche de zéro sur Euronext. Aucune règle n'est donc branchée sur les achats réels : les cinq restent en fantôme.
 
 **Bug corrigé au passage** : en walk-forward, les positions ouvertes en fin de fenêtre étaient revendues au **dernier cours de tout l'historique** au lieu de celui de la fenêtre (une fenêtre 2023 affichait +2 479 € contre -900 € pour les mêmes trades). Les résultats walk-forward antérieurs au 29/10/2026 sont donc trop optimistes. Le calcul des candidats est aussi vectorisé (`_score_matrix`, résultats identiques au centime près) : la boucle séance × titre prenait des heures sur l'univers mondial.
+
+### Pronostics de résultats — essai fantôme
+
+Question du 29/10/2026 : peut-on prédire, avec les news et d'autres sources, si une action va bien réagir à ses résultats ? **Étude préalable** (3 018 publications US, 211 titres tirés au hasard, 4 ans, réaction de la clôture de la veille à celle du lendemain) :
+
+| Mesure | Résultat |
+|---|---|
+| Publications suivies d'une hausse | 49 % — pile ou face |
+| Mouvement moyen (en valeur absolue) | 6,9 % ; > +10 % : 11,7 %, < -10 % : 10,8 % |
+| Corrélation avec la surprise du trimestre précédent / la réaction précédente / la course du mois avant | 0,02 / -0,01 / -0,03 — aucune |
+| Connaître le BPA réel à l'avance | 69 % battent le consensus, mais seules 55 % de celles-là montent |
+| Dérive des 5 séances après un gap > +5 % | +0,5 % — moins que les frais |
+
+L'étude ne lisait pas les news : c'est ce que l'IA ajoute, et ce que l'essai mesure (`earnings_bets.py`).
+
+- **Chaque jour à 10:40** : pour les positions et les 40 premiers titres du screen momentum qui publient de J+1 à J+4, l'IA fait une recherche web dédiée (consensus et révisions, guidance, historique de surprises, publications des concurrents, mouvement implicite des options) via la CLI claude, sinon Gemini + Google Search — **jamais la clé API**. Puis elle annonce **hausse ou baisse** avec une confiance de 50 à 90 %. Trois pronostics par jour au plus, envoyés sur Telegram, notés dans `earnings_bets_journal.json`. Pas de recherche fiable = pas de pronostic.
+- **Vérification** : après la publication, réaction mesurée de la clôture de la veille à celle du lendemain (couvre une publication avant l'ouverture comme après la clôture), résultat envoyé sur Telegram. Date décalée par la société : abandon au bout de 3 semaines.
+- **`/pronostics`** : % de pronostics justes avec IC 95 % (Wilson), sous-ensemble confiance ≥ 65 %, et gain net moyen si l'on avait acheté chaque « hausse » la veille au soir pour la revendre le lendemain soir (frais BD sur 900 €).
+- **Rien n'est acheté.** L'IA n'apporte quelque chose qu'avec ≥ 30 cas vérifiés ET un IC 95 % entièrement au-dessus de 50 %. Même alors, un stop ne protège pas d'un gap de résultats (voir le veto des 6 jours) : un branchement réel serait une décision à part.
 
 ## Règles de trading par défaut
 

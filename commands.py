@@ -129,7 +129,9 @@ ALL = [
     Command("lessons", "cmd_lessons", "Ce que le bot a appris de ses trades", "ia",
             help="ce que le bot a appris de ses trades passes"),
     Command("fantome", "cmd_fantome", "Entrees precoces en essai fantome (notees, jamais achetees)", "ia",
-            help="bilan des entrees precoces suivies sans achat (repli, cassure, gap) vs momentum"),
+            help="entrees precoces en essai"),
+    Command("pronostics", "cmd_pronostics", "Pronostics IA avant resultats, en essai (jamais achetes)", "ia",
+            help="pronostics IA avant resultats (essai)"),
 
     # ── Vente ──
     Command("vendu", "cmd_vendu", "Enregistrer une vente — /vendu NOM [PRIX]", "vente",

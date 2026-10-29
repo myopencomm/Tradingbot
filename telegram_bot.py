@@ -1744,6 +1744,16 @@ def cmd_fantome(args, cid):
         send(f"Bilan fantôme indisponible : {e}", cid)
 
 
+def cmd_pronostics(args, cid):
+    """/pronostics — bilan des pronostics de résultats (earnings_bets) :
+    l'IA annonce hausse ou baisse avant chaque publication, rien n'est acheté."""
+    import earnings_bets
+    try:
+        send(earnings_bets.texte_bilan(), cid)
+    except Exception as e:
+        send(f"Bilan des pronostics indisponible : {e}", cid)
+
+
 def cmd_lessons(args, cid):
     """/lessons — ce que le bot a appris de ses trades passés + garde-fous actifs."""
     try:

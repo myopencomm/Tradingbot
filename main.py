@@ -37,6 +37,7 @@ JOB_TIMEOUTS = {
     "base_rates":       1200,   # backtest complet (~4 min mesurées)
     "reanalyse":        1500,   # ~2 min par position (recherche + jugement)
     "universe_refresh": 2400,   # ~4000 valeurs mondiales, 2 ans d'historique
+    "earnings_bets":    1500,   # ~40 dates de résultats + 3 recherches web
     # Le cycle horaire enchaîne sync + annulations + trailing + entrées. Une
     # fois par mois il porte en plus la repose des protections expirées, qui
     # exige DEUX lectures du carnet (voir protection_renewal) : le budget serré
@@ -171,6 +172,35 @@ def _entrees_fantomes():
         print(f"[fantome] {n} signal(aux) noté(s), {clos} clos")
     except Exception as e:
         print(f"[fantome] échec : {e}")
+
+
+def _pronostics_resultats():
+    """Essai fantôme des pronostics de résultats (earnings_bets) : vérifie les
+    pronostics dont la publication est passée, puis en note de nouveaux pour
+    les titres du screen et les positions qui publient sous 4 jours. Rien
+    n'est acheté. Ne parle que s'il y a un pronostic nouveau ou vérifié."""
+    try:
+        import analysis
+        import earnings_bets
+        import portfolio
+        import prices
+        resolus = earnings_bets.resoudre()
+        if resolus:
+            telegram_bot.send(earnings_bets.texte_resolus(resolus))
+        held = [c["ticker"] for c in portfolio.load().get("positions", {}).values()]
+        reg = prices.get_market_regime()
+        univ, pre, names = analysis.world_scan_universe()
+        screen = [c["ticker"] for c in analysis._quant_screen(
+            univ, set(held), reg["label"], reg.get("index_mom_avg", 0.0) or 0.0,
+            precomputed=pre)][:earnings_bets.TOP_SCREEN]
+        noms = {t: (names.get(t) or {}).get("name", "") for t in held + screen}
+        course = {t: (pre.get(t) or {}).get("momentum_1m") for t in held + screen}
+        nouveaux = earnings_bets.pronostiquer(held + screen, noms, course)
+        if nouveaux:
+            telegram_bot.send(earnings_bets.texte_nouveaux(nouveaux))
+        print(f"[pronostics] {len(nouveaux)} noté(s), {len(resolus)} vérifié(s)")
+    except Exception as e:
+        print(f"[pronostics] échec : {e}")
 
 
 def _weekly_version_check():
@@ -374,6 +404,10 @@ def run_scheduler():
     schedule.every().day.at("07:30").do(
         _bounded(_refresh_market_universe, "universe_refresh")
     )
+    # Pronostics de résultats (essai fantôme, earnings_bets.py) : après le
+    # rafraîchissement de l'univers et la réanalyse, avant l'ouverture US.
+    schedule.every().day.at("10:40").do(
+        _bounded(_pronostics_resultats, "earnings_bets"))
     schedule.every().hour.at(":35").do(_bounded(_hourly_bd_sync, "hourly_bd_sync"))
     # Valeur de part : un relevé par jour APRÈS la clôture US, quand toutes les
     # lignes ont un cours de fin de séance. Silencieux — c'est une mesure, pas
