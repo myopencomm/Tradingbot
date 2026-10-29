@@ -1734,6 +1734,16 @@ def _check_playwright_ready(cid) -> bool:
     return True
 
 
+def cmd_fantome(args, cid):
+    """/fantome — bilan des entrées précoces suivies en mode fantôme
+    (early_entries) : notées chaque matin, jamais achetées."""
+    import early_entries
+    try:
+        send(early_entries.texte_bilan(), cid)
+    except Exception as e:
+        send(f"Bilan fantôme indisponible : {e}", cid)
+
+
 def cmd_lessons(args, cid):
     """/lessons — ce que le bot a appris de ses trades passés + garde-fous actifs."""
     try:

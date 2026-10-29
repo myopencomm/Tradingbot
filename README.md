@@ -366,6 +366,7 @@ TradingBot/
 | `/nav retrait 500` | Déclare un retrait — il rend des parts, la valeur de la part ne bouge pas |
 | `/news` | News négatives et résultats imminents sur les positions détenues — **alerte seule, jamais de vente**. Rend compte de chaque position (le passage planifié ne parle que s'il trouve quelque chose) — voir *Alerte news* dans les fonctionnalités |
 | `/lessons` | Ce que le bot a appris de ses trades passés + garde-fous actifs — voir section [Apprentissage](#boucle-dapprentissage) |
+| `/fantome` | Bilan des **entrées précoces** suivies en mode fantôme (repli sur MM20, cassure de base, gap post-résultats) contre le momentum de production : cas clos, % gagnants, gain net moyen et IC 95 %. Rien n'est acheté — voir [Entrées précoces](#entrées-précoces--mode-fantôme) |
 
 ### Positions
 
@@ -1812,6 +1813,20 @@ Un plafond plus serré fait **un peu mieux** dans la plupart des cas, mais sans 
 | verrou +3 %→+1 % ET TP 1,5 R | — | -2 367 € |
 
 Le verrou fait monter le taux de réussite (27 % → 47 %) mais **le gain moyen fond (+28 € → +9 €) et la perte moyenne reste la même (-24 €)** : il coupe des gagnants sans sauver les vrais perdants, qui baissent dès l'entrée (sur les 21 trades réels, 6 des 7 derniers perdants n'avaient jamais dépassé +1,5 %). La seule variante meilleure à 2 positions (+6 %→+3 %) est pire à 4 : pas d'effet robuste. **Non activé.** Seule exception gardée : `/securiser`, décision manuelle position par position.
+
+### Entrées précoces — mode fantôme
+
+Question du 29/10/2026 : les candidats sortent toujours **au plus haut** (le classement momentum 12-1 les choisit par construction), et l'IA les refuse ensuite pour « résistance proche » ou « surchauffe ». Trois règles d'entrée plus tôt dans la courbe sont comparées, avec la **même gestion** (SL 2 ATR, TP ≥ 1,5 R, trailing) : seule l'entrée change. Code commun : `early_entries.py`.
+
+| Règle | Signal |
+|---|---|
+| Repli sur MM20 | tendance établie (12-1 > 0, au-dessus des MM50 et MM200), cours revenu entre -1 et +0,5 ATR de la MM20, RSI 35-60 |
+| Cassure de base | range des 30 séances précédentes ≤ 6 ATR, clôture au-dessus de son plus haut (sans dépasser +1 ATR) sur volume ≥ 1,5× |
+| Gap post-résultats (proxy PEAD) | gap d'ouverture ≥ max(3 %, 1,5 ATR) sur volume ≥ 2,5× dans les 5 dernières séances, séance verte, plus bas du gap tenu |
+
+- **Backtest** : `backtest.py --entries --world [--max-pos 4]`.
+- **Mode fantôme** : chaque matin après le rafraîchissement de l'univers (07:30), les 4 meilleurs signaux de chaque règle et le top 4 du momentum de production sont **notés** dans `early_entries_journal.json` (jamais achetés), puis suivis jusqu'au SL, au TP ou à 60 séances (entrée simulée à l'open suivant +0,3 %, frais BD déduits). `/fantome` en donne le bilan.
+- **Achat réel** : une règle ne nourrit de vrais achats qu'une fois **prouvée** : ≥ 30 cas clos, IC 95 % du gain net au-dessus de zéro, et moyenne meilleure que le momentum.
 
 ## Règles de trading par défaut
 

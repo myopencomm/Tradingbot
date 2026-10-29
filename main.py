@@ -145,6 +145,32 @@ def _refresh_market_universe():
             f"⚠️ Rafraîchissement de l'univers de marché échoué : {e}\n"
             f"Le scan continue sur le dernier univers en cache, sinon la liste manuelle."
         )
+        return
+    _entrees_fantomes()
+
+
+def _entrees_fantomes():
+    """Mode fantôme des entrées précoces : suit les signaux déjà notés, puis
+    note ceux du jour (et le top du momentum de production comme repère).
+    Rien n'est acheté. Silencieux : le bilan se lit avec /fantome."""
+    try:
+        import analysis
+        import early_entries
+        import market_universe
+        import portfolio
+        import prices
+        clos = early_entries.suivre()
+        ind = market_universe.load_indicators("world")
+        held = {c["ticker"] for c in portfolio.load().get("positions", {}).values()}
+        reg = prices.get_market_regime()
+        univ, pre, _ = analysis.world_scan_universe()
+        ref = [c["ticker"] for c in analysis._quant_screen(
+            univ, held, reg["label"], reg.get("index_mom_avg", 0.0) or 0.0,
+            precomputed=pre)]
+        n = early_entries.noter_signaux(ind, ref, held)
+        print(f"[fantome] {n} signal(aux) noté(s), {clos} clos")
+    except Exception as e:
+        print(f"[fantome] échec : {e}")
 
 
 def _weekly_version_check():

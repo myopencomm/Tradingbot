@@ -32,6 +32,7 @@ import pandas as pd
 import yfinance as yf
 
 from analysis import SCAN_UNIVERSE, US_UNIVERSE
+from early_entries import rsi14, atr14_pct, add_columns, entry_signal
 
 FEE = 1.90            # frais BD par ordre — forfait d'override manuel
 # Barème RÉEL par défaut (tranches Euronext, forfait US, TTF française à
@@ -59,22 +60,6 @@ MAX_HOLD_DAYS = 60    # time-stop (jours de bourse)
 
 # ── Indicateurs vectorisés ────────────────────────────────────────────────────
 
-def rsi14(closes: pd.Series) -> pd.Series:
-    delta = closes.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / loss
-    return 100 - 100 / (1 + rs)
-
-
-def atr14_pct(df: pd.DataFrame) -> pd.Series:
-    prev = df["Close"].shift(1)
-    tr = pd.concat([df["High"] - df["Low"],
-                    (df["High"] - prev).abs(),
-                    (df["Low"] - prev).abs()], axis=1).max(axis=1)
-    return tr.rolling(14).mean() / df["Close"] * 100
-
-
 def build_indicators(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
     out = {}
     for t, df in data.items():
@@ -100,6 +85,8 @@ def build_indicators(data: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
         # lendemain sur un gap). En ATR et non en %, sinon le seuil serait
         # ridicule pour une valeur calme et inatteignable pour une nerveuse.
         ind["ext_5d_atr"] = (c / c.shift(5) - 1) * 100 / ind["atr_pct"]
+        # Entrées « tôt dans la courbe » (--entries, 29/10/2026)
+        add_columns(ind, df)
         out[t] = ind
     return out
 
@@ -119,7 +106,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              review: dict | None = None,
              fx: pd.Series | None = None, be_eur: bool = False,
              max_sl_pct: float = 10.0,
-             lock: tuple | None = None) -> dict:
+             lock: tuple | None = None,
+             entry_rule: str = "momentum") -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
 
     `stale` = ((j1, p1), (j2, p2)) — jalons de la sortie sur stagnation : à j1
@@ -157,6 +145,9 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     aller-retour compris. Une seule fois par position ; le trailing breakeven
     reste actif en parallèle.
 
+    `entry_rule` = règle de sélection à l'entrée (mode 'new') — voir `entry_signal` :
+    "momentum" (production), "pullback", "breakout", "gap".
+
     `be_atr` = le MÊME seuil exprimé en multiples d'ATR d'entrée ; prime sur
     `be_pct` quand il est fourni. Un seuil en % fixe ne veut pas dire la même
     chose sur un titre à 1.7% d'ATR et sur un à 3.4% : +6% vaut 3.5 ATR pour le
@@ -183,6 +174,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
 
     # Signaux évalués chaque lundi ; cadence "monthly" = 1er lundi du mois
     weekly = dates[dates.weekday == 0]
+    if cadence == "daily":
+        weekly = dates
     if cadence == "monthly":
         weekly = pd.DatetimeIndex([d for i, d in enumerate(weekly)
                                    if i == 0 or d.month != weekly[i - 1].month])
@@ -291,6 +284,12 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                 if r["rsi"] > 75 or r["rsi"] < 28 or r["mom_1m"] < -8:
                     continue
                 cands.append((t, r["mom_1m"]))
+            elif entry_rule != "momentum":
+                if np.isnan(r["atr_pct"]) or 2 * r["atr_pct"] > max_sl_pct:
+                    continue
+                score = entry_signal(entry_rule, df, d, r)
+                if score is not None:
+                    cands.append((t, score))
             else:
                 if (np.isnan(r["mom_12_1"]) or r["mom_12_1"] <= 0
                         or np.isnan(r["ma200"]) or r["close"] <= r["ma200"]
@@ -542,6 +541,12 @@ def main():
     ap.add_argument("--base-rates", action="store_true",
                     help="écrit base_rates.json : taux historique d'atteinte du "
                          "TP par profil d'entrée (lu par validate_candidate)")
+    ap.add_argument("--entries", action="store_true",
+                    help="entrées « tôt dans la courbe » (repli sur MM20, "
+                         "cassure de base, gap post-résultats) contre le "
+                         "momentum 12-1 de production")
+    ap.add_argument("--world", action="store_true",
+                    help="univers MONDIAL du cache (celui du scan de production)")
     ap.add_argument("--max-pos", type=int, default=2,
                     help="positions simultanées (production : 4)")
     args = ap.parse_args()
@@ -551,6 +556,13 @@ def main():
         import market_universe
         extra = [e["ticker"] if isinstance(e, dict) else e
                  for e in market_universe.load_cache("us", max_age_days=10_000)]
+        universe = list(dict.fromkeys(list(universe) + extra))
+    if args.world:
+        import market_universe
+        extra = [e["ticker"] for e in market_universe.load_cache("world", max_age_days=10_000)]
+        if args.us:
+            extra = [e["ticker"] for e in market_universe.load_cache("world", max_age_days=10_000)
+                     if e.get("currency") == "USD"]
         universe = list(dict.fromkeys(list(universe) + extra))
     if args.fast:
         universe = universe[:30]
@@ -601,7 +613,18 @@ def main():
             json.dumps(br, indent=1, ensure_ascii=False), encoding="utf-8")
         print(json.dumps(br, indent=1, ensure_ascii=False))
         return
-    if args.lock:
+    if args.entries:
+        # 29/10/2026 : « entrer au début de la courbe, pas à la fin ». Même
+        # gestion (SL 2 ATR, TP ≥ 1,5R, trailing) pour tous : seule la règle
+        # d'ENTRÉE change. Cadence quotidienne, comme le scan de production —
+        # une cassure ou un gap ne restent pas valables jusqu'au lundi.
+        d_ = dict(base, cadence="daily")
+        configs = [("E0. momentum 12-1 [hebdo] (backtest historique)", dict(base)),
+                   ("E1. momentum 12-1 [quotidien] (production)", dict(d_)),
+                   ("E2. repli sur MM20 dans la tendance", dict(d_, entry_rule="pullback")),
+                   ("E3. cassure de base calme sur volume", dict(d_, entry_rule="breakout")),
+                   ("E4. gap post-résultats (proxy PEAD)", dict(d_, entry_rule="gap"))]
+    elif args.lock:
         # 13/10/2026 : après une série de pertes, « mieux vaut de petits gains
         # souvent ». Sur les 21 trades réels, 5 perdants sur 11 étaient passés
         # à +3 % avant de finir sous l'eau — mais les gros gagnants venaient

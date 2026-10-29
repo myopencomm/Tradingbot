@@ -79,6 +79,8 @@ def _etat_en_bac_a_sable(tmp_path, monkeypatch):
     import verdicts
     monkeypatch.setattr(decisions, "PATH", bac / "decisions_journal.json")
     monkeypatch.setattr(verdicts, "PATH", bac / "verdicts_history.json")
+    import early_entries
+    monkeypatch.setattr(early_entries, "JOURNAL_PATH", bac / "early_entries_journal.json")
     return bac
 
 

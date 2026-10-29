@@ -206,6 +206,7 @@ def compute_indicators_bulk(tickers: list[str], batch: int = 200,
 
             closes, highs, lows, vols = (field("Close"), field("High"),
                                          field("Low"), field("Volume"))
+            opens = field("Open")
             if closes is None:
                 continue
             for t in closes.columns:
@@ -278,6 +279,20 @@ def compute_indicators_bulk(tickers: list[str], batch: int = 200,
                         "vol_ratio": vol_ratio,
                         "vol_ratio_20_250": vr20_250,
                     }
+                    # Signaux d'entrée précoce (mode fantôme, early_entries).
+                    try:
+                        if opens is not None and highs is not None and lows is not None:
+                            import early_entries
+                            ohlcv = pd.DataFrame({
+                                "Open": opens[t], "High": highs[t], "Low": lows[t],
+                                "Close": closes[t],
+                                "Volume": vols[t] if vols is not None and t in vols.columns else np.nan,
+                            }).dropna(subset=["Close", "Open", "High", "Low"])
+                            early = early_entries.latest_signals(ohlcv)
+                            if early:
+                                out[t]["early"] = early
+                    except Exception:
+                        pass
                 except Exception:
                     continue
         except Exception as e:

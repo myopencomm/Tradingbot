@@ -128,6 +128,8 @@ ALL = [
             help="news negatives et resultats imminents (alerte seule, jamais de vente)"),
     Command("lessons", "cmd_lessons", "Ce que le bot a appris de ses trades", "ia",
             help="ce que le bot a appris de ses trades passes"),
+    Command("fantome", "cmd_fantome", "Entrees precoces en essai fantome (notees, jamais achetees)", "ia",
+            help="bilan des entrees precoces suivies sans achat (repli, cassure, gap) vs momentum"),
 
     # ── Vente ──
     Command("vendu", "cmd_vendu", "Enregistrer une vente — /vendu NOM [PRIX]", "vente",
