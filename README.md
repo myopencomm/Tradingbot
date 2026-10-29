@@ -1823,10 +1823,25 @@ Question du 29/10/2026 : les candidats sortent toujours **au plus haut** (le cla
 | Repli sur MM20 | tendance établie (12-1 > 0, au-dessus des MM50 et MM200), cours revenu entre -1 et +0,5 ATR de la MM20, RSI 35-60 |
 | Cassure de base | range des 30 séances précédentes ≤ 6 ATR, clôture au-dessus de son plus haut (sans dépasser +1 ATR) sur volume ≥ 1,5× |
 | Gap post-résultats (proxy PEAD) | gap d'ouverture ≥ max(3 %, 1,5 ATR) sur volume ≥ 2,5× dans les 5 dernières séances, séance verte, plus bas du gap tenu |
+| Recul sous le plus haut | filtres du momentum de production, mais cours entre 7 et 15 % sous le plus haut de 52 semaines (hypothèse tirée du backtest, à prouver) |
 
 - **Backtest** : `backtest.py --entries --world [--max-pos 4]`.
 - **Mode fantôme** : chaque matin après le rafraîchissement de l'univers (07:30), les 4 meilleurs signaux de chaque règle et le top 4 du momentum de production sont **notés** dans `early_entries_journal.json` (jamais achetés), puis suivis jusqu'au SL, au TP ou à 60 séances (entrée simulée à l'open suivant +0,3 %, frais BD déduits). `/fantome` en donne le bilan.
 - **Achat réel** : une règle ne nourrit de vrais achats qu'une fois **prouvée** : ≥ 30 cas clos, IC 95 % du gain net au-dessus de zéro, et moyenne meilleure que le momentum.
+
+**Résultat du backtest (29/10/2026, 2023 → 10/2026, entrée à l'open suivant, même gestion pour toutes)** — rendement BRUT moyen par trade, avant frais :
+
+| Règle | Monde (3 250 titres, 8 positions) | Euronext seul (4 positions), P&L net |
+|---|---|---|
+| Momentum 12-1 (production) | **+0,96 %** (IC90 +0,38 / +1,62), 599 trades | +0,18 % brut, -316 € |
+| Repli sur MM20 | +0,48 % (IC90 -0,11 / +1,07) | -0,28 %, -643 € |
+| Cassure de base | +0,36 % (IC90 -0,26 / +0,93) | +0,06 %, -415 € |
+| Gap post-résultats | -0,04 % (IC90 -0,67 / +0,62) | +0,43 %, -162 € |
+| Recul 7-15 % sous le plus haut | +0,99 % (IC90 +0,42 / +1,58) | +0,15 %, -123 € |
+
+**Entrer plus tôt ne bat pas le momentum** : c'est en achetant la force que se trouve le (petit) edge. Seule nuance : parmi les trades momentum, ceux pris à moins de 3 % du plus haut de 52 semaines rapportent le moins (+0,24 %, 75 trades) et ceux à 7-15 % sous le plus haut le plus (+1,29 %, 272 trades), mais en règle autonome cet écart disparaît (+0,99 %). Le vrai mur est ailleurs : **~1 % brut par trade, moins que les frais BD hors Euronext** (30-37 € l'aller-retour sur 600 € à Xetra, Londres, Madrid, Suisse ; ~18 € aux US), et proche de zéro sur Euronext. Aucune règle n'est donc branchée sur les achats réels : les cinq restent en fantôme.
+
+**Bug corrigé au passage** : en walk-forward, les positions ouvertes en fin de fenêtre étaient revendues au **dernier cours de tout l'historique** au lieu de celui de la fenêtre (une fenêtre 2023 affichait +2 479 € contre -900 € pour les mêmes trades). Les résultats walk-forward antérieurs au 29/10/2026 sont donc trop optimistes. Le calcul des candidats est aussi vectorisé (`_score_matrix`, résultats identiques au centime près) : la boucle séance × titre prenait des heures sur l'univers mondial.
 
 ## Règles de trading par défaut
 

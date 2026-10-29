@@ -23,13 +23,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-RULES = ("pullback", "breakout", "gap")
+RULES = ("pullback", "breakout", "gap", "recul")
 REFERENCE = "momentum"
 LABELS = {
     "momentum": "momentum 12-1 (production)",
     "pullback": "repli sur MM20 dans la tendance",
     "breakout": "cassure de base calme sur volume",
     "gap":      "gap post-résultats (proxy PEAD)",
+    "recul":    "momentum à 7-15 % sous le plus haut 52 sem.",
 }
 JOURNAL_PATH = Path(__file__).with_name("early_entries_journal.json")
 PAR_REGLE = 4          # signaux notés par règle et par jour
@@ -60,6 +61,7 @@ def add_columns(ind: pd.DataFrame, df: pd.DataFrame) -> pd.DataFrame:
     """Colonnes propres aux règles d'entrée précoce."""
     c = df["Close"]
     ind["ma20"] = c.rolling(20).mean()
+    ind["hh252"] = df["High"].rolling(252).max()
     v = df["Volume"] if "Volume" in df.columns else pd.Series(np.nan, index=df.index)
     # Volume du jour rapporté à la moyenne des 50 séances PRÉCÉDENTES.
     ind["vol_ratio"] = v / v.shift(1).rolling(50).mean()
@@ -77,6 +79,7 @@ def frame(df: pd.DataFrame) -> pd.DataFrame:
     ind["close"], ind["open"] = c, df["Open"]
     ind["high"], ind["low"] = df["High"], df["Low"]
     ind["rsi"] = rsi14(c)
+    ind["mom_1m"] = (c / c.shift(21) - 1) * 100
     ind["mom_12_1"] = (c.shift(21) / c.shift(252) - 1) * 100
     ind["ma200"] = c.rolling(200).mean()
     ind["ma50"] = c.rolling(50).mean()
@@ -84,9 +87,10 @@ def frame(df: pd.DataFrame) -> pd.DataFrame:
     return add_columns(ind, df)
 
 
-def entry_signal(kind: str, df: pd.DataFrame, d, r) -> float | None:
-    """Score d'entrée d'une règle « tôt dans la courbe », ou None si le titre
-    ne la remplit pas à la clôture `d` (entrée à l'open suivant).
+def signal_series(kind: str, ind: pd.DataFrame) -> pd.Series:
+    """Score d'entrée d'une règle « tôt dans la courbe » pour CHAQUE séance
+    (NaN = le titre ne remplit pas la règle à cette clôture ; entrée à l'open
+    suivant). Vectorisé : le backtest l'évalue sur des milliers de titres.
 
     pullback — tendance établie (12-1 > 0, au-dessus des MM50 et MM200) mais
                cours revenu au contact de la MM20 (entre -1 et +0,5 ATR),
@@ -98,37 +102,43 @@ def entry_signal(kind: str, df: pd.DataFrame, d, r) -> float | None:
                dernières séances, ouverture en gap ≥ max(3 %, 1,5 ATR) sur
                volume ≥ 2,5×, séance clôturée au-dessus de son ouverture, et
                cours toujours au-dessus du plus bas de ce jour-là. Score : gap.
+    recul    — filtres du momentum de production (12-1 > 0, au-dessus de la
+               MM200, RSI 35-65, momentum 1 mois ≥ -12 %), mais cours entre 7
+               et 15 % sous son plus haut de 52 semaines. Repérée APRÈS coup
+               dans le backtest du 29/10/2026 (+1,29 %/trade brut contre
+               +0,24 % à moins de 3 % du plus haut) : hypothèse à prouver en
+               fantôme, pas un résultat. Score : 12-1.
     """
-    atr = r["atr_pct"]
-    if np.isnan(atr) or atr <= 0 or np.isnan(r["ma200"]):
-        return None
+    c, atr = ind["close"], ind["atr_pct"]
+    base = (atr > 0) & ind["ma200"].notna()
     if kind == "pullback":
-        if (np.isnan(r["mom_12_1"]) or r["mom_12_1"] <= 0 or np.isnan(r["ma50"])
-                or r["close"] <= r["ma200"] or r["close"] <= r["ma50"]
-                or np.isnan(r["ma20"]) or not (35 <= r["rsi"] <= 60)):
-            return None
-        dist = (r["close"] / r["ma20"] - 1) * 100 / atr
-        return min(r["mom_12_1"], 80) if -1.0 <= dist <= 0.5 else None
+        dist = (c / ind["ma20"] - 1) * 100 / atr
+        ok = (base & (ind["mom_12_1"] > 0) & (c > ind["ma200"]) & (c > ind["ma50"])
+              & ind["rsi"].between(35, 60) & (dist >= -1.0) & (dist <= 0.5))
+        return ind["mom_12_1"].clip(upper=80).where(ok)
     if kind == "breakout":
-        hh, ll, vr = r["hh30"], r["ll30"], r["vol_ratio"]
-        if np.isnan(hh) or np.isnan(ll) or np.isnan(vr) or r["close"] <= r["ma200"]:
-            return None
+        hh, ll, vr = ind["hh30"], ind["ll30"], ind["vol_ratio"]
         largeur = (hh / ll - 1) * 100
-        if largeur > 6 * atr or vr < 1.5:
-            return None
-        if not (hh < r["close"] <= hh * (1 + atr / 100)):
-            return None
-        return float(vr)
+        ok = (base & (c > ind["ma200"]) & (largeur <= 6 * atr) & (vr >= 1.5)
+              & (c > hh) & (c <= hh * (1 + atr / 100)))
+        return vr.where(ok)
     if kind == "gap":
-        pos = df.index.get_loc(d)
-        for k in range(pos, max(pos - 5, 0), -1):
-            g = df.iloc[k]
-            if np.isnan(g["gap_pct"]) or np.isnan(g["vol_ratio"]):
-                continue
-            if (g["gap_pct"] >= max(3.0, 1.5 * atr) and g["vol_ratio"] >= 2.5
-                    and g["close"] > g["open"] and r["close"] >= g["low"]):
-                return float(g["gap_pct"])
-        return None
+        seuil = np.maximum(3.0, 1.5 * atr)
+        evt = ((ind["gap_pct"] >= seuil) & (ind["vol_ratio"] >= 2.5)
+               & (ind["close"] > ind["open"]))
+        score = pd.Series(np.nan, index=ind.index)
+        # Du plus ancien au plus récent : le gap le plus RÉCENT l'emporte.
+        for k in range(4, -1, -1):
+            e = evt.shift(k, fill_value=False)
+            ok = base & e & (c >= ind["low"].shift(k))
+            score = ind["gap_pct"].shift(k).where(ok, score)
+        return score
+    if kind == "recul":
+        dist = (c / ind["hh252"] - 1) * 100
+        ok = (base & (ind["mom_12_1"] > 0) & (c > ind["ma200"])
+              & ind["rsi"].between(35, 65) & (ind["mom_1m"] >= -12)
+              & (dist >= -15) & (dist <= -7))
+        return ind["mom_12_1"].clip(upper=80).where(ok)
     raise ValueError(kind)
 
 
@@ -138,15 +148,14 @@ def latest_signals(ohlcv: pd.DataFrame) -> dict | None:
     dernière barre est une séance terminée)."""
     if len(ohlcv) < 260:
         return None
-    ind = frame(ohlcv)
-    d = ind.index[-1]
+    ind = frame(ohlcv).iloc[-300:]
     r = ind.iloc[-1]
     if np.isnan(r["close"]) or np.isnan(r["atr_pct"]):
         return None
     out = {"close": round(float(r["close"]), 4), "atr_pct": round(float(r["atr_pct"]), 2)}
     for k in RULES:
-        s = entry_signal(k, ind, d, r)
-        if s is not None:
+        s = signal_series(k, ind).iloc[-1]
+        if not np.isnan(s):
             out[k] = round(float(s), 2)
     return out
 

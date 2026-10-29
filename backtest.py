@@ -32,7 +32,7 @@ import pandas as pd
 import yfinance as yf
 
 from analysis import SCAN_UNIVERSE, US_UNIVERSE
-from early_entries import rsi14, atr14_pct, add_columns, entry_signal
+from early_entries import rsi14, atr14_pct, add_columns, signal_series
 
 FEE = 1.90            # frais BD par ordre — forfait d'override manuel
 # Barème RÉEL par défaut (tranches Euronext, forfait US, TTF française à
@@ -145,7 +145,7 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     aller-retour compris. Une seule fois par position ; le trailing breakeven
     reste actif en parallèle.
 
-    `entry_rule` = règle de sélection à l'entrée (mode 'new') — voir `entry_signal` :
+    `entry_rule` = règle de sélection à l'entrée (mode 'new') — voir `early_entries.signal_series` :
     "momentum" (production), "pullback", "breakout", "gap".
 
     `be_atr` = le MÊME seuil exprimé en multiples d'ATR d'entrée ; prime sur
@@ -172,6 +172,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
             return p["qty"] * (exit_price / fx_out - p["entry"] / fx_in) - fees
         return (exit_price - p["entry"]) * p["qty"] - fees
 
+    if mode != "old":
+        scores = _score_matrix(ind, entry_rule, min_mom1m, max_ext_atr, max_sl_pct)
     # Signaux évalués chaque lundi ; cadence "monthly" = 1er lundi du mois
     weekly = dates[dates.weekday == 0]
     if cadence == "daily":
@@ -274,35 +276,22 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
             continue
         held = {p["ticker"] for p in positions}
         cands = []
-        for t, df in ind.items():
+        if mode != "old":
+            if d in scores.index:
+                row = scores.loc[d].dropna()
+                row = row[~row.index.isin(held)]
+                cands = list(row.sort_values(ascending=False, kind="stable")
+                             .head(max_pos).items())
+        else:
+          for t, df in ind.items():
             if t in held or d not in df.index:
                 continue
             r = df.loc[d]
             if r[["rsi", "mom_1m", "close"]].isna().any():
                 continue
-            if mode == "old":
-                if r["rsi"] > 75 or r["rsi"] < 28 or r["mom_1m"] < -8:
-                    continue
-                cands.append((t, r["mom_1m"]))
-            elif entry_rule != "momentum":
-                if np.isnan(r["atr_pct"]) or 2 * r["atr_pct"] > max_sl_pct:
-                    continue
-                score = entry_signal(entry_rule, df, d, r)
-                if score is not None:
-                    cands.append((t, score))
-            else:
-                if (np.isnan(r["mom_12_1"]) or r["mom_12_1"] <= 0
-                        or np.isnan(r["ma200"]) or r["close"] <= r["ma200"]
-                        or not (35 <= r["rsi"] <= 65)
-                        or r["mom_1m"] < (-12 if min_mom1m is None else min_mom1m)
-                        or np.isnan(r["atr_pct"]) or 2 * r["atr_pct"] > max_sl_pct):
-                    continue
-                # Veto d'extension : le titre a-t-il déjà couru sur 5 séances ?
-                if max_ext_atr is not None:
-                    ext = r["ext_5d_atr"]
-                    if not np.isnan(ext) and ext > max_ext_atr:
-                        continue
-                cands.append((t, min(r["mom_12_1"], 80)))
+            if r["rsi"] > 75 or r["rsi"] < 28 or r["mom_1m"] < -8:
+                continue
+            cands.append((t, r["mom_1m"]))
         cands.sort(key=lambda x: -x[1])
 
         for t, _score in cands[: max_pos - len(positions)]:
@@ -340,9 +329,14 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                               "qty": qty, "entry_date": e_day, "be_done": False,
                               "atr_entry": atr_entry, "fx_entry": _fx(t, e_day)})
 
-    # Clôture des positions restantes au dernier cours
+    # Clôture des positions restantes au dernier cours DE LA PÉRIODE simulée.
+    # Bug corrigé le 29/10/2026 : on prenait le dernier cours de tout
+    # l'historique — une fenêtre walk-forward de 2023 revendait ses positions
+    # ouvertes au cours de 2026 (fenêtre 2023 à +2 479 € contre -900 € pour
+    # les mêmes trades dans la simulation complète).
     for p in positions:
         df = ind[p["ticker"]]
+        df = df[df.index <= dates[-1]]
         last = float(df["close"].iloc[-1])
         pnl = _pnl(p, last, df.index[-1])
         closed.append({"ticker": p["ticker"], "pnl": pnl, "why": "OPEN",
@@ -371,6 +365,39 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
         "exits": pd.Series([c["why"] for c in closed]).value_counts().to_dict(),
         "closed": closed,
     }
+
+
+_SCORES_CACHE: dict = {}
+
+
+def _score_matrix(ind: dict, entry_rule: str, min_mom1m, max_ext_atr,
+                  max_sl_pct: float) -> pd.DataFrame:
+    """Score d'entrée de chaque titre à chaque séance (NaN = non candidat),
+    calculé UNE fois par règle : la boucle séance × titre en `df.loc` prenait
+    des heures sur l'univers mondial (3 250 titres, 29/10/2026). Mêmes filtres
+    que l'ancienne boucle, vectorisés. En cache : le walk-forward rejoue la
+    même règle sur chaque fenêtre."""
+    key = (id(ind), entry_rule, min_mom1m, max_ext_atr, max_sl_pct)
+    if key in _SCORES_CACHE:
+        return _SCORES_CACHE[key]
+    cols = {}
+    for t, r in ind.items():
+        ok = (r[["rsi", "mom_1m", "close"]].notna().all(axis=1)
+              & r["atr_pct"].notna() & (2 * r["atr_pct"] <= max_sl_pct))
+        if entry_rule == "momentum":
+            ok &= ((r["mom_12_1"] > 0) & (r["close"] > r["ma200"])
+                   & r["rsi"].between(35, 65)
+                   & (r["mom_1m"] >= (-12 if min_mom1m is None else min_mom1m)))
+            # Veto d'extension : le titre a-t-il déjà couru sur 5 séances ?
+            if max_ext_atr is not None:
+                ok &= ~(r["ext_5d_atr"] > max_ext_atr)
+            sc = r["mom_12_1"].clip(upper=80)
+        else:
+            sc = signal_series(entry_rule, r)
+        cols[t] = sc.where(ok)
+    m = pd.DataFrame(cols)
+    _SCORES_CACHE[key] = m
+    return m
 
 
 def _review_due(review: dict, d, days_held: int) -> bool:
@@ -547,6 +574,9 @@ def main():
                          "momentum 12-1 de production")
     ap.add_argument("--world", action="store_true",
                     help="univers MONDIAL du cache (celui du scan de production)")
+    ap.add_argument("--eu", action="store_true",
+                    help="avec --world : hors actions en USD (les achats US "
+                         "exigent ~930 € de ligne pour amortir les frais)")
     ap.add_argument("--max-pos", type=int, default=2,
                     help="positions simultanées (production : 4)")
     args = ap.parse_args()
@@ -563,6 +593,10 @@ def main():
         if args.us:
             extra = [e["ticker"] for e in market_universe.load_cache("world", max_age_days=10_000)
                      if e.get("currency") == "USD"]
+        if args.eu:
+            extra = [e["ticker"] for e in market_universe.load_cache("world", max_age_days=10_000)
+                     if e.get("currency") != "USD"]
+            universe = [t for t in universe if "." in t]
         universe = list(dict.fromkeys(list(universe) + extra))
     if args.fast:
         universe = universe[:30]
@@ -623,7 +657,8 @@ def main():
                    ("E1. momentum 12-1 [quotidien] (production)", dict(d_)),
                    ("E2. repli sur MM20 dans la tendance", dict(d_, entry_rule="pullback")),
                    ("E3. cassure de base calme sur volume", dict(d_, entry_rule="breakout")),
-                   ("E4. gap post-résultats (proxy PEAD)", dict(d_, entry_rule="gap"))]
+                   ("E4. gap post-résultats (proxy PEAD)", dict(d_, entry_rule="gap")),
+                   ("E5. momentum à 7-15 % sous le plus haut 52 sem.", dict(d_, entry_rule="recul"))]
     elif args.lock:
         # 13/10/2026 : après une série de pertes, « mieux vaut de petits gains
         # souvent ». Sur les 21 trades réels, 5 perdants sur 11 étaient passés
