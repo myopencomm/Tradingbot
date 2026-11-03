@@ -1,8 +1,9 @@
 import math
+import os as _os
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import date, datetime
 import pytz
 import portfolio
 import position_view
@@ -161,6 +162,41 @@ _TP = f"{DEFAULT_TP_PCT:.0f}"
 # Empêche deux scans simultanés (le scan est lourd : web + vision IA × 8 candidats).
 # Deux scans concurrents doublent la charge réseau et peuvent se figer mutuellement.
 _scan_lock = threading.Lock()
+
+# Validation IA du scan par vagues (03/11/2026) : avant, seul le top 8 du
+# filtre était analysé — 45 titres passaient, 8 étaient refusés (résultats
+# imminents, résistance…) et le scan concluait « aucune opportunité » sans
+# regarder les 37 autres. Désormais, tant qu'aucun ACHAT n'est trouvé, on
+# descend dans le classement, dans la limite d'un nombre d'analyses IA et
+# d'un temps (le scan US planifié a un budget de job).
+SCAN_FIRST_WAVE = int(_os.getenv("SCAN_FIRST_WAVE", "8"))
+SCAN_MAX_AI = int(_os.getenv("SCAN_MAX_AI", "24"))
+SCAN_TIME_BUDGET_S = int(_os.getenv("SCAN_TIME_BUDGET_S", "780"))
+
+
+def _pre_veto(ticker: str, today: date | None = None) -> str | None:
+    """Motif d'exclusion connu SANS l'IA, ou None. Mêmes règles que
+    validate_candidate, appliquées avant la recherche web et l'IA (≈ 30 s à
+    4 min par titre) : un candidat qui publie dans moins de
+    EARNINGS_VETO_DAYS jours, ou dont le cours dépasse l'objectif moyen des
+    analystes, serait refusé quoi qu'il arrive."""
+    funds = prices.get_fundamentals(ticker) or {}
+    today = today or datetime.now(PARIS).date()
+    ne = funds.get("next_earnings")
+    if ne:
+        try:
+            jours = (date.fromisoformat(ne[:10]) - today).days
+            if 0 <= jours < EARNINGS_VETO_DAYS:
+                return f"résultats le {ne[8:10]}/{ne[5:7]} (dans {jours} j)"
+        except ValueError:
+            pass
+    tgt = funds.get("analyst_target")
+    n_an = sum(funds.get(k, 0) or 0 for k in ("analyst_buy", "analyst_hold", "analyst_sell"))
+    if tgt and n_an >= MIN_ANALYSTES_OBJECTIF:
+        price = (prices.get_quote(ticker) or {}).get("price")
+        if price and price > tgt:
+            return f"cours au-dessus de l'objectif moyen de {n_an} analystes ({price} > {tgt})"
+    return None
 
 TRADER_SYSTEM = f"""Tu es un expert trader actif sur tous les marchés accessibles via Bourse Direct (France).
 Compte-titres ordinaire (CTO), horizon swing/momentum : semaines à quelques mois —
@@ -1908,8 +1944,10 @@ Donner : MAINTENIR / RÉDUIRE EXPOSITION / VENDRE — raison en 5 mots."""
         rel_label = " · force relative vs indice" if regime == "CORRECTION" else ""
         _upd(
             f"✅ {len(screened)} titres passent les filtres.\n"
-            f"Analyse IA des top {min(8, len(screened))}"
-            f"{rel_label}..."
+            f"Analyse IA des top {min(SCAN_FIRST_WAVE, len(screened))}"
+            + (f" (jusqu'à {min(SCAN_MAX_AI, len(screened))} si aucun ne passe)"
+               if len(screened) > SCAN_FIRST_WAVE else "")
+            + f"{rel_label}..."
         )
 
         # ── Étape 1 : analyse IA des positions en portefeuille ───────────────
@@ -1938,16 +1976,44 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
         portfolio_summary = _strip_markdown(ai.complete_cheap(portf_prompt, max_tokens=600))
 
         # ── Étape 2 : validation IA des top candidats filtrés ────────────────
-        top_candidates = screened[:8]
+        # Par vagues : le top SCAN_FIRST_WAVE, puis — tant qu'aucun ACHAT —
+        # la suite du classement, jusqu'à SCAN_MAX_AI analyses IA ou
+        # SCAN_TIME_BUDGET_S secondes. Les refus connus d'avance (résultats
+        # imminents, cours > objectif analystes) sont écartés sans IA.
         opportunities = []
         rejected = []
+        pre_vetoed = []
+        n_ai = 0
+        arret = ""
         catalysts_global = research.market_catalysts()
 
-        for _scan_idx, item in enumerate(top_candidates):
+        for _scan_idx, item in enumerate(screened):
             t = item["ticker"]
-            print(f"[scan] validation {_scan_idx + 1}/{len(top_candidates)} : {t}")
+            if n_ai >= SCAN_FIRST_WAVE and opportunities:
+                break
+            if n_ai >= SCAN_MAX_AI:
+                arret = f"plafond de {SCAN_MAX_AI} analyses IA"
+                break
+            if (datetime.now(PARIS) - t_start).total_seconds() > SCAN_TIME_BUDGET_S:
+                arret = f"temps du scan écoulé ({SCAN_TIME_BUDGET_S // 60} min)"
+                break
             try:
-                _upd(f"🔍 Analyse {t}... ({_scan_idx + 1}/{len(top_candidates)})")
+                _pv = _pre_veto(t)
+            except Exception as _pe:
+                print(f"[scan] pré-veto {t} indisponible : {_pe}")
+                _pv = None
+            if _pv:
+                print(f"[scan] {t} écarté sans IA — {_pv}")
+                pre_vetoed.append(f"{t} ({_pv})")
+                continue
+            n_ai += 1
+            if n_ai == SCAN_FIRST_WAVE + 1:
+                print(f"[scan] aucun ACHAT dans le top {SCAN_FIRST_WAVE} — on continue "
+                      f"dans le classement")
+            print(f"[scan] validation IA {n_ai} (rang {_scan_idx + 1}/{len(screened)}) : {t}")
+            try:
+                _upd(f"🔍 Analyse {t}... (rang {_scan_idx + 1}/{len(screened)}, "
+                     f"analyse IA n°{n_ai})")
             except Exception:
                 pass
             # SOURCE DE DÉCISION UNIQUE — même moteur que briefing/gate, mode standard
@@ -2165,6 +2231,14 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
         # Les exclusions sont toujours affichées (même quand il y a des opportunités)
         if rejected:
             result_parts.append("EXCLUS\n" + "\n".join(rejected))
+        if pre_vetoed:
+            result_parts.append("ÉCARTÉS SANS ANALYSE IA (refus connus d'avance)\n"
+                                + "\n".join(f"- {x}" for x in pre_vetoed))
+        vus = n_ai + len(pre_vetoed)
+        if not opportunities and vus < len(screened):
+            result_parts.append(
+                f"ℹ️ {vus}/{len(screened)} candidats examinés ({n_ai} analyses IA)"
+                + (f" — arrêt : {arret}" if arret else "") + ".")
         if small_rejected:
             result_parts.append("EXCLUS (gain réduit)\n" + "\n".join(small_rejected))
 
