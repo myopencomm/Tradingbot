@@ -30,7 +30,7 @@ def _market_day() -> bool:
 # pas à une moyenne.
 JOB_TIMEOUTS = {
     "briefing":         900,    # chemin complet : screen + 6 validations IA
-    "us_scan":          1500,   # jusqu'à 24 validations IA si le top 8 échoue (SCAN_MAX_AI)
+    "us_scan":          2400,   # jusqu'à 26 min de validations IA si le top 8 échoue (SCAN_TIME_BUDGET_S)
     "weekly_swap":      900,    # compare chaque position à des candidats
     "monthly_breach":   600,
     "learning_report":  600,    # 1 an d'historique par titre du journal

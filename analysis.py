@@ -170,8 +170,8 @@ _scan_lock = threading.Lock()
 # descend dans le classement, dans la limite d'un nombre d'analyses IA et
 # d'un temps (le scan US planifié a un budget de job).
 SCAN_FIRST_WAVE = int(_os.getenv("SCAN_FIRST_WAVE", "8"))
-SCAN_MAX_AI = int(_os.getenv("SCAN_MAX_AI", "24"))
-SCAN_TIME_BUDGET_S = int(_os.getenv("SCAN_TIME_BUDGET_S", "780"))
+SCAN_MAX_AI = int(_os.getenv("SCAN_MAX_AI", "48"))
+SCAN_TIME_BUDGET_S = int(_os.getenv("SCAN_TIME_BUDGET_S", "1560"))
 
 
 def _pre_veto(ticker: str, today: date | None = None) -> str | None:
