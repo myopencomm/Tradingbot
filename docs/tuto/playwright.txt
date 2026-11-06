@@ -54,7 +54,8 @@ VALIDITE (defaut : max)
   max            → le plus loin que BD accepte :
                    31/12 sur Euronext, mais FIN DU
                    MOIS COURANT sur les US
-  JJ/MM/AAAA     → date precise
+  JJ/MM/AAAA     → date precise (REFUSEE par BD
+                   pour l'instant : utiliser max)
 
 BD n'accepte jamais d'ordre sans echeance.
 Une protection US expire donc a la cloture

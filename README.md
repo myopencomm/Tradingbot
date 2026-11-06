@@ -516,6 +516,7 @@ Ajoutez dans votre `.env` :
 ```env
 BD_LOGIN=votre_identifiant_bourse_direct
 BD_PASSWORD=votre_mot_de_passe
+BD_ACCOUNT=               # n° de compte BD (lecture du carnet d'ordres ; vide = trailing stop inactif)
 ```
 
 ### Utilisation
@@ -549,8 +550,9 @@ Bot : "Mode Playwright actif ✅ Connecté à Bourse Direct"
 
 **Validité (optionnelle, en dernier argument) :**
 - `seance` — expire en fin de séance
-- `max` (défaut) — jusqu'à fin d'année pour Euronext, révocable pour les autres marchés
-- `JJ/MM/AAAA` — date précise
+- `max` (défaut) — le plus loin que BD accepte : dernier jour ouvré de l'année sur Euronext, **dernier jour ouvré du mois en cours** sur les autres marchés (US compris)
+- `revocation` — à révocation, échéance fin du mois en cours (comme `max` hors Euronext)
+- `JJ/MM/AAAA` — date précise. ⚠️ **Refusée par BD pour l'instant** (HTTP 400 « Le format de la date retournée est incorrect », constaté le 05/11/2026) : utilisez `max`
 
 ### Comportement au redémarrage
 
@@ -1929,6 +1931,12 @@ FALLBACK_TP_MIN_PCT=3     # mode gain réduit : TP minimum des trades courts
 FALLBACK_TP_MAX_PCT=8     # mode gain réduit : TP maximum des trades courts
 
 DASHBOARD_BIND=127.0.0.1  # 0.0.0.0 pour accès Tailscale/LAN (voir section Dashboard)
+DASHBOARD_TOKEN=          # jeton OBLIGATOIRE si DASHBOARD_BIND≠127.0.0.1 (openssl rand -hex 16, cf. SECURITY.md)
+
+TP_ALERTS=on              # off = plus d'alerte « TP approché » dans les checks
+NEWS_ALERT_LOOKBACK_DAYS=5   # âge maximal d'un article pour l'alerte news
+WORLD_MIN_MCAP=300000000     # univers mondial : capitalisation boursière minimale
+WORLD_MIN_TRADED_EUR=2000000 # univers mondial : volume quotidien échangé minimal (€)
 ```
 
 ---

@@ -47,7 +47,8 @@ class AIProvider(ABC):
 
 class AnthropicProvider(AIProvider):
     # Opus 5.5 pour toutes les décisions (choix de l'utilisateur, 01/10/2026),
-    # Haiku pour les micro-tâches descriptives (lecture de graphique).
+    # Haiku pour les micro-tâches sans jugement (résumés). La lecture de
+    # graphique est passée sur le modèle principal le 06/11/2026.
     DEFAULT_MODEL = "claude-opus-5-5"
     CHEAP_MODEL   = "claude-haiku-4-5"
     # Opus 5.5 réfléchit toujours (thinking non désactivable) et cette réflexion
@@ -133,9 +134,9 @@ class AnthropicProvider(AIProvider):
         return self._vision(self.model, prompt, image_bytes)
 
     def complete_cheap_with_image(self, prompt: str, image_bytes: bytes) -> str:
-        # Lecture de graphique = tâche descriptive structurée → Haiku suffit
-        # (~12× moins cher que Sonnet en input). Le verdict ACHAT/EXCLUS reste
-        # sur le modèle principal.
+        # Plus utilisé pour les graphiques depuis le 06/11/2026 (ils pèsent sur
+        # le verdict → complete_with_image, modèle principal). Gardé pour
+        # d'éventuelles images purement descriptives.
         return self._vision(self.CHEAP_MODEL, prompt, image_bytes)
 
     def _vision(self, model: str, prompt: str, image_bytes: bytes) -> str:
