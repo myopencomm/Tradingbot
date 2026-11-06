@@ -428,9 +428,9 @@ class ClaudeCliProvider(AIProvider):
                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                "--setting-sources", "", "--no-session-persistence"]
         if tools:
-            # Outils explicitement autorisés (sinon refus en mode -p). Seule la
-            # recherche web l'est jamais : lecture seule, aucun fichier, aucune
-            # commande.
+            # Outils explicitement autorisés (sinon refus en mode -p) : la
+            # recherche web, ou Read pour ouvrir une image de graphique écrite
+            # par le bot. Lecture seule, jamais d'écriture ni de commande.
             cmd += ["--allowedTools", tools]
         if effort:
             cmd += ["--effort", effort]
@@ -480,11 +480,25 @@ class ClaudeCliProvider(AIProvider):
                                   "fait de mémoire. Aucune recommandation."))
 
     def complete_with_image(self, prompt: str, image_bytes: bytes) -> str:
-        # Outils coupés : la CLI ne lit pas d'image ici → provider suivant.
-        raise NotImplementedError("CLI claude : pas de vision")
+        """Vision via l'abonnement (06/11/2026) : l'image est écrite dans un
+        dossier temporaire et Claude l'ouvre avec le seul outil Read. Avant,
+        la CLI renvoyait « pas de vision » et la lecture de graphique — qui
+        alimente le verdict d'achat — partait chez Gemini."""
+        return self._image(prompt, image_bytes, self.MODEL, "medium")
 
     def complete_cheap_with_image(self, prompt: str, image_bytes: bytes) -> str:
-        raise NotImplementedError("CLI claude : pas de vision")
+        return self._image(prompt, image_bytes, self.CHEAP_MODEL, None)
+
+    def _image(self, prompt: str, image_bytes: bytes, model: str,
+               effort: str | None) -> str:
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="tb-chart-") as d:
+            chemin = os.path.join(d, "graphique.png")
+            with open(chemin, "wb") as f:
+                f.write(image_bytes)
+            return self._call(
+                f"Ouvre l'image {chemin} avec l'outil Read, puis réponds.\n\n{prompt}",
+                model, effort, tools="Read")
 
 
 def cli_path() -> str | None:
