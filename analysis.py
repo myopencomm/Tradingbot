@@ -350,7 +350,9 @@ def _analyze_chart(ticker: str, ai) -> str:
             "- Niveaux clés visibles : support principal et résistance principale en prix\n"
             "- Signal technique global : POSITIF / NEUTRE / NÉGATIF — justification en 5 mots"
         )
-        result = ai.complete_cheap_with_image(prompt, image_bytes)
+        # Modèle principal (06/11/2026) : supports et résistances lus ici
+        # alimentent directement le verdict ACHAT/EXCLUS.
+        result = ai.complete_with_image(prompt, image_bytes)
         return result.strip()
     except Exception as e:
         print(f"[chart vision] {ticker}: {e}")
@@ -1924,7 +1926,7 @@ CONTEXTE MARCHÉ
 RÉGIME : CRISE (VIX > 40). Aucun nouveau trade.
 TÂCHE : Pour chaque position, évalue le risque de poursuite de la baisse.
 Donner : MAINTENIR / RÉDUIRE EXPOSITION / VENDRE — raison en 5 mots."""
-            portf_summary = _strip_markdown(ai.complete_cheap(portf_prompt, max_tokens=600))
+            portf_summary = _strip_markdown(ai.complete(portf_prompt, max_tokens=600))
             send_fn(
                 f"⛔ SCAN SUSPENDU — RÉGIME CRISE\n\n"
                 f"Nouveau trade impossible en panique de marché (VIX > 40).\n"
@@ -1973,7 +1975,11 @@ CONTEXTE MARCHÉ
 
 TÂCHE : Pour chaque position en portefeuille, donne 1 ligne :
 MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
-        portfolio_summary = _strip_markdown(ai.complete_cheap(portf_prompt, max_tokens=600))
+        # Modèle principal, pas le cheap (06/11/2026) : un avis VENDRE est une
+        # décision. Haiku avait conseillé de vendre BTSG le jour même où Opus
+        # en avait validé l'achat — un modèle plus léger ne doit pas contredire
+        # le jugement du modèle qui a pris la position.
+        portfolio_summary = _strip_markdown(ai.complete(portf_prompt, max_tokens=600))
 
         # ── Étape 2 : validation IA des top candidats filtrés ────────────────
         # Par vagues : le top SCAN_FIRST_WAVE, puis — tant qu'aucun ACHAT —

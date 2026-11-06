@@ -58,8 +58,10 @@ class AnthropicProvider(AIProvider):
     #   complete()        → DÉCISIONS (achat, contrôle pré-achat, briefing,
     #                        revue des SL, swap, /research) : Opus 5.5, effort
     #                        AI_EFFORT_DECISION (medium par défaut).
-    #   complete_cheap()  → tâches mineures (résumés, blurb, description de
-    #                        graphique, texte du scan) : Haiku 4.5.
+    #   complete_cheap()  → tâches mineures sans jugement (résumés, blurb) :
+    #                        Haiku 4.5. Depuis le 06/11/2026, l'avis sur les
+    #                        positions du scan et la lecture de graphique
+    #                        passent par complete() : ils pèsent sur une décision.
     # medium (défaut d'Opus 5.5) : xhigh coûtait ~0,10 $ par analyse, hors
     # budget (10 $/an visés, 01/10/2026). Mesuré à medium : ~0,07 $.
     _EFFORT = os.getenv("AI_EFFORT_DECISION", "medium")
