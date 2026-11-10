@@ -536,6 +536,19 @@ AUTO_BREAKEVEN_PCT = float(os.getenv("AUTO_BREAKEVEN_PCT", "6"))
 #
 # Déclenchement : part du chemin PRU→TP déjà parcourue.
 TRAIL_LOCK_TRIGGER_PCT = float(os.getenv("TRAIL_LOCK_TRIGGER_PCT", "60"))
+# ── DÉSACTIVÉ LE 10/11/2026 (TRAIL_LOCK=off par défaut) ──────────────────────
+# Le palier 2 tournait en réel depuis le 03/08 sans avoir jamais été simulé :
+# la « référence » des backtests précédents ne l'incluait pas. Simulé enfin
+# (`backtest.py --exits`, 2023 → 11/2026), il PERD sur les trois univers :
+#   137 titres, 2 pos. : -800 € contre -785 € sans
+#   137 titres, 4 pos. : -1873 € contre -1710 € sans
+#   2 931 titres, 8 pos. : -8427 € contre -8052 € sans
+# Même signature que le breakeven serré et le verrou « petits gains » : le
+# taux de réussite monte, le gain moyen fond (+26 € → +21 €), la perte moyenne
+# ne bouge pas. En réel, le gain moyen des gagnants est passé de +10,6 % (avant
+# le 03/08) à +5,3 % (après), perte moyenne inchangée à -6 %. Le code reste
+# (TRAIL_LOCK=on pour le réactiver), le palier 1 (breakeven) est inchangé.
+TRAIL_LOCK = os.getenv("TRAIL_LOCK", "off").strip().lower() in ("on", "1", "true", "yes")
 # Fraction du gain acquis verrouillée sous le cours. Elle GRANDIT avec la
 # progression : au déclenchement on laisse respirer, au contact du TP on
 # sécurise l'essentiel.

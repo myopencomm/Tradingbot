@@ -244,7 +244,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
 | **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
 | **Dashboard filtrable par période** | Menu ☰ : Global / ce mois / mois dernier / cette année / année dernière. Cartes, graphiques et tableau recalculés sur la période ; P&L latent et cash restent des instantanés globaux, signalés comme tels |
-| **Trailing en 2 paliers** | **1.** À +5% (manuel) / +6% (autonome), le SL monte au PRU — perte impossible. **2.** Passé 60% du chemin vers le TP, le SL monte **au-dessus du PRU** et verrouille une part croissante du gain (50% → 80% au contact du TP). L'ordre Expert est remplacé sur BD à chaque palier |
+| **Trailing en 2 paliers** | **1.** À +5% (manuel) / +6% (autonome), le SL monte au PRU — perte impossible. **2.** *(désactivé depuis le 10/11/2026, `TRAIL_LOCK=off` : il perd au backtest `--exits`)* Passé 60% du chemin vers le TP, le SL monte **au-dessus du PRU** et verrouille une part croissante du gain (50% → 80% au contact du TP). L'ordre Expert est remplacé sur BD à chaque palier |
 | **Contrôle de protection** | À chaque sync, toute position gérée est comparée au carnet BD. Sans ordre SL/TP actif → alerte (même en sync silencieux), marquage `🚨 non protégé` dans `/status` et le dashboard, commande de replacement fournie. Un stop calculé mais non posé sur BD est affiché comme tel, jamais comme actif. **L'alerte exige deux lectures abouties et concordantes** : un onglet ordres illisible suspend le contrôle au lieu de conclure « aucune protection » (fausse alerte du 11/08/2026) |
 | **Repose automatique des protections** | Un stop se perd de deux façons. **(1) Échéance** : BD borne toute validité — fin du mois courant hors Euronext (US compris), 31/12 dessus, **toujours ramenée au dernier jour ouvré** (BD refuse une révocation un samedi : le 31/10/2026 a laissé JNJ, CBLL et PFE sans stop le 01/10, refus « date de révocation … mode de règlement »). Un refus BD portant sur un champ de l'ordre est désormais signalé avec son motif, et non plus classé « hors séance ». Le bot mémorise l'échéance lue au carnet et repose le SL/TP **dès la bascule du mois** — au cycle horaire de **:35** comme immédiatement après un `/sync` manuel (impossible avant : « max » rendrait la même date ; et l'échéance tombant à la clôture, le trou est hors séance). **(2) Disparition avant l'heure** : BD annule les ordres à seuil sur événement du titre — JNJ a perdu la sienne à son détachement de dividende, 6 jours avant échéance. Le bot ne cherche pas la cause, il mesure la durée (`naked_since`) et repose dès que le trou tient **45 min**. Dans les deux cas, **deux preuves avant d'agir** — persistance locale *et* deux lectures du carnet sans ordre à seuil — sinon on reposerait un doublon de vente sur des titres déjà engagés |
 | **Ordres Expert réels** | `/ordre acheter TTE.PA 3 expert 54.2 49.0 61.0` — achat+SL+TP en un seul ordre, envoyé à BD (Euronext + marchés US) |
@@ -639,6 +639,8 @@ déjà acquis à mesure que le cours approche du TP.
 **Palier 1 — BREAKEVEN.** Le cours dépasse +5% (manuel) / +6% (`AUTO_BREAKEVEN_PCT`,
 autonome) → le SL monte **au PRU**. La position ne peut plus perdre.
 
+> ⚠️ **Palier 2 désactivé depuis le 10/11/2026** (`TRAIL_LOCK=off`) : simulé pour la première fois (`backtest.py --exits`), il perd sur les trois univers testés — il coupe les gagnants sans sauver les perdants. Seul le palier 1 joue. Description conservée ci-dessous pour `TRAIL_LOCK=on`.
+
 **Palier 2 — SÉCURISATION DU GAIN.** Le cours a parcouru au moins
 `TRAIL_LOCK_TRIGGER_PCT` (60%) du chemin PRU→TP → le SL monte **au-dessus du
 PRU**, à une fraction du gain acquis. Cette fraction **grandit avec la
@@ -819,6 +821,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-11-10 — Palier 2 du trailing désactivé, gestion des gagnants backtestée
+- **`backtest.py --exits`** : simule enfin le palier 2 de production (actif depuis le 03/08, jamais backtesté) et compare TP 2 / 2,5 / 3 R et une sortie sans TP au chandelier 3 / 4 ATR — voir [Backtest](#backtest-backtestpy)
+- **Palier 2 désactivé** (`TRAIL_LOCK=off`, nouveau réglage) : perdant sur les trois univers ; le palier 1 (breakeven) reste. `/trailing` l'indique
+- **Seuil breakeven manuel** : la doc rappelle que `BREAKEVEN_THRESHOLD=4` est le pire réglage mesuré le 15/09 ; le test des deux seuils ne dépend plus des valeurs du `.env`
 
 ### 2026-08-19 (2) — Un seul prix, de l'annonce au carnet d'ordres
 Suite du rejet RTX. L'arrondi au pas de cotation n'existait qu'**à l'envoi** :
@@ -1818,6 +1825,24 @@ Un plafond plus serré fait **un peu mieux** dans la plupart des cas, mais sans 
 
 Le verrou fait monter le taux de réussite (27 % → 47 %) mais **le gain moyen fond (+28 € → +9 €) et la perte moyenne reste la même (-24 €)** : il coupe des gagnants sans sauver les vrais perdants, qui baissent dès l'entrée (sur les 21 trades réels, 6 des 7 derniers perdants n'avaient jamais dépassé +1,5 %). La seule variante meilleure à 2 positions (+6 %→+3 %) est pire à 4 : pas d'effet robuste. **Non activé.** Seule exception gardée : `/securiser`, décision manuelle position par position.
 
+**Gestion des gagnants (`--exits`, 10/11/2026)** — constat réel : depuis l'activation du palier 2 (03/08), le gain moyen des gagnants est passé de +10,6 % à +5,3 %, la perte moyenne restant à -6 %. Or ce palier **n'avait jamais été simulé** : la « référence (production) » des campagnes précédentes ne l'incluait pas. `lock2=True` le rejoue désormais (sur la clôture, sans les seuils de pas minimal), à côté de TP plus larges et d'une sortie sans TP (SL initial 2 ATR + vente à l'open suivant une clôture à plus de k ATR sous le plus haut depuis l'achat, time-stop 60 séances).
+
+| Règle (2023 → 11/2026) | 137 titres, 2 pos. | 137 titres, 4 pos. | 2 931 titres, 8 pos. |
+|---|---|---|---|
+| X0. sans palier 2 (référence des campagnes précédentes) | -785 € | -1 710 € | -8 052 € |
+| X1. **production jusqu'au 10/11** (palier 2 actif) | -800 € | -1 873 € | -8 427 € |
+| X2. TP 2 R, palier 2 | -760 € | -1 931 € | -7 584 € |
+| X3. TP 2,5 R, palier 2 | -746 € | -1 558 € | -6 863 € |
+| X4. TP 3 R, palier 2 | -632 € | -1 630 € | -6 564 € |
+| X5. TP 2,5 R, sans palier 2 | -758 € | -1 561 € | -6 453 € |
+| X6. TP 3 R, sans palier 2 | -572 € | -1 491 € | -5 817 € |
+| X7. sans TP + chandelier 3 ATR | -193 € | -1 218 € | -3 772 € |
+| X8. **sans TP + chandelier 4 ATR** | **-14 €** | **-1 153 €** | **-3 074 €** |
+
+- **Palier 2 : perdant sur les trois univers** (-15 €, -163 €, -375 €), même signature que le breakeven serré et le verrou « petits gains » : taux de réussite en hausse, gain moyen en baisse (+26 € → +21 €), perte moyenne inchangée. **Désactivé le 10/11/2026** (`TRAIL_LOCK=off`).
+- **Laisser courir paie, dans le même ordre sur les trois univers** : TP 3 R > TP 2,5 R > référence, et sans TP + chandelier 4 ATR loin devant (gain moyen +55 à +75 € contre +13 à +27 €, pour 17-21 % de trades gagnants seulement).
+- **Limites honnêtes** : tout reste négatif (le moteur quantitatif seul n'a pas d'edge, l'IA n'est pas simulable) ; le meilleur réglage n'est gagnant que sur 1 fenêtre walk-forward sur 4 ; le résultat vient de rares gros gagnants. La sortie chandelier **n'est pas branchée** : elle demande de supprimer le TP des ordres Expert BD et de remplacer le trailing par un stop suiveur à 4 ATR — décision à prendre, pas un réglage.
+
 ### Entrées précoces — mode fantôme
 
 Question du 29/10/2026 : les candidats sortent toujours **au plus haut** (le classement momentum 12-1 les choisit par construction), et l'IA les refuse ensuite pour « résistance proche » ou « surchauffe ». Trois règles d'entrée plus tôt dans la courbe sont comparées, avec la **même gestion** (SL 2 ATR, TP ≥ 1,5 R, trailing) : seule l'entrée change. Code commun : `early_entries.py`.
@@ -1878,6 +1903,7 @@ L'étude ne lisait pas les news : c'est ce que l'IA ajoute, et ce que l'essai me
 DEFAULT_SL_PCT=7          # stop-loss fixe fallback en % sous le PRU
 DEFAULT_TP_PCT=10         # take-profit minimum en % au-dessus du PRU
 BREAKEVEN_THRESHOLD=5     # trailing palier 1 (manuel) : % au-dessus du PRU
+TRAIL_LOCK=off            # palier 2 du trailing — DÉSACTIVÉ le 10/11/2026 (perd au backtest --exits)
 TRAIL_LOCK_TRIGGER_PCT=60 # trailing palier 2 : % du chemin PRU→TP avant de sécuriser
 TRAIL_LOCK_MIN_RATIO=50   # % du gain verrouillé au déclenchement
 TRAIL_LOCK_MAX_RATIO=80   # % du gain verrouillé au contact du TP

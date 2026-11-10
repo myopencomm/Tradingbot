@@ -111,7 +111,7 @@ def trailing_target(pos: dict, price: float, tp: float | None,
     """
     from config import (BREAKEVEN_THRESHOLD, TRAIL_LOCK_TRIGGER_PCT,
                         TRAIL_LOCK_MIN_RATIO, TRAIL_LOCK_MAX_RATIO,
-                        TRAIL_MIN_BUFFER_PCT)
+                        TRAIL_MIN_BUFFER_PCT, TRAIL_LOCK)
     entry = pos.get("entry_price") or 0
     if not entry or not price:
         return None, "", ""
@@ -123,8 +123,9 @@ def trailing_target(pos: dict, price: float, tp: float | None,
     if (price - entry) / entry * 100 >= threshold:
         target, step, label = entry, "breakeven", "SL au PRU"
 
-    # Palier 2 — sécurisation du gain
-    prog = tp_progress(entry, tp, price)
+    # Palier 2 — sécurisation du gain (désactivé par défaut depuis le
+    # 10/11/2026 : il perd au backtest, cf. TRAIL_LOCK dans config.py)
+    prog = tp_progress(entry, tp, price) if TRAIL_LOCK else None
     trigger = TRAIL_LOCK_TRIGGER_PCT / 100
     if prog is not None and prog >= trigger and prog < 1.0:
         # Fraction verrouillée, interpolée entre le déclenchement et le TP
@@ -180,7 +181,7 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
     voulu — ici l'utilisateur a demandé, il doit obtenir une réponse.
     """
     from config import (BREAKEVEN_THRESHOLD, BREAKEVEN_TOLERANCE_PCT,
-                        TRAIL_LOCK_TRIGGER_PCT)
+                        TRAIL_LOCK_TRIGGER_PCT, TRAIL_LOCK)
 
     if not (bot_mode.is_playwright() and playwright_session.is_connected()):
         if verbose:
@@ -224,7 +225,7 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         # AVANT la première — une position à +5% d'un TP à +8% a déjà fait 62%
         # du chemin et mérite un stop au-dessus du PRU.
         prog = tp_progress(entry, pos.get("target_high"), price)
-        if change_pct >= threshold or (prog is not None
+        if change_pct >= threshold or (TRAIL_LOCK and prog is not None
                                        and prog * 100 >= TRAIL_LOCK_TRIGGER_PCT):
             candidates.append((name, pos, change_pct, price))
             if fx_note:
@@ -242,7 +243,7 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
             verrou = sl_ * q_ * fx_ - order_fees(pos["ticker"], sl_ * q_ * fx_, "sell") - pru_eur * q_
             tp_ = pos.get("target_high")
             p2 = (f" — palier 2 dès {entry + TRAIL_LOCK_TRIGGER_PCT / 100 * (tp_ - entry):.2f}"
-                  if tp_ else "")
+                  if tp_ and TRAIL_LOCK else "")
             skipped.append(
                 f"  🔐 {name} : {change_pct:+.2f}% — stop déjà au-dessus du PRU "
                 f"({sl_}), ≈ {verrou:+.0f} € net verrouillés{p2}{fx_note}")
@@ -257,8 +258,11 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         head = [f"🔒 TRAILING — vérification à la demande",
                 f"Palier 1 BREAKEVEN — SL au PRU dès "
                 f"+{BREAKEVEN_THRESHOLD:.0f}% (manuel) / +{BREAKEVEN_PCT:.0f}% (autonome)",
-                f"Palier 2 SÉCURISATION — SL au-dessus du PRU dès "
-                f"{TRAIL_LOCK_TRIGGER_PCT:.0f}% du chemin parcouru vers le TP",
+                (f"Palier 2 SÉCURISATION — SL au-dessus du PRU dès "
+                 f"{TRAIL_LOCK_TRIGGER_PCT:.0f}% du chemin parcouru vers le TP"
+                 if TRAIL_LOCK else
+                 "Palier 2 SÉCURISATION — désactivé (perd au backtest, "
+                 "TRAIL_LOCK=on pour le réactiver)"),
                 f"\nLe bot ne peut remonter QUE les protections posées en ordre "
                 f"de VENTE (celles qu'il voit au carnet, avec une référence "
                 f"annulable). Une protection portée par un Expert d'ACHAT reste "

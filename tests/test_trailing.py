@@ -37,16 +37,32 @@ class TestPalier1Breakeven:
         assert (target, step) == (100.0, "breakeven")
         assert label == "SL au PRU"
 
-    def test_seuil_autonome_plus_haut_que_le_manuel(self):
-        """Le backtest a montré qu'à +3% le trail scratchait les futurs
-        gagnants : le seuil autonome est délibérément au-dessus du manuel."""
-        assert SEUIL_AUTO > SEUIL_MANUEL
-        entre = 100 + (SEUIL_AUTO + SEUIL_MANUEL) / 2
-        assert ae.trailing_target(AUTO,   entre, 125.0)[0] is None
-        assert ae.trailing_target(MANUEL, entre, 125.0)[0] == 100.0
+    def test_seuils_autonome_et_manuel_distincts(self, monkeypatch):
+        """Chaque mode lit SON seuil. Valeurs fixées ici : le .env peut
+        légitimement les rendre égaux (10/11/2026 : manuel aligné à +6 %,
+        +4 % étant le pire réglage du backtest du 15/09)."""
+        import config, trailing
+        monkeypatch.setattr(trailing, "BREAKEVEN_PCT", 6.0)
+        monkeypatch.setattr(config, "BREAKEVEN_THRESHOLD", 5.0)
+        assert ae.trailing_target(AUTO,   105.5, 125.0)[0] is None
+        assert ae.trailing_target(MANUEL, 105.5, 125.0)[0] == 100.0
+
+
+class TestPalier2Desactive:
+    def test_par_defaut_le_palier2_ne_joue_plus(self, monkeypatch):
+        """10/11/2026 : palier 2 désactivé (perd au backtest --exits). À 72 %
+        du chemin vers le TP, le SL reste au PRU (palier 1)."""
+        import config
+        monkeypatch.setattr(config, "TRAIL_LOCK", False)
+        assert ae.trailing_target(AUTO, 118.0, 125.0)[:2] == (100.0, "breakeven")
 
 
 class TestPalier2Securisation:
+    @pytest.fixture(autouse=True)
+    def _palier2_actif(self, monkeypatch):
+        import config
+        monkeypatch.setattr(config, "TRAIL_LOCK", True)
+
     def test_avant_60pct_du_chemin_on_reste_au_pru(self):
         assert ae.trailing_target(AUTO, 110.0, 125.0)[:2] == (100.0, "breakeven")
 

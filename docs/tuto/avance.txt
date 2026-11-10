@@ -57,8 +57,11 @@ Dans les deux cas :
 → Deconnecte : alerte avec la commande
   /ordre vendre prete a l'emploi.
 
-P&L garanti >= 0 des le palier 1, et
-STRICTEMENT POSITIF des le palier 2.
+P&L garanti >= 0 des le palier 1.
+Palier 2 (gain verrouille au-dessus du
+PRU) DESACTIVE depuis le 10/11/2026 : il
+perd au backtest (TRAIL_LOCK=on pour le
+reactiver).
 Seules les positions protegees par un
 Expert actif sont gerees (les positions
 historiques sans ordre ne sont pas touchees).

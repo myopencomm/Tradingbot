@@ -107,6 +107,7 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              fx: pd.Series | None = None, be_eur: bool = False,
              max_sl_pct: float = 10.0,
              lock: tuple | None = None,
+             lock2: bool = False,
              entry_rule: str = "momentum") -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
 
@@ -145,6 +146,14 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     aller-retour compris. Une seule fois par position ; le trailing breakeven
     reste actif en parallèle.
 
+    `lock2` = palier 2 du trailing DE PRODUCTION (`trailing.trailing_target`,
+    actif en réel depuis le 03/08/2026 mais jamais simulé jusqu'au 10/11) :
+    passé TRAIL_LOCK_TRIGGER_PCT du chemin entrée→TP, SL à une fraction du
+    gain acquis (TRAIL_LOCK_MIN_RATIO → TRAIL_LOCK_MAX_RATIO), avec une marge
+    d'au moins max(TRAIL_MIN_BUFFER_PCT, ATR d'entrée) sous la clôture.
+    Simplification : jugé sur la clôture, sans les seuils de pas minimal
+    (TRAIL_MIN_STEP_*) — le SL simulé monte un peu plus souvent qu'en réel.
+
     `entry_rule` = règle de sélection à l'entrée (mode 'new') — voir `early_entries.signal_series` :
     "momentum" (production), "pullback", "breakout", "gap".
 
@@ -156,7 +165,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     positions = []   # {ticker, entry, sl, tp, qty, entry_date, be_done}
     closed = []
     equity = BUDGET
-    from config import TRAIL_MIN_BUFFER_PCT
+    from config import (TRAIL_MIN_BUFFER_PCT, TRAIL_LOCK_TRIGGER_PCT,
+                        TRAIL_LOCK_MIN_RATIO, TRAIL_LOCK_MAX_RATIO)
 
     def _fx(t, d):
         """Dollars pour 1 € ce jour-là, ou None (titre non US / pas de fx)."""
@@ -245,6 +255,19 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                     if niveau < row["close"]:
                         p["sl"] = max(p["sl"], niveau)
                         p["lock_done"] = True
+            # Palier 2 de production : sécurisation du gain (variante lock2)
+            if lock2 and p["tp"] > p["entry"]:
+                prog = (row["close"] - p["entry"]) / (p["tp"] - p["entry"])
+                trig = TRAIL_LOCK_TRIGGER_PCT / 100
+                if trig <= prog < 1.0:
+                    ratio = (TRAIL_LOCK_MIN_RATIO
+                             + (TRAIL_LOCK_MAX_RATIO - TRAIL_LOCK_MIN_RATIO)
+                             * (prog - trig) / max(1e-9, 1.0 - trig)) / 100
+                    locked = p["entry"] + ratio * (row["close"] - p["entry"])
+                    buf = max(TRAIL_MIN_BUFFER_PCT, p["atr_entry"])
+                    locked = min(locked, row["close"] * (1 - buf / 100),
+                                 p["tp"] * 0.999)
+                    p["sl"] = max(p["sl"], locked)
             # Trailing breakeven (optionnel — testé avec/sans)
             if be_trail and not p["be_done"]:
                 if be_atr is not None:
@@ -565,6 +588,9 @@ def main():
     ap.add_argument("--lock", action="store_true",
                     help="« petits gains sûrs » : verrou de gain dès +X %% "
                          "et TP rapprochés, contre la stratégie livrée")
+    ap.add_argument("--exits", action="store_true",
+                    help="gestion des gagnants (10/11/2026) : palier 2 de "
+                         "production simulé, TP élargis, sans TP + chandelier")
     ap.add_argument("--base-rates", action="store_true",
                     help="écrit base_rates.json : taux historique d'atteinte du "
                          "TP par profil d'entrée (lu par validate_candidate)")
@@ -659,6 +685,25 @@ def main():
                    ("E3. cassure de base calme sur volume", dict(d_, entry_rule="breakout")),
                    ("E4. gap post-résultats (proxy PEAD)", dict(d_, entry_rule="gap")),
                    ("E5. momentum à 7-15 % sous le plus haut 52 sem.", dict(d_, entry_rule="recul"))]
+    elif args.exits:
+        # 10/11/2026 : depuis le palier 2 (03/08), le gain moyen des gagnants
+        # réels a fondu de +10,6 % à +5,3 % pour une perte moyenne inchangée
+        # (-6 %). Ce palier n'avait jamais été backtesté : la « référence » des
+        # campagnes précédentes ne l'incluait pas. Et le TP plafonne les
+        # gagnants alors que le résultat vient des rares gros gains.
+        prod = dict(base, lock2=True)
+        chand = lambda k: dict(rule="chandelier", k=k, action="exit")
+        configs = [
+            ("X0. sans palier 2 (référence des backtests passés)", dict(base)),
+            ("X1. PRODUCTION RÉELLE (palier 2 actif)", prod),
+            ("X2. TP 2R, palier 2", dict(prod, tp_mult_r=2.0)),
+            ("X3. TP 2,5R, palier 2", dict(prod, tp_mult_r=2.5)),
+            ("X4. TP 3R, palier 2", dict(prod, tp_mult_r=3.0)),
+            ("X5. TP 2,5R, sans palier 2", dict(base, tp_mult_r=2.5)),
+            ("X6. TP 3R, sans palier 2", dict(base, tp_mult_r=3.0)),
+            ("X7. sans TP + chandelier 3 ATR", dict(base, tp_mult_r=100, review=chand(3.0))),
+            ("X8. sans TP + chandelier 4 ATR", dict(base, tp_mult_r=100, review=chand(4.0))),
+        ]
     elif args.lock:
         # 13/10/2026 : après une série de pertes, « mieux vaut de petits gains
         # souvent ». Sur les 21 trades réels, 5 perdants sur 11 étaient passés
