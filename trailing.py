@@ -300,10 +300,20 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         if verbose:
             send_fn("⚠️ Lecture du carnet d'ordres impossible — aucune action.")
         return
+    # Carnet vide ou ILLISIBLE ≠ fin du trailing. Jusqu'au 11/11/2026 on
+    # s'arrêtait là : BTSG (+8 %, seuil +6 %) n'a pas été remonté les 10 et
+    # 11/11 parce que le carnet legacy ne trouvait pas le compte CTO — alors
+    # que sa protection, connue par ses `protection_ids`, s'annule SANS le
+    # carnet (la réanalyse l'a fait le même matin). On continue donc avec
+    # `rows = []` : seules les positions à ids connus sont traitées, les
+    # autres sont sautées (jamais déclarées « à nu » sur une lecture ratée).
+    carnet_ok = bool(rows)
     if not rows:
+        rows = []
+        print("[Trailing] carnet vide ou illisible — protections à ids connus seulement")
         if verbose:
-            send_fn("⚠️ Carnet d'ordres vide ou illisible — aucune action.")
-        return
+            send_fn("⚠️ Carnet d'ordres vide ou illisible — seules les protections "
+                    "dont le bot connaît les identifiants peuvent être remontées.")
 
     for name, pos, change_pct, price in candidates:
         entry  = pos["entry_price"]
@@ -316,6 +326,13 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         # SL annulé, TP survivant — incident UNA 28/07/2026). Le trailing doit
         # rétablir un stop, pas s'abstenir.
         if not sl_ord:
+            if not carnet_ok and not pos.get("protection_ids"):
+                print(f"[Trailing] {name} : carnet illisible, aucun id de "
+                      f"protection connu — rien à faire ce cycle")
+                if verbose:
+                    send_fn(f"  ↳ {name} : carnet illisible et protection sans "
+                            f"identifiant connu — réessai au prochain cycle.")
+                continue
             if tp_ord:
                 print(f"[Trailing] {name} : SL absent, TP actif → RÉCUPÉRATION")
                 send_fn(
@@ -331,6 +348,16 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                 # que sait faire bd_orders.cancel_order. On peut donc remonter
                 # le stop d'une position achetée en Expert, ce qui était
                 # impossible jusqu'ici.
+                # TP et ATR calculés ICI : ils ne l'étaient que plus bas dans
+                # la boucle, et cette branche levait UnboundLocalError sur
+                # `tp` à chaque passage (constaté le 11/11/2026 sur BTSG) —
+                # aucune protection d'ordre d'achat n'était donc remontée.
+                tp = pos.get("target_high")
+                if not tp:
+                    if verbose:
+                        send_fn(f"  ↳ {name} : Take Profit inconnu — abstention")
+                    continue
+                atr_pct = (prices.get_technicals(pos["ticker"]) or {}).get("atr_pct")
                 target, step, step_label = trailing_target(pos, price, tp, atr_pct)
                 vaut_le_coup, pourquoi = (
                     raise_worth_it(pos, pos.get("target_low"), target, qty_pos)

@@ -822,6 +822,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-11-11 — Trailing : deux défauts qui empêchaient de remonter les stops d'ordre d'achat
+- **Carnet illisible = trailing abandonné.** Quand le carnet legacy BD ne trouve pas le compte CTO (échec intermittent depuis le 12/10, sans changement de `.env`), `trailing_stop_cycle` s'arrêtait net. BTSG (+8 %, seuil +6 %) n'a donc pas été remonté les 10 et 11/11. Désormais le cycle continue : les protections dont le bot connaît les `protection_ids` sont remontées sans le carnet ; les autres sont sautées, jamais annoncées « à nu » sur une lecture ratée
+- **La branche `protection_ids` plantait** (`UnboundLocalError` sur `tp`, calculé plus bas dans la boucle depuis le découpage du 11/08) : aucune protection portée par un ordre d'achat Expert n'était remontée par le trailing. TP et ATR sont maintenant calculés dans la branche
+- **Carnet : relecture après 3 s** si le compte n'est pas trouvé, puis un diagnostic sans donnée personnelle dans le log (statut HTTP, taille, présence du sélecteur, URL finale) pour trouver la cause de l'échec intermittent
+
 ### 2026-11-10 — Palier 2 du trailing désactivé, gestion des gagnants backtestée
 - **`backtest.py --exits`** : simule enfin le palier 2 de production (actif depuis le 03/08, jamais backtesté) et compare TP 2 / 2,5 / 3 R et une sortie sans TP au chandelier 3 / 4 ATR — voir [Backtest](#backtest-backtestpy)
 - **Palier 2 désactivé** (`TRAIL_LOCK=off`, nouveau réglage) : perdant sur les trois univers ; le palier 1 (breakeven) reste. `/trailing` l'indique

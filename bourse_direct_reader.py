@@ -275,6 +275,21 @@ def read_order_book(page, send_fn=None) -> list[dict]:
 
         nc = find_account_nc(html)
         if not nc:
+            # Échec INTERMITTENT (10-11/11/2026 : OK le 29/10, KO ensuite sans
+            # changement de .env). Une relecture après une pause, puis un
+            # diagnostic sans donnée personnelle pour savoir ce que BD a servi.
+            import time as _t
+            _t.sleep(3)
+            r = page.request.get(BD_ORDER_BOOK_LEGACY_URL, timeout=25000)
+            html = _html(r) if r.ok else ""
+            nc = find_account_nc(html)
+        if not nc:
+            _sel = re.search(r'<select[^>]*name="nc".*?</select>', html, re.S | re.I)
+            print(f"[BD Carnet] diagnostic : HTTP {r.status}, {len(html)} octets, "
+                  f"sélecteur nc {'présent' if _sel else 'ABSENT'}"
+                  + (f" ({len(re.findall(r'<option', _sel.group(0), re.I))} option(s))"
+                     if _sel else "")
+                  + f", url finale {r.url.split('?')[0]}")
             log("compte CTO introuvable dans le sélecteur du carnet "
                 "(BD_ACCOUNT absent du .env ou libellé changé) — abstention")
             return []
