@@ -380,7 +380,7 @@ TradingBot/
 | `/reticker POSITION TICKER` | **Corriger le ticker Yahoo** d'une position sans la recréer (garde flag autonome, PRU brut BD, contexte d'entrée). Le nouveau ticker est refusé s'il ne cote pas |
 | `/hold TICKER [off]` | Marquer HOLD long terme : **hors gestion bot** — plus d'alertes SL/TP ni trailing, exclu du P&L trading (`/stats`), jamais proposé à la vente/swap par l'IA. Le sync BD continue de suivre qté/PRU. Sans argument : liste les HOLD |
 | `/sl TICKER PRIX` | Mettre à jour le stop-loss |
-| `/tp TICKER PRIX` | Mettre à jour le take-profit |
+| `/tp TICKER PRIX` | Mettre à jour le take-profit. **Depuis le 11/11/2026**, sur une position protégée et la session BD ouverte, l'objectif est **remplacé sur BD** (annulation vérifiée puis nouvel Expert, stop actuel conservé) ; TP refusé s'il est sous le cours ou le stop. Session fermée : fiche locale seulement, avec avertissement |
 
 ### Ordres Bourse Direct (texte — Mode Classic)
 
@@ -824,6 +824,9 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-11-11 (3) — `/tp` remplace l'objectif sur Bourse Direct
+- Jusqu'ici `/tp` ne changeait que la fiche locale : l'ordre BD gardait l'ancien TP. Désormais, position protégée + session ouverte → remplacement sur BD via `protection_ops.remplacer_protection`, stop conservé
 
 ### 2026-11-11 (2) — Sortie par stop suiveur pour les positions autonomes
 - **`EXIT_MODE=trail`** (défaut) : le stop suit le plus haut des clôtures depuis l'achat − 4 ATR (`TRAIL_ATR_MULT`), sans redescendre ; palier `suiveur` dans `trailing.trailing_target`, plus haut tenu par `trailing.update_peak` (`peak_close` en base)

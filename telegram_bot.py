@@ -446,8 +446,34 @@ def cmd_tp(args, cid):
     if not name:
         send(f"Position '{args[0]}' introuvable.", cid)
         return
+    pos = data["positions"][name]
+    protegee = pos.get("protected") or pos.get("protection_ids")
+    # Position protégée sur BD et session ouverte : le TP est REMPLACÉ sur BD
+    # (11/11/2026). Avant, /tp ne changeait que la fiche locale — le TP réel
+    # restait l'ancien, et la fiche mentait. Le stop actuel est conservé.
+    if protegee and bot_mode.is_playwright() and playwright_session.is_connected():
+        stop = pos.get("target_low")
+        cours = portfolio.best_price(pos).get("price")
+        if not stop:
+            send(f"{name} : stop actuel inconnu — /sync d'abord.", cid)
+            return
+        if price <= stop or (cours and price <= cours):
+            send(f"TP {price} refusé : il doit être au-dessus du cours "
+                 f"({cours}) et du stop ({stop}).", cid)
+            return
+
+        def _ok(od, adj):
+            send(f"🎯 OBJECTIF REMPLACÉ SUR BD — {name}\n"
+                 f"TP : {pos.get('target_high')} → {adj.get('take_profit') or price} | "
+                 f"stop inchangé : {adj.get('stop_loss') or stop}", cid)
+
+        _run_long(cid, lambda: _remplacer_protection(name, pos, stop, price, cid, "tp", _ok))
+        return
     if portfolio.update_tp(name, price):
-        send(f"TP {name} mis a jour: {price}€", cid)
+        note = ("" if not protegee else
+                "\n⚠️ Session BD fermée : seule la fiche locale change, l'ordre "
+                "sur BD garde l'ancien TP. /connect puis relance /tp.")
+        send(f"TP {name} mis a jour: {price}€{note}", cid)
     else:
         send(f"Erreur mise a jour TP {name}.", cid)
 
