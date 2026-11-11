@@ -289,6 +289,7 @@ def _hourly_bd_sync():
     # trailing pourrait remonter le SL d'une ligne qu'on s'apprête à vendre.
     try:
         import stale_exit
+        stale_exit.time_stop_cycle(telegram_bot.send)
         stale_exit.stale_exit_cycle(telegram_bot.send)
     except Exception as e:
         print(f"[hourly stagnation] {e}")

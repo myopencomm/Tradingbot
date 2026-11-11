@@ -285,6 +285,47 @@ def _vendre_au_marche(pos: dict, name: str, send_fn) -> bool:
         return False
 
 
+_time_stop_done: set[str] = set()
+
+
+def time_stop_cycle(send_fn, now: datetime | None = None) -> None:
+    """Vend au marché les positions AUTONOMES en stop suiveur détenues depuis
+    plus de TRAIL_MAX_HOLD_DAYS jours de bourse (11/11/2026).
+
+    Contrairement à la sortie sur stagnation, cette vente peut matérialiser
+    une perte : elle reproduit le time-stop du backtest --trail, sans lequel la
+    règle du stop suiveur perd la moitié de son avance. Protections annulées et
+    VÉRIFIÉES avant la vente (pas de doublon)."""
+    if not config.trail_exit_active() or config.TRAIL_MAX_HOLD_DAYS <= 0:
+        return
+    if not (bot_mode.is_playwright() and playwright_session.is_connected()):
+        return
+    now = now or datetime.now(timezone.utc)
+    for name, pos in (portfolio.load().get("positions") or {}).items():
+        if (pos.get("hold") or not pos.get("qty") or name in _time_stop_done
+                or not config.trail_exit_active(pos)):
+            continue
+        age = _age_days(pos, now)
+        if age is None or age < config.TRAIL_MAX_HOLD_DAYS:
+            continue
+        if not market.is_open_now(pos["ticker"]):
+            continue
+        _time_stop_done.add(name)
+        send_fn(f"⏱️ {name} : {age:.0f} jours de bourse (limite "
+                f"{config.TRAIL_MAX_HOLD_DAYS}) — vente au marché, règle du stop "
+                f"suiveur. Annulation de la protection…")
+        if not _annuler_protections(pos, name):
+            send_fn(message_echec_annulation(pos, name, "vente"))
+            return
+        if _vendre_au_marche(pos, name, send_fn):
+            send_fn(f"✅ {name} : vente au marché envoyée (durée maximale atteinte). "
+                    f"Le sync enregistrera la clôture.")
+        else:
+            send_fn(f"🚨 {name} : protection annulée mais VENTE NON ENVOYÉE — "
+                    f"position SANS STOP.\n/ordre vendre {pos['ticker']} "
+                    f"{abs(int(pos['qty']))} marche")
+
+
 def stale_exit_cycle(send_fn, verbose: bool = False,
                      now: datetime | None = None) -> None:
     """Vend les positions stagnantes ET vertes, signale les stagnantes rouges.

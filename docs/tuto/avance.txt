@@ -58,6 +58,16 @@ Dans les deux cas :
   /ordre vendre prete a l'emploi.
 
 P&L garanti >= 0 des le palier 1.
+STOP SUIVEUR (positions autonomes,
+depuis le 11/11/2026) : le stop suit le
+plus haut atteint moins 4 x la variation
+moyenne du titre (ATR), sans jamais
+redescendre. Plus d'objectif qui coupe
+le gain : TP BD pose a +50%. Vente au
+marche apres 60 jours de bourse.
+Beaucoup de petites pertes, quelques
+gros gains : c'est voulu (backtest).
+
 Palier 2 (gain verrouille au-dessus du
 PRU) DESACTIVE depuis le 10/11/2026 : il
 perd au backtest (TRAIL_LOCK=on pour le

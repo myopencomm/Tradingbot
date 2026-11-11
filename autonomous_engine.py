@@ -339,6 +339,17 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         return False
     net_tp = gross_tp_eur - roundtrip
 
+    # ── Sortie par stop suiveur : TP de l'ordre BD posé LOIN ─────────────────
+    # Le TP de l'analyse reste le critère d'entrée (gain visé vs frais, R/R),
+    # mais il ne plafonne plus le gain : sur BD, la limite de vente est mise à
+    # +TRAIL_FAR_TP_PCT %, et c'est le stop suiveur (trailing.py) qui sort.
+    from config import trail_exit_active, TRAIL_FAR_TP_PCT, TRAIL_ATR_MULT
+    objectif_ia = tp
+    if trail_exit_active():
+        import ticks
+        far = entry * (1 + TRAIL_FAR_TP_PCT / 100)
+        tp = ticks.round_to_tick(far, ticks.tick_for(far, quote_cur), "down")
+
     # Filet de sécurité boucle d'apprentissage : AUCUN ordre autonome ne part
     # sans contexte d'entrée mémorisé. Si aucun chemin amont ne l'a capturé,
     # on enregistre au minimum les indicateurs techniques du moment — sinon le
@@ -358,8 +369,12 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
         f"🤖 MODE AUTONOME — Entrée en cours\n"
         f"{ticker} | {qty} titre{'s' if qty > 1 else ''} @ {entry}{sym}\n"
         f"SL : {sl}{sym} ({(entry - sl) / entry * 100:.1f}%) | "
-        f"TP : {tp}{sym} (+{(tp - entry) / entry * 100:.1f}%)\n"
-        f"Coût : {qty * entry:.0f}{sym}{fx_note} | Gain net au TP ≈ +{net_tp:.0f}€ "
+        + (f"Objectif de l'analyse : {objectif_ia}{sym} "
+           f"(+{(objectif_ia - entry) / entry * 100:.1f}%) — non plafonnant : sortie par "
+           f"stop suiveur {TRAIL_ATR_MULT:.0f} ATR sous le plus haut, TP BD posé à "
+           f"{tp}{sym} (+{TRAIL_FAR_TP_PCT:.0f}%)\n" if tp != objectif_ia else
+           f"TP : {tp}{sym} (+{(tp - entry) / entry * 100:.1f}%)\n")
+        + f"Coût : {qty * entry:.0f}{sym}{fx_note} | Gain net à l'objectif ≈ +{net_tp:.0f}€ "
         f"(frais {roundtrip:.2f}€) | {reason}"
         + (f"\n💰 Taille portée de {plan['swept_from']} à {qty} titres : le "
            f"reliquat de cash ne pouvait financer aucun autre trade. "
@@ -376,6 +391,20 @@ def _place_order(ticker: str, entry: float, sl: float, tp: float,
                 bd_orders.create_expert_buy_order(page, t, q, e, s, tp_, "max"),
             timeout=30,
         )
+        if not order_data and tp != objectif_ia:
+            # BD a pu refuser une limite de vente aussi lointaine : on ne perd
+            # pas l'achat pour ça — repli sur l'objectif de l'analyse, le stop
+            # suiveur restant actif tant que le TP n'est pas touché.
+            print(f"[Auto] {ticker} : TP lointain {tp} refusé "
+                  f"({bd_orders._last_raw.get('status')}) — repli sur {objectif_ia}")
+            send_fn(f"ℹ️ {ticker} : BD refuse le TP lointain ({tp}{sym}) — ordre "
+                    f"reposé avec l'objectif de l'analyse ({objectif_ia}{sym}).")
+            tp = objectif_ia
+            order_data = playwright_session.run(
+                lambda page, t=ticker, q=qty, e=entry, s=sl, tp_=tp:
+                    bd_orders.create_expert_buy_order(page, t, q, e, s, tp_, "max"),
+                timeout=30,
+            )
         if not order_data:
             raw    = bd_orders._last_raw
             status = raw.get("status", "?")
@@ -909,6 +938,7 @@ def check_autonomous_positions(send_fn) -> None:
             if bot_mode.is_playwright() and playwright_session.is_connected():
                 continue  # géré sur BD par trailing_stop_cycle
             from config import TRAIL_MIN_STEP_PCT
+            pos = trailing.update_peak(name, pos)
             atr_pct = (prices.get_technicals(pos["ticker"]) or {}).get("atr_pct")
             target, step, step_label = trailing_target(pos, price, tp, atr_pct)
             if not target or target <= sl + entry * TRAIL_MIN_STEP_PCT / 100:
@@ -922,7 +952,15 @@ def check_autonomous_positions(send_fn) -> None:
             data["positions"][name]["pending_sl"] = round(target, 4)
             data["positions"][name]["auto_breakeven_notified"] = True
             changed = True
-            if step == "lock":
+            if step == "suiveur":
+                send_fn(
+                    f"{auto_tag} STOP SUIVEUR À REMONTER — {name}\n"
+                    f"{step_label}\n"
+                    f"⚠️ SL PAS ENCORE POSÉ SUR BD (session déconnectée) : le "
+                    f"stop actif reste {sl}. /connect, ou à la main :\n"
+                    f"/ordre vendre {pos['ticker']} {qty} expert {target} {tp}"
+                )
+            elif step == "lock":
                 send_fn(
                     f"{auto_tag} GAIN À SÉCURISER — {name}\n"
                     f"Position à {change_pct:+.1f}% au-dessus du PRU ({entry}€)\n"

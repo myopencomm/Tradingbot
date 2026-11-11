@@ -108,6 +108,8 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
              max_sl_pct: float = 10.0,
              lock: tuple | None = None,
              lock2: bool = False,
+             chand_stop: float | None = None,
+             max_hold: int | None = MAX_HOLD_DAYS,
              entry_rule: str = "momentum") -> dict:
     """mode: 'old' (mom 1m, SL7/TP10, 50% budget) ou 'new' (12-1 + MM200 + ATR).
 
@@ -153,6 +155,13 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
     d'au moins max(TRAIL_MIN_BUFFER_PCT, ATR d'entrée) sous la clôture.
     Simplification : jugé sur la clôture, sans les seuils de pas minimal
     (TRAIL_MIN_STEP_*) — le SL simulé monte un peu plus souvent qu'en réel.
+
+    `chand_stop` = stop suiveur RÉEL (version production de la sortie
+    chandelier, 11/11/2026) : à chaque clôture le SL monte à
+    plus-haut-des-clôtures − k × ATR du jour, sans jamais redescendre ; il joue
+    dès la séance suivante comme un ordre stop (intraday), et non plus à
+    l'open suivant une clôture sous le seuil comme `review=chandelier`.
+    `max_hold` = time-stop en jours de bourse (None = aucun, comme en réel).
 
     `entry_rule` = règle de sélection à l'entrée (mode 'new') — voir `early_entries.signal_series` :
     "momentum" (production), "pullback", "breakout", "gap".
@@ -213,7 +222,7 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                 exit_price, why = p["sl"], "SL"
             elif row["high"] >= p["tp"]:
                 exit_price, why = p["tp"], "TP"
-            elif days_held >= MAX_HOLD_DAYS:
+            elif max_hold and days_held >= max_hold:
                 exit_price, why = row["close"], "TIME"
             elif stale:
                 # Jalons de progression vers le TP. Le prix de sortie doit
@@ -268,6 +277,11 @@ def simulate(ind: dict[str, pd.DataFrame], dates: pd.DatetimeIndex,
                     locked = min(locked, row["close"] * (1 - buf / 100),
                                  p["tp"] * 0.999)
                     p["sl"] = max(p["sl"], locked)
+            # Stop suiveur réel (variante chand_stop)
+            if chand_stop:
+                atr_abs = row["close"] * row["atr_pct"] / 100
+                if not np.isnan(atr_abs):
+                    p["sl"] = max(p["sl"], p["peak"] - chand_stop * atr_abs)
             # Trailing breakeven (optionnel — testé avec/sans)
             if be_trail and not p["be_done"]:
                 if be_atr is not None:
@@ -591,6 +605,9 @@ def main():
     ap.add_argument("--exits", action="store_true",
                     help="gestion des gagnants (10/11/2026) : palier 2 de "
                          "production simulé, TP élargis, sans TP + chandelier")
+    ap.add_argument("--trail", action="store_true",
+                    help="stop suiveur réel k ATR sous le plus haut (sans TP), "
+                         "tel que la production le joue (11/11/2026)")
     ap.add_argument("--base-rates", action="store_true",
                     help="écrit base_rates.json : taux historique d'atteinte du "
                          "TP par profil d'entrée (lu par validate_candidate)")
@@ -704,6 +721,21 @@ def main():
             ("X7. sans TP + chandelier 3 ATR", dict(base, tp_mult_r=100, review=chand(3.0))),
             ("X8. sans TP + chandelier 4 ATR", dict(base, tp_mult_r=100, review=chand(4.0))),
         ]
+    elif args.trail:
+        # 11/11/2026 : la sortie retenue (sans TP + chandelier 4 ATR) jouée
+        # comme en PRODUCTION — un ordre stop remonté chaque jour, déclenché
+        # en séance — avec et sans time-stop (le bot réel n'en a pas).
+        far = dict(base, tp_mult_r=100)
+        configs = [
+            ("C0. référence (TP ≥ 1,5R, palier 1)", dict(base)),
+            ("C1. chandelier 4 ATR sur clôture (X8 du 10/11)",
+             dict(far, review=dict(rule="chandelier", k=4.0, action="exit"))),
+        ]
+        for k in (3.0, 4.0, 5.0):
+            configs.append((f"C2. stop suiveur {k:.0f} ATR, time-stop 60 j", dict(far, chand_stop=k)))
+        for k in (3.0, 4.0, 5.0):
+            configs.append((f"C3. stop suiveur {k:.0f} ATR, sans time-stop",
+                            dict(far, chand_stop=k, max_hold=None)))
     elif args.lock:
         # 13/10/2026 : après une série de pertes, « mieux vaut de petits gains
         # souvent ». Sur les 21 trades réels, 5 perdants sur 11 étaient passés

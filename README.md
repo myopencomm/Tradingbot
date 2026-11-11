@@ -244,6 +244,7 @@ Envoyez `/start` à votre bot sur Telegram — vous devez recevoir un message de
 | **Analyses IA non gaspillées** | Scan US planifié et recherche de candidats du briefing **sautés quand aucun achat n'est possible** — cash sous le plancher de viabilité, ou mode autonome sans emplacement libre. Une ligne Telegram par jour explique pourquoi. `/scan` et `/research` restent toujours complets |
 | **Frais BD au barème réel** | Courtage par tranches Euronext, forfait US, **TTF française 0,4 % à l'achat** et commission de change 0,08 % — vérifié au centime sur nos ordres exécutés. Conditionne le sizing, le veto de rentabilité et le plancher de scan |
 | **Dashboard filtrable par période** | Menu ☰ : Global / ce mois / mois dernier / cette année / année dernière. Cartes, graphiques et tableau recalculés sur la période ; P&L latent et cash restent des instantanés globaux, signalés comme tels |
+| **Stop suiveur (autonome, 11/11/2026)** | Positions **autonomes** : plus d'objectif de vente plafonnant. Le stop suit le **plus haut des clôtures depuis l'achat moins `TRAIL_ATR_MULT` (4) × ATR 14 j** et ne fait que monter ; le TP de l'ordre Expert BD est posé loin (`TRAIL_FAR_TP_PCT`, +50 % ; repli sur l'objectif de l'analyse si BD le refuse) ; **vente au marché après `TRAIL_MAX_HOLD_DAYS` (60) jours de bourse**, gain ou perte. Le breakeven à +6 % reste. Backtest `--trail` joué comme en réel : -87 € contre -782 € (137 titres, 2 positions), -1 042 € contre -1 703 € (4 positions). Attendu : ~80 % de trades perdants (petites pertes au stop initial), gagnants 2 à 3 fois plus gros. `EXIT_MODE=tp` revient à l'ancien comportement. Les positions manuelles gardent leur TP |
 | **Trailing en 2 paliers** | **1.** À +5% (manuel) / +6% (autonome), le SL monte au PRU — perte impossible. **2.** *(désactivé depuis le 10/11/2026, `TRAIL_LOCK=off` : il perd au backtest `--exits`)* Passé 60% du chemin vers le TP, le SL monte **au-dessus du PRU** et verrouille une part croissante du gain (50% → 80% au contact du TP). L'ordre Expert est remplacé sur BD à chaque palier |
 | **Contrôle de protection** | À chaque sync, toute position gérée est comparée au carnet BD. Sans ordre SL/TP actif → alerte (même en sync silencieux), marquage `🚨 non protégé` dans `/status` et le dashboard, commande de replacement fournie. Un stop calculé mais non posé sur BD est affiché comme tel, jamais comme actif. **L'alerte exige deux lectures abouties et concordantes** : un onglet ordres illisible suspend le contrôle au lieu de conclure « aucune protection » (fausse alerte du 11/08/2026) |
 | **Repose automatique des protections** | Un stop se perd de deux façons. **(1) Échéance** : BD borne toute validité — fin du mois courant hors Euronext (US compris), 31/12 dessus, **toujours ramenée au dernier jour ouvré** (BD refuse une révocation un samedi : le 31/10/2026 a laissé JNJ, CBLL et PFE sans stop le 01/10, refus « date de révocation … mode de règlement »). Un refus BD portant sur un champ de l'ordre est désormais signalé avec son motif, et non plus classé « hors séance ». Le bot mémorise l'échéance lue au carnet et repose le SL/TP **dès la bascule du mois** — au cycle horaire de **:35** comme immédiatement après un `/sync` manuel (impossible avant : « max » rendrait la même date ; et l'échéance tombant à la clôture, le trou est hors séance). **(2) Disparition avant l'heure** : BD annule les ordres à seuil sur événement du titre — JNJ a perdu la sienne à son détachement de dividende, 6 jours avant échéance. Le bot ne cherche pas la cause, il mesure la durée (`naked_since`) et repose dès que le trou tient **45 min**. Dans les deux cas, **deux preuves avant d'agir** — persistance locale *et* deux lectures du carnet sans ordre à seuil — sinon on reposerait un doublon de vente sur des titres déjà engagés |
@@ -633,6 +634,8 @@ Bot : "🤖 AUTO BREAKEVEN — ASML
 
 ## Trailing stop — deux paliers
 
+> **Depuis le 11/11/2026, les positions autonomes sortent par stop suiveur** (`EXIT_MODE=trail`) : stop = plus haut des clôtures depuis l'achat − 4 × ATR 14 j (`TRAIL_ATR_MULT`), jamais en baisse, TP BD posé à +50 % (`TRAIL_FAR_TP_PCT`), vente au marché après 60 jours de bourse (`TRAIL_MAX_HOLD_DAYS`). Le palier 1 (breakeven) reste ; le stop retenu est le plus haut des deux. Les remontées passent par la même mécanique que ci-dessous (annulation vérifiée puis nouvel Expert, seuils `TRAIL_MIN_STEP_*`). Pourquoi : voir [Backtest](#backtest-backtestpy), campagnes `--exits` et `--trail`.
+
 Le trailing ne fait pas que protéger le capital : il sécurise aussi le gain
 déjà acquis à mesure que le cours approche du TP.
 
@@ -821,6 +824,12 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 ---
 
 ## Changelog
+
+### 2026-11-11 (2) — Sortie par stop suiveur pour les positions autonomes
+- **`EXIT_MODE=trail`** (défaut) : le stop suit le plus haut des clôtures depuis l'achat − 4 ATR (`TRAIL_ATR_MULT`), sans redescendre ; palier `suiveur` dans `trailing.trailing_target`, plus haut tenu par `trailing.update_peak` (`peak_close` en base)
+- **TP BD lointain** : les nouveaux achats autonomes posent leur TP à +50 % (`TRAIL_FAR_TP_PCT`) ; l'objectif de l'analyse reste le critère d'entrée (gain visé vs frais, R/R). Si BD refuse la limite, l'ordre repart avec l'objectif de l'analyse
+- **Durée maximale** : vente au marché après 60 jours de bourse (`TRAIL_MAX_HOLD_DAYS`, `stale_exit.time_stop_cycle`), gain ou perte — partie intégrante de la règle mesurée
+- **`backtest.py --trail`** : rejoue la règle telle que le bot l'exécute (stop en séance), voir [Backtest](#backtest-backtestpy)
 
 ### 2026-11-11 — Trailing : deux défauts qui empêchaient de remonter les stops d'ordre d'achat
 - **Carnet illisible = trailing abandonné.** Quand le carnet legacy BD ne trouve pas le compte CTO (échec intermittent depuis le 12/10, sans changement de `.env`), `trailing_stop_cycle` s'arrêtait net. BTSG (+8 %, seuil +6 %) n'a donc pas été remonté les 10 et 11/11. Désormais le cycle continue : les protections dont le bot connaît les `protection_ids` sont remontées sans le carnet ; les autres sont sautées, jamais annoncées « à nu » sur une lecture ratée
@@ -1848,6 +1857,19 @@ Le verrou fait monter le taux de réussite (27 % → 47 %) mais **le gain moyen 
 - **Laisser courir paie, dans le même ordre sur les trois univers** : TP 3 R > TP 2,5 R > référence, et sans TP + chandelier 4 ATR loin devant (gain moyen +55 à +75 € contre +13 à +27 €, pour 17-21 % de trades gagnants seulement).
 - **Limites honnêtes** : tout reste négatif (le moteur quantitatif seul n'a pas d'edge, l'IA n'est pas simulable) ; le meilleur réglage n'est gagnant que sur 1 fenêtre walk-forward sur 4 ; le résultat vient de rares gros gagnants. La sortie chandelier **n'est pas branchée** : elle demande de supprimer le TP des ordres Expert BD et de remplacer le trailing par un stop suiveur à 4 ATR — décision à prendre, pas un réglage.
 
+**Stop suiveur tel que joué en réel (`--trail`, 11/11/2026)** — la sortie retenue le 10/11 vendait à l'open suivant une clôture sous le seuil. En réel, c'est un ordre stop sur BD, remonté chaque jour et déclenché **en séance**. Rejouée ainsi (`chand_stop=k`), avec et sans time-stop (`max_hold`) :
+
+| Règle (2023 → 11/2026, 137 titres) | 2 positions | 4 positions |
+|---|---|---|
+| Référence (TP ≥ 1,5 R, breakeven) | -782 € | -1 703 € |
+| Chandelier 4 ATR sur clôture (X8) | -11 € | -1 146 € |
+| Stop suiveur 3 ATR, time-stop 60 j | -645 € | -1 339 € |
+| **Stop suiveur 4 ATR, time-stop 60 j (production)** | **-87 €** | **-1 042 €** |
+| Stop suiveur 5 ATR, time-stop 60 j | -227 € | -1 034 € |
+| Stop suiveur 4 ATR, sans time-stop | -292 € | -1 277 € |
+
+Le stop en séance coûte un peu par rapport à la clôture, mais garde l'essentiel de l'avance ; 4 ATR est le meilleur réglage à 2 positions et à égalité avec 5 ATR à 4. **Le time-stop fait partie de la règle** : sans lui, l'avance fond de moitié. Toujours négatif en absolu (moteur quantitatif seul, sans l'IA) : la comparaison entre lignes est ce qui compte.
+
 ### Entrées précoces — mode fantôme
 
 Question du 29/10/2026 : les candidats sortent toujours **au plus haut** (le classement momentum 12-1 les choisit par construction), et l'IA les refuse ensuite pour « résistance proche » ou « surchauffe ». Trois règles d'entrée plus tôt dans la courbe sont comparées, avec la **même gestion** (SL 2 ATR, TP ≥ 1,5 R, trailing) : seule l'entrée change. Code commun : `early_entries.py`.
@@ -1908,6 +1930,10 @@ L'étude ne lisait pas les news : c'est ce que l'IA ajoute, et ce que l'essai me
 DEFAULT_SL_PCT=7          # stop-loss fixe fallback en % sous le PRU
 DEFAULT_TP_PCT=10         # take-profit minimum en % au-dessus du PRU
 BREAKEVEN_THRESHOLD=5     # trailing palier 1 (manuel) : % au-dessus du PRU
+EXIT_MODE=trail           # trail = stop suiveur sans TP plafonnant (autonomes) ; tp = ancien comportement
+TRAIL_ATR_MULT=4          # stop suiveur : plus haut des clôtures − N × ATR 14 j
+TRAIL_FAR_TP_PCT=50       # TP de l'ordre Expert BD, posé loin pour ne pas plafonner
+TRAIL_MAX_HOLD_DAYS=60    # vente au marché au-delà (jours de bourse), 0 = off
 TRAIL_LOCK=off            # palier 2 du trailing — DÉSACTIVÉ le 10/11/2026 (perd au backtest --exits)
 TRAIL_LOCK_TRIGGER_PCT=60 # trailing palier 2 : % du chemin PRU→TP avant de sécuriser
 TRAIL_LOCK_MIN_RATIO=50   # % du gain verrouillé au déclenchement

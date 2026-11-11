@@ -529,6 +529,36 @@ BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "5"))
 #    ~150 trades = bruit : +5%, +6% et +8% sont à égalité.)
 AUTO_BREAKEVEN_PCT = float(os.getenv("AUTO_BREAKEVEN_PCT", "6"))
 
+# ── SORTIE PAR STOP SUIVEUR (11/11/2026, choix de l'utilisateur) ─────────────
+# Backtest --exits du 10/11 : laisser courir les gagnants bat TOUTES les
+# variantes à TP fixe, sur les trois univers (137 titres 2 pos. : -14 € contre
+# -785 € ; 4 pos. : -1153 € contre -1710 € ; monde : -3074 € contre -8052 €),
+# puis --trail du 11/11 l'a rejoué tel que le bot réel l'exécute (ordre stop
+# remonté chaque jour, déclenché en séance).
+#   EXIT_MODE=trail  → positions AUTONOMES : stop = plus haut des clôtures
+#                      depuis l'achat − TRAIL_ATR_MULT × ATR 14 j, qui ne fait
+#                      que monter ; le TP de l'ordre Expert BD est posé loin
+#                      (+TRAIL_FAR_TP_PCT %) pour ne pas plafonner le gain.
+#   EXIT_MODE=tp     → comportement d'avant (TP de l'analyse, breakeven seul).
+# Conséquence assumée : ~80 % de trades perdants (petites pertes au stop
+# initial), compensés par des gagnants 3 à 4 fois plus gros.
+EXIT_MODE = os.getenv("EXIT_MODE", "trail").strip().lower()
+TRAIL_ATR_MULT = float(os.getenv("TRAIL_ATR_MULT", "4"))
+TRAIL_FAR_TP_PCT = float(os.getenv("TRAIL_FAR_TP_PCT", "50"))
+# Durée maximale d'une position en stop suiveur, en JOURS DE BOURSE : vente au
+# marché au-delà, gain ou perte. Elle fait partie de la règle mesurée — sans
+# elle le suiveur 4 ATR rend la moitié de son avance (backtest --trail,
+# 11/11/2026 : -292 € au lieu de -87 € à 2 positions). 0 = désactivée.
+TRAIL_MAX_HOLD_DAYS = int(os.getenv("TRAIL_MAX_HOLD_DAYS", "60"))
+
+
+def trail_exit_active(pos: dict | None = None) -> bool:
+    """Stop suiveur en vigueur — pour une position donnée : autonome seulement
+    (les positions manuelles gardent le TP choisi par l'utilisateur)."""
+    if EXIT_MODE != "trail":
+        return False
+    return pos is None or bool(pos.get("autonomous"))
+
 # ── Palier 2 du trailing : SÉCURISATION DU GAIN ─────────────────────────────
 # Le breakeven ne protège que le capital : une position montée à +9% sur un TP
 # à +10% pouvait redescendre au PRU et sortir à zéro, tout le gain rendu. Ce

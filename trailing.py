@@ -145,7 +145,47 @@ def trailing_target(pos: dict, price: float, tp: float | None,
             label = (f"SL à {gain_pct:+.1f}% du PRU — {ratio * 100:.0f}% du gain "
                      f"verrouillé ({prog * 100:.0f}% du chemin vers le TP)")
 
+    # Palier SUIVEUR — sortie par stop suiveur (EXIT_MODE=trail, autonomes).
+    # Plus haut des clôtures depuis l'achat (`peak_close`, tenu par
+    # `update_peak`) moins TRAIL_ATR_MULT × ATR. Il peut rester SOUS le PRU :
+    # il remplace alors le stop initial plus bas, comme au backtest --trail.
+    # Il n'est retenu que s'il dépasse le stop actuel (`target_low`) — le
+    # stop ne redescend jamais.
+    from config import trail_exit_active, TRAIL_ATR_MULT
+    if trail_exit_active(pos) and atr_pct:
+        peak = max(pos.get("peak_close") or entry, price)
+        suiveur = peak - TRAIL_ATR_MULT * price * atr_pct / 100
+        suiveur = min(suiveur, price * (1 - TRAIL_MIN_BUFFER_PCT / 100))
+        plancher = max(target or 0, pos.get("target_low") or 0)
+        if suiveur > plancher:
+            target, step = suiveur, "suiveur"
+            label = (f"stop suiveur {TRAIL_ATR_MULT:.0f} ATR sous le plus haut "
+                     f"({peak:.2f}) — {(suiveur / entry - 1) * 100:+.1f}% du PRU")
+
     return (round(target, 4) if target else None), step, label
+
+
+def update_peak(name: str, pos: dict) -> dict:
+    """Met à jour `pos["peak_close"]` : plus haut des CLÔTURES depuis l'achat
+    (Yahoo), jamais en baisse. Persisté pour survivre à une panne de Yahoo."""
+    from config import trail_exit_active
+    if not trail_exit_active(pos) or not pos.get("opened_at"):
+        return pos
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(pos["ticker"]).history(start=pos["opened_at"][:10])
+        closes = hist["Close"].dropna() / prices.price_divisor(pos["ticker"])
+        if len(closes):
+            peak = max(float(closes.max()), pos.get("peak_close") or 0)
+            if peak != pos.get("peak_close"):
+                pos = dict(pos, peak_close=round(peak, 4))
+                d = portfolio.load()
+                if name in d.get("positions", {}):
+                    d["positions"][name]["peak_close"] = pos["peak_close"]
+                    portfolio.save(d)
+    except Exception as e:
+        print(f"[Trailing] plus haut {name} : {e}")
+    return pos
 
 
 def _fx_note(pos: dict, price: float, currency: str, change_pct: float) -> str:
@@ -225,7 +265,16 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
         # AVANT la première — une position à +5% d'un TP à +8% a déjà fait 62%
         # du chemin et mérite un stop au-dessus du PRU.
         prog = tp_progress(entry, pos.get("target_high"), price)
-        if change_pct >= threshold or (TRAIL_LOCK and prog is not None
+        # Stop suiveur : candidat dès que sa cible dépasse le stop actuel,
+        # même sous le seuil de breakeven (il remplace le stop initial).
+        suiveur_pret = False
+        from config import trail_exit_active
+        if trail_exit_active(pos):
+            pos = update_peak(name, pos)
+            _atr = (prices.get_technicals(pos["ticker"]) or {}).get("atr_pct")
+            _t, _s, _l = trailing_target(pos, price, pos.get("target_high"), _atr)
+            suiveur_pret = _s == "suiveur"
+        if suiveur_pret or change_pct >= threshold or (TRAIL_LOCK and prog is not None
                                        and prog * 100 >= TRAIL_LOCK_TRIGGER_PCT):
             candidates.append((name, pos, change_pct, price))
             if fx_note:
@@ -602,7 +651,14 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                     data["positions"][name]["auto_breakeven_notified"] = True
                     portfolio.save(data)
                 tag = "🤖" if pos.get("autonomous") else "🛡️"
-                if step == "lock":
+                if step == "suiveur":
+                    send_fn(
+                        f"{tag} STOP SUIVEUR — {name} à {change_pct:+.1f}%\n"
+                        f"SL remonté sur BD : {cur_sl if cur_sl is not None else pos.get('target_low')}"
+                        f" → {new_sl} (TP {tp_f} inchangé)\n"
+                        f"{step_label}"
+                    )
+                elif step == "lock":
                     locked_eur = (new_sl - entry) * qty
                     send_fn(
                         f"{tag} GAIN SÉCURISÉ — {name} à +{change_pct:.1f}%\n"
