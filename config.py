@@ -546,10 +546,14 @@ EXIT_MODE = os.getenv("EXIT_MODE", "trail").strip().lower()
 TRAIL_ATR_MULT = float(os.getenv("TRAIL_ATR_MULT", "4"))
 TRAIL_FAR_TP_PCT = float(os.getenv("TRAIL_FAR_TP_PCT", "50"))
 # Durée maximale d'une position en stop suiveur, en JOURS DE BOURSE : vente au
-# marché au-delà, gain ou perte. Elle fait partie de la règle mesurée — sans
-# elle le suiveur 4 ATR rend la moitié de son avance (backtest --trail,
-# 11/11/2026 : -292 € au lieu de -87 € à 2 positions). 0 = désactivée.
-TRAIL_MAX_HOLD_DAYS = int(os.getenv("TRAIL_MAX_HOLD_DAYS", "60"))
+# marché au-delà, gain ou perte. 0 = désactivée (DÉFAUT). Backtest --trail du
+# 11/11/2026, résultats CONTRADICTOIRES :
+#   137 titres, 2 pos. : -87 € avec (60 j), -292 € sans
+#   137 titres, 4 pos. : -1042 € avec, -1277 € sans
+#   2 931 titres (l'univers réel du scan), 8 pos. : -3121 € avec, -2297 € sans
+# Pas d'effet robuste → pas de vente forcée, d'autant qu'elle vendrait à perte
+# (décision utilisateur du 27/08 : pas de sortie de durée à perte).
+TRAIL_MAX_HOLD_DAYS = int(os.getenv("TRAIL_MAX_HOLD_DAYS", "0"))
 
 
 def trail_exit_active(pos: dict | None = None) -> bool:

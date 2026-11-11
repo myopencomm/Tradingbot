@@ -63,8 +63,7 @@ depuis le 11/11/2026) : le stop suit le
 plus haut atteint moins 4 x la variation
 moyenne du titre (ATR), sans jamais
 redescendre. Plus d'objectif qui coupe
-le gain : TP BD pose a +50%. Vente au
-marche apres 60 jours de bourse.
+le gain : TP BD pose a +50%.
 Beaucoup de petites pertes, quelques
 gros gains : c'est voulu (backtest).
 
