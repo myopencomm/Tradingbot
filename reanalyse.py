@@ -102,7 +102,12 @@ def juger(nom: str, cfg: dict) -> dict:
 # Motifs de refus qui disent « l'achat était mauvais » — par opposition aux
 # vetos techniques (surchauffe, volatilité, profil) qui disent seulement « pas
 # maintenant », et qu'un gagnant en pleine hausse déclenche aussi.
-MOTIFS_ACHAT_NUL = ("défaut cité par l'IA", "thèse refusée par la porte", "veto Jev",
+# Le veto Jev n'y figure plus (13/11/2026) : il juge si NOS données de
+# recherche contiennent les preuves, pas la société. Yahoo en panne → aucune
+# news lue → « preuves absentes » → HUM marqué « thèse cassée » et son TP
+# ramené de 663,77 à 453,25 $, le jour même où le jugement de fond (modèle
+# principal) disait MAINTENIR. Un juge plus léger ne casse pas une thèse.
+MOTIFS_ACHAT_NUL = ("défaut cité par l'IA", "thèse refusée par la porte",
                     "au-dessus de l'objectif analystes")
 
 

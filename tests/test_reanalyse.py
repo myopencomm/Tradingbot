@@ -64,3 +64,5 @@ def test_achat_nul_seulement_pour_une_raison_de_fond(monkeypatch):
     assert reanalyse.achat_nul_aujourdhui("X", {"ticker": "X"}) is None
     faux("profil historique sous la moyenne (34 % vs 36 %)")
     assert reanalyse.achat_nul_aujourdhui("X", {"ticker": "X"}) is None
+    faux("contre-avis Jev — preuves absentes des données (p=0.07)")  # données, pas la société
+    assert reanalyse.achat_nul_aujourdhui("HUM", {"ticker": "HUM"}) is None
