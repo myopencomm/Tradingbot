@@ -827,6 +827,7 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ### 2026-11-13 (2) — Réanalyse : un refus de timing ne casse plus une thèse, un TP manuel n'est plus rabaissé
 - `reanalyse.achat_nul_aujourdhui` ignore désormais les refus qui portent sur le **moment** d'achat (surchauffe, résistance, repli, RSI…) : BTSG était marqué « thèse cassée » le 11/11 pour « surchauffe sous résistance » alors que le jugement de fond disait MAINTENIR
+- Un **veto Jev** ne marque plus non plus la thèse cassée : il juge si nos données de recherche contiennent les preuves (vide quand Yahoo est en panne), pas la société ; seul le jugement de fond du modèle principal peut casser une thèse
 - Un objectif posé avec `/tp` est marqué `tp_manuel` : la réanalyse ne le rabaisse plus (BTSG : 100.48 → 73.16 le 12/11)
 
 ### 2026-11-13 — Achats Expert manuels : protection remontable
