@@ -338,6 +338,13 @@ def sync(page, send_fn, silent: bool = False, progress_fn=None) -> bool:
                     # change son PRU (cf. mise à jour ci-dessus).
                     data["positions"][new_key]["bd_pru_raw"] = round(bd_pru, 5)
                 _bd_snapshot(data["positions"][new_key], pos)
+                # Achat Expert passé à la main (/ordre) : mêmes ids de jambes,
+                # mis de côté à la confirmation (13/11/2026).
+                man = data.get("manual_buy_protections") or {}
+                for k in (yf_t.upper(), bd_ticker.upper()):
+                    if man.get(k) and not auto_rec:
+                        data["positions"][new_key]["protection_ids"] = man.pop(k)
+                        break
                 if auto_rec:
                     data["positions"][new_key]["autonomous"] = True
                     # Ids des jambes SL/TP, récupérés à la création de l'ordre.

@@ -825,6 +825,9 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-11-13 — Achats Expert manuels : protection remontable
+- Un achat `/ordre acheter … expert` ne gardait pas les ids de ses jambes SL/TP (la position n'existe qu'à l'exécution) : ni le trailing, ni `/securiser`, ni `/tp` ne pouvaient toucher sa protection. Les ids sont mis de côté à la confirmation (`manual_buy_protections`) et le sync les rattache à la position créée
+
 ### 2026-11-11 (3) — `/tp` remplace l'objectif sur Bourse Direct
 - Jusqu'ici `/tp` ne changeait que la fiche locale : l'ordre BD gardait l'ancien TP. Désormais, position protégée + session ouverte → remplacement sur BD via `protection_ops.remplacer_protection`, stop conservé
 

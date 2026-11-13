@@ -2118,6 +2118,13 @@ def cmd_ordre(args, cid):
                     "summary":   summary,
                     "expires":   time.time() + 120,
                 }
+                if is_expert and side == "buy":
+                    # Achat Expert à la main : ids des jambes SL/TP gardés en
+                    # attente jusqu'à l'exécution, le sync les rattache à la
+                    # position. Sans eux, sa protection n'était ni remontable
+                    # par le trailing ni par /securiser (GOOGL, 13/11/2026).
+                    _pending_order["buy_protection_ids"] = [
+                        c for c in (order_data.get("children") or []) if c]
                 if is_expert and side == "sell":
                     # Ids des jambes SL/TP : sans eux, /securiser et /sortir
                     # annulaient les ids de la protection PRÉCÉDENTE (403 BD).
@@ -2184,6 +2191,11 @@ def cmd_oui(args, cid):
                 return
             if pending.get("protection"):
                 _enregistrer_protection(pending["ticker"], pending["protection"])
+            if pending.get("buy_protection_ids"):
+                d = portfolio.load()
+                d.setdefault("manual_buy_protections", {})[
+                    pending["ticker"].upper()] = pending["buy_protection_ids"]
+                portfolio.save(d)
 
             # ── Vérification post-ordre : relit le carnet pour confirmer ──────
             import bourse_direct_reader as reader
