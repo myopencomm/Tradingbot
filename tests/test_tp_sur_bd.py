@@ -47,3 +47,18 @@ def test_deconnecte_fiche_locale_et_avertissement(env):
     connecte(False)
     tb.cmd_tp(["XYZ", "15"], 1)
     assert out["local"] == [15.0] and "fiche locale" in out["msgs"][-1]
+
+
+def test_reanalyse_ne_rabaisse_jamais_un_tp_manuel():
+    import reanalyse
+    cfg = {"target_low": 68.0, "target_high": 100.0, "tp_manuel": True}
+    # plus haut 3 mois 73.7 > cours × 1.02 : sans le drapeau, TP → 73.3
+    assert reanalyse.plan_protection(cfg, 71.0, 68.0, 73.7, 4.0) is None
+    sans = dict(cfg, tp_manuel=False)
+    assert reanalyse.plan_protection(sans, 71.0, 68.0, 73.7, 4.0)[1] < 100.0
+
+
+def test_refus_de_timing_ne_casse_pas_la_these():
+    import reanalyse
+    assert reanalyse.motif_de_timing("surchauffe sous résistance, aucun repli")
+    assert not reanalyse.motif_de_timing("croissance portée par un remboursement exceptionnel")

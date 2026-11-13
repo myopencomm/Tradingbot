@@ -123,9 +123,26 @@ def achat_nul_aujourdhui(nom: str, cfg: dict) -> str | None:
     if r.get("verdict") == "ACHAT" or not r.get("price"):
         return None
     raison = r.get("reason") or ""
-    if decisions.categorie_motif(raison) in MOTIFS_ACHAT_NUL:
+    if decisions.categorie_motif(raison) in MOTIFS_ACHAT_NUL and not motif_de_timing(raison):
         return raison
     return None
+
+
+# Mots d'un refus qui porte sur le MOMENT d'achat, pas sur la société. Le
+# motif « défaut cité par l'IA » attrape tout ce que l'IA écrit elle-même :
+# « surchauffe sous résistance, aucun repli » y tombait et marquait BTSG
+# « thèse cassée » (11/11/2026) — alors que le jugement de fond du même matin
+# disait MAINTENIR (T3 en hausse, guidance relevée). Un gagnant en pleine
+# hausse déclenche toujours ce genre de refus : il ne prouve pas un achat nul.
+_MOTS_TIMING = ("surchauff", "résistance", "resistance", "repli", "pullback",
+                " rsi", "rsi ", "suracheté", "surachat", "extension", "étiré", "etire",
+                "trop haut", "plus haut", "sommet", "momentum", "point d'entrée",
+                "entrée tardive", "attendre", "timing", "après l'envolée")
+
+
+def motif_de_timing(raison: str) -> bool:
+    r = (raison or "").lower()
+    return any(m in r for m in _MOTS_TIMING)
 
 
 def plus_haut_recent(ticker: str) -> float | None:
@@ -144,6 +161,11 @@ def plan_protection(cfg: dict, prix: float, niveau: float,
     rien ne change. `niveau` = cours qui rapporte GAIN_MINI_EUR net."""
     sl, tp = cfg.get("target_low") or 0, cfg.get("target_high") or 0
     new_sl, new_tp = sl, tp
+    # Objectif posé à la main (/tp) : décision de l'utilisateur, jamais
+    # rabaissée par la réanalyse (BTSG 12/11/2026 : 100.48 → 73.16 la veille
+    # de... rien du tout, sur une thèse dite cassée pour un motif de timing).
+    if cfg.get("tp_manuel"):
+        haut = None
     # Objectif raisonnable : sous la résistance des 3 derniers mois, si elle est
     # au-dessus du cours (sinon le titre est sur ses plus hauts : on garde le TP).
     if haut and prix and haut > prix * 1.02 and (not tp or haut * 0.995 < tp):

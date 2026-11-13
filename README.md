@@ -825,6 +825,10 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-11-13 (2) — Réanalyse : un refus de timing ne casse plus une thèse, un TP manuel n'est plus rabaissé
+- `reanalyse.achat_nul_aujourdhui` ignore désormais les refus qui portent sur le **moment** d'achat (surchauffe, résistance, repli, RSI…) : BTSG était marqué « thèse cassée » le 11/11 pour « surchauffe sous résistance » alors que le jugement de fond disait MAINTENIR
+- Un objectif posé avec `/tp` est marqué `tp_manuel` : la réanalyse ne le rabaisse plus (BTSG : 100.48 → 73.16 le 12/11)
+
 ### 2026-11-13 — Achats Expert manuels : protection remontable
 - Un achat `/ordre acheter … expert` ne gardait pas les ids de ses jambes SL/TP (la position n'existe qu'à l'exécution) : ni le trailing, ni `/securiser`, ni `/tp` ne pouvaient toucher sa protection. Les ids sont mis de côté à la confirmation (`manual_buy_protections`) et le sync les rattache à la position créée
 

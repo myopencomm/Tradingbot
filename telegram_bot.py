@@ -463,6 +463,10 @@ def cmd_tp(args, cid):
             return
 
         def _ok(od, adj):
+            d = portfolio.load()
+            if name in d.get("positions", {}):
+                d["positions"][name]["tp_manuel"] = True
+                portfolio.save(d)
             send(f"🎯 OBJECTIF REMPLACÉ SUR BD — {name}\n"
                  f"TP : {pos.get('target_high')} → {adj.get('take_profit') or price} | "
                  f"stop inchangé : {adj.get('stop_loss') or stop}", cid)
@@ -470,6 +474,10 @@ def cmd_tp(args, cid):
         _run_long(cid, lambda: _remplacer_protection(name, pos, stop, price, cid, "tp", _ok))
         return
     if portfolio.update_tp(name, price):
+        d = portfolio.load()
+        if name in d.get("positions", {}):
+            d["positions"][name]["tp_manuel"] = True
+            portfolio.save(d)
         note = ("" if not protegee else
                 "\n⚠️ Session BD fermée : seule la fiche locale change, l'ordre "
                 "sur BD garde l'ancien TP. /connect puis relance /tp.")
