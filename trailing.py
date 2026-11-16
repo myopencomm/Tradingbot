@@ -86,6 +86,32 @@ def tp_progress(entry: float, tp: float | None, price: float) -> float | None:
     return (price - entry) / (tp - entry)
 
 
+def explication_stop_en_place(pos: dict, price: float, atr_pct: float | None) -> str:
+    """Pourquoi le stop ne bouge pas alors que le cours a monté — en clair.
+
+    « pas une remontée » seul se lisait comme une panne (BTSG, 16/11/2026) :
+    le stop était déjà au-dessus du PRU, et le stop suiveur, à 4 ATR sous le
+    plus haut, restait plus bas que lui. On dit donc où est le stop, où
+    tomberait le suiveur, et à partir de quel cours il prendra le relais.
+    """
+    from config import trail_exit_active, TRAIL_ATR_MULT
+    cur = pos.get("target_low")
+    entry = pos.get("entry_price") or 0
+    txt = f"stop déjà à {cur}"
+    if cur and entry:
+        txt += f" ({(cur / entry - 1) * 100:+.1f} % du PRU)"
+    if not (trail_exit_active(pos) and atr_pct and cur and price):
+        return txt + " — rien à remonter ✅"
+    ecart = TRAIL_ATR_MULT * atr_pct / 100
+    peak = max(pos.get("peak_close") or entry, price)
+    suiveur = peak - ecart * price
+    txt += (f" ; le stop suiveur ({TRAIL_ATR_MULT:.0f} ATR = {ecart * 100:.0f} % sous le "
+            f"plus haut) tomberait à {suiveur:.2f}, plus bas")
+    if ecart < 1:
+        txt += f" — il prendra le relais quand le cours dépassera ~{cur / (1 - ecart):.2f}"
+    return txt + " ✅"
+
+
 def trailing_target(pos: dict, price: float, tp: float | None,
                     atr_pct: float | None = None) -> tuple[float | None, str, str]:
     """
@@ -413,7 +439,9 @@ def trailing_stop_cycle(send_fn, verbose: bool = False) -> None:
                     if target else (False, "palier non atteint"))
                 if not vaut_le_coup:
                     if verbose:
-                        send_fn(f"  ↳ {name} : protégé (hors carnet) — {pourquoi}")
+                        if pourquoi == "pas une remontée":
+                            pourquoi = explication_stop_en_place(pos, price, atr_pct)
+                        send_fn(f"  ↳ {name} : {pourquoi}")
                     continue
                 oids = list(pos.get("protection_ids") or [])
                 send_fn(f"🔁 {name} : remontée du stop {pos.get('target_low')} → "

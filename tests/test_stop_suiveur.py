@@ -121,3 +121,20 @@ class TestTimeStop:
     def test_positions_manuelles_jamais_vendues(self, env):
         appels, _ = env("2026-01-05T10:00:00+00:00", autonomous=False)
         assert appels["vend"] == []
+
+
+def test_explication_quand_le_stop_ne_bouge_pas(monkeypatch):
+    """Stop déjà au-dessus du PRU, suiveur plus bas : le message dit où est le
+    stop, où tomberait le suiveur et à partir de quel cours il prend le relais."""
+    import config, trailing
+    monkeypatch.setattr(config, "EXIT_MODE", "trail")
+    monkeypatch.setattr(config, "TRAIL_ATR_MULT", 4.0)
+    pos = {"entry_price": 100.0, "target_low": 101.5, "peak_close": 110.0,
+           "autonomous": True}
+    txt = trailing.explication_stop_en_place(pos, 107.0, 5.0)
+    assert "stop déjà à 101.5" in txt and "+1.5 %" in txt
+    assert "88.60" in txt            # 110 − 4 × 5 % × 107
+    assert "126.88" in txt           # 101.5 / (1 − 0.20)
+    # position manuelle : pas de suiveur, message court
+    pos["autonomous"] = False
+    assert "rien à remonter" in trailing.explication_stop_en_place(pos, 107.0, 5.0)

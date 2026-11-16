@@ -825,6 +825,10 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-11-16 — Carnet d'ordres : jeton legacy renouvelé, message du trailing clarifié
+- Cause de l'échec « intermittent » du carnet enfin lue dans le diagnostic : BD redirige vers `/fr/legacy-token-expired`. Le jeton des pages legacy expire quelques heures après le login alors que la session reste vivante ; `read_order_book` le fait renouveler en ouvrant la page carnet du site dans un onglet à part, puis relit
+- `/trailing` n'affiche plus « pas une remontée » : il dit où est le stop, où tomberait le stop suiveur et à partir de quel cours il prendra le relais (`trailing.explication_stop_en_place`)
+
 ### 2026-11-13 (2) — Réanalyse : un refus de timing ne casse plus une thèse, un TP manuel n'est plus rabaissé
 - `reanalyse.achat_nul_aujourdhui` ignore désormais les refus qui portent sur le **moment** d'achat (surchauffe, résistance, repli, RSI…) : BTSG était marqué « thèse cassée » le 11/11 pour « surchauffe sous résistance » alors que le jugement de fond disait MAINTENIR
 - Un **veto Jev** ne marque plus non plus la thèse cassée : il juge si nos données de recherche contiennent les preuves (vide quand Yahoo est en panne), pas la société ; seul le jugement de fond du modèle principal peut casser une thèse

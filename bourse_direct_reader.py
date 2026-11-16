@@ -233,6 +233,35 @@ def _click_tab(page, label: str) -> bool:
     return False
 
 
+LEGACY_TOKEN_EXPIRED = "legacy-token-expired"
+
+
+def _renew_legacy_token(page) -> None:
+    """Fait émettre un nouveau jeton legacy par BD : ouvre la page carnet du
+    site (celle qui embarque la page legacy en iframe) dans un ONGLET À PART,
+    pour ne pas déplacer la page courante du bot, puis le referme."""
+    tab = None
+    try:
+        tab = page.context.new_page()
+        tab.goto(BD_ORDER_BOOK_URL, wait_until="domcontentloaded", timeout=25000)
+        try:
+            tab.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
+        # Chemins seuls, jamais la query : elle peut porter le jeton.
+        cadres = [f.url.split("?")[0] for f in tab.frames if f.url and f != tab.main_frame]
+        print(f"[BD Carnet] renouvellement du jeton legacy — page {tab.url.split('?')[0]}, "
+              f"iframe(s) {cadres or 'aucune'}")
+    except Exception as e:
+        print(f"[BD Carnet] renouvellement du jeton legacy échoué : {e}")
+    finally:
+        if tab:
+            try:
+                tab.close()
+            except Exception:
+                pass
+
+
 def read_order_book(page, send_fn=None) -> list[dict]:
     """
     Lit le CARNET D'ORDRES du compte CTO — une ligne par ordre actif.
@@ -274,10 +303,22 @@ def read_order_book(page, send_fn=None) -> list[dict]:
         html = _html(r)
 
         nc = find_account_nc(html)
+        if not nc and LEGACY_TOKEN_EXPIRED in (r.url or ""):
+            # Cause de l'échec « intermittent » des 10-16/11/2026, lue dans le
+            # diagnostic : BD redirige vers /fr/legacy-token-expired. Le jeton
+            # des pages legacy expire quelques heures après le login alors que
+            # la session principale reste vivante (le keepalive ne visite que
+            # le portefeuille). Le carnet marchait donc juste après un login,
+            # puis plus du tout — et le trailing ne voyait plus aucun ordre.
+            _renew_legacy_token(page)
+            r = page.request.get(BD_ORDER_BOOK_LEGACY_URL, timeout=25000)
+            html = _html(r) if r.ok else ""
+            nc = find_account_nc(html)
+            print("[BD Carnet] jeton legacy "
+                  + ("renouvelé" if nc else "NON renouvelé par la page carnet"))
         if not nc:
-            # Échec INTERMITTENT (10-11/11/2026 : OK le 29/10, KO ensuite sans
-            # changement de .env). Une relecture après une pause, puis un
-            # diagnostic sans donnée personnelle pour savoir ce que BD a servi.
+            # Une relecture après une pause, puis un diagnostic sans donnée
+            # personnelle pour savoir ce que BD a servi.
             import time as _t
             _t.sleep(3)
             r = page.request.get(BD_ORDER_BOOK_LEGACY_URL, timeout=25000)
