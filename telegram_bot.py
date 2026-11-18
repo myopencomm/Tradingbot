@@ -1701,7 +1701,8 @@ def cmd_sortie_mini(args, cid):
 
 def cmd_reanalyse(args, cid):
     """/reanalyse — réanalyse immédiate des positions : thèse d'achat
-    confrontée aux faits du jour ; thèse cassée → sortie au premier gain."""
+    confrontée aux faits du jour ; thèse cassée → vente si le cours est à
+    moins de REVIEW_EXIT_PCT % au-dessus du PRU, sinon protection du gain."""
     import reanalyse
     send("🔎 Réanalyse des positions (recherche web + jugement, ~2 min par "
          "position)…", cid)

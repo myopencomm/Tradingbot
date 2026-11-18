@@ -66,3 +66,70 @@ def test_achat_nul_seulement_pour_une_raison_de_fond(monkeypatch):
     assert reanalyse.achat_nul_aujourdhui("X", {"ticker": "X"}) is None
     faux("contre-avis Jev — preuves absentes des données (p=0.07)")  # données, pas la société
     assert reanalyse.achat_nul_aujourdhui("HUM", {"ticker": "HUM"}) is None
+
+
+# ── Vente au marché d'une thèse cassée près du PRU (18/11/2026, valeurs fictives)
+
+def test_sortie_immediate_seulement_pres_du_pru(monkeypatch):
+    monkeypatch.setattr(reanalyse, "SORTIE_PCT", 3.0)
+    cfg = {"entry_price": 100.0}
+    assert reanalyse.sortie_immediate(cfg, 100.7)       # +0,7 % : rien à protéger
+    assert reanalyse.sortie_immediate(cfg, 96.0)        # sous le PRU : vendre aussi
+    assert not reanalyse.sortie_immediate(cfg, 104.0)   # vrai gain : protection
+    monkeypatch.setattr(reanalyse, "SORTIE_PCT", 0.0)   # désactivé
+    assert not reanalyse.sortie_immediate(cfg, 100.7)
+
+
+def _faux_bd(monkeypatch, connecte=True, ouvert=True, annule=True, vend=True):
+    import bot_mode, market, playwright_session, stale_exit
+    appels = []
+    monkeypatch.setattr(bot_mode, "is_playwright", lambda: True)
+    monkeypatch.setattr(playwright_session, "is_connected", lambda: connecte)
+    monkeypatch.setattr(market, "is_open_now", lambda t: ouvert)
+    monkeypatch.setattr(stale_exit, "_annuler_protections",
+                        lambda p, n: appels.append("annule") or annule)
+    monkeypatch.setattr(stale_exit, "_vendre_au_marche",
+                        lambda p, n, s: appels.append("vend") or vend)
+    monkeypatch.setattr(reanalyse, "_sortie_tentee", {})
+    monkeypatch.setattr(reanalyse, "_sortie_annoncee", {})
+    return appels
+
+
+CFG_SORTIE = {"ticker": "XYZ", "entry_price": 100.0, "qty": 3,
+              "target_low": 93.0, "target_high": 150.0}
+
+
+def test_vente_annule_puis_vend_une_seule_fois_par_jour(monkeypatch):
+    appels, msgs = _faux_bd(monkeypatch), []
+    assert reanalyse.vendre_these_cassee("XYZ", CFG_SORTIE, 100.7, msgs.append)
+    assert appels == ["annule", "vend"]
+    assert any("vente au marché envoyée" in m for m in msgs)
+    reanalyse.vendre_these_cassee("XYZ", CFG_SORTIE, 100.7, msgs.append)
+    assert appels == ["annule", "vend"]                 # pas de seconde vente
+
+
+def test_marche_ferme_vente_reportee_et_annoncee_une_fois(monkeypatch):
+    appels, msgs = _faux_bd(monkeypatch, ouvert=False), []
+    reanalyse.vendre_these_cassee("XYZ", CFG_SORTIE, 100.7, msgs.append)
+    reanalyse.vendre_these_cassee("XYZ", CFG_SORTIE, 100.7, msgs.append)
+    assert appels == [] and len(msgs) == 1 and "à l'ouverture" in msgs[0]
+
+
+def test_annulation_non_confirmee_pas_de_vente(monkeypatch):
+    appels, msgs = _faux_bd(monkeypatch, annule=False), []
+    reanalyse.vendre_these_cassee("XYZ", CFG_SORTIE, 100.7, msgs.append)
+    assert appels == ["annule"]                         # jamais de vente en doublon
+
+
+def test_ajuster_vend_au_lieu_de_proteger(monkeypatch):
+    import prices, protection_ops
+    _faux_bd(monkeypatch)
+    monkeypatch.setattr(reanalyse, "SORTIE_PCT", 3.0)
+    monkeypatch.setattr(prices, "get_quote", lambda t: {"price": 100.7})
+    monkeypatch.setattr(protection_ops, "remplacer_protection",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("protection posée")))
+    vendu = []
+    monkeypatch.setattr(reanalyse, "vendre_these_cassee",
+                        lambda n, c, p, s: vendu.append(n) or True)
+    assert reanalyse.ajuster("XYZ", CFG_SORTIE, lambda m: None)
+    assert vendu == ["XYZ"]

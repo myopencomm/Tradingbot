@@ -40,6 +40,13 @@ import research
 PARIS = pytz.timezone("Europe/Paris")
 GAIN_MINI_EUR = float(os.getenv("REVIEW_GAIN_MINI_EUR", "1"))
 ACTIF = os.getenv("REVIEW_AUTO", "1") != "0"
+# Thèse cassée ET cours à moins de REVIEW_EXIT_PCT % au-dessus du PRU (ou sous
+# le PRU) → vente au marché au lieu de la protection. 18/11/2026 : HUM, thèse
+# cassée le matin par la règle CRUSH (Medicare Advantage) à +0,7 %, gardé sous
+# protection, stop à −7 % touché l'après-midi même. Près du PRU, la
+# protection n'a rien à protéger : elle ne fait qu'attendre le stop.
+# 0 = désactivé (protection seule, comportement d'avant le 18/11/2026).
+SORTIE_PCT = float(os.getenv("REVIEW_EXIT_PCT", "3"))
 
 PROMPT = """Tu réanalyses une position DÉTENUE. Question unique : la raison pour
 laquelle elle a été achetée tient-elle encore, au vu des faits du jour ?
@@ -192,13 +199,73 @@ def _marquer(nom: str, raison: str) -> None:
         portfolio.save(d)
 
 
+def sortie_immediate(cfg: dict, prix: float | None) -> bool:
+    """Thèse cassée + cours trop près du PRU pour qu'il y ait un gain à
+    protéger → vendre plutôt qu'attendre le stop. Vrai aussi sous le PRU :
+    la thèse ne tient plus, le stop vendrait plus bas."""
+    entry = cfg.get("entry_price") or 0
+    if SORTIE_PCT <= 0 or not (entry and prix):
+        return False
+    return prix < entry * (1 + SORTIE_PCT / 100)
+
+
+# Une annonce et une tentative de vente par position et par jour : la sync
+# horaire rappelle ajuster() tant que la position existe.
+_sortie_annoncee: dict[str, str] = {}
+_sortie_tentee: dict[str, str] = {}
+
+
+def vendre_these_cassee(nom: str, cfg: dict, prix: float, send_fn) -> bool:
+    """Vente au marché d'une position à thèse cassée près du PRU. True si la
+    vente a été traitée (envoyée, ou reportée avec un message) — l'appelant
+    ne pose alors pas de protection par-dessus."""
+    import bot_mode
+    import market
+    import playwright_session
+    import stale_exit
+    jour = datetime.now(PARIS).strftime("%Y-%m-%d")
+    entry = cfg["entry_price"]
+    ecart = (prix / entry - 1) * 100
+    if _sortie_tentee.get(nom) == jour:
+        return True
+    pourquoi = (f"cours {prix:g} ({ecart:+.1f} % du PRU), à moins de "
+                f"{SORTIE_PCT:g} % au-dessus : rien à protéger, le stop "
+                f"({cfg.get('target_low')}) vendrait plus bas")
+    pret = bot_mode.is_playwright() and playwright_session.is_connected()
+    if not (pret and market.is_open_now(cfg["ticker"])):
+        if _sortie_annoncee.get(nom) != jour:
+            _sortie_annoncee[nom] = jour
+            attente = ("marché fermé — vente à l'ouverture (sync horaire)" if pret else
+                       "session Bourse Direct non connectée — /connect, la vente "
+                       "partira à la sync suivante")
+            send_fn(f"🔴 {nom} (thèse cassée) : {pourquoi}.\n→ Vente au marché prévue : "
+                    f"{attente}. La protection actuelle reste en place d'ici là.")
+        return True
+    _sortie_tentee[nom] = jour
+    send_fn(f"🔴 SORTIE — {nom} (thèse cassée) : {pourquoi}.\nAnnulation de la "
+            f"protection puis vente au marché…")
+    if not stale_exit._annuler_protections(cfg, nom):
+        send_fn(stale_exit.message_echec_annulation(cfg, nom, "vente"))
+        return True
+    if stale_exit._vendre_au_marche(cfg, nom, send_fn):
+        send_fn(f"💰 {nom} : vente au marché envoyée (thèse cassée). Le sync "
+                f"enregistrera la clôture.")
+    else:
+        send_fn(f"🚨 {nom} : protection annulée mais VENTE NON ENVOYÉE — position "
+                f"SANS STOP.\n/ordre vendre {cfg['ticker']} {abs(int(cfg['qty']))} marche")
+    return True
+
+
 def ajuster(nom: str, cfg: dict, send_fn) -> bool:
-    """Applique plan_protection à une position à thèse cassée. True si un
-    remplacement a été lancé."""
+    """Position à thèse cassée : vente si le cours est près du PRU
+    (`sortie_immediate`), sinon plan_protection. True si une action a été
+    lancée."""
     import playwright_session
     import protection_ops
-    niveau = protection_ops.stop_gain_minimum(cfg, GAIN_MINI_EUR)
     prix = (prices.get_quote(cfg["ticker"]) or {}).get("price")
+    if sortie_immediate(cfg, prix):
+        return vendre_these_cassee(nom, cfg, prix, send_fn)
+    niveau = protection_ops.stop_gain_minimum(cfg, GAIN_MINI_EUR)
     if not (niveau and prix):
         return False
     plan = plan_protection(cfg, prix, niveau, plus_haut_recent(cfg["ticker"]),
@@ -267,10 +334,16 @@ def cycle(send_fn, verbose: bool = False) -> None:
                           f"{j['raison'][:140]}")
             continue
         _marquer(nom, j["raison"])
-        send_fn(f"🔴 RÉANALYSE — {nom} : l'achat ne tient plus\n{j['raison']}\n\n"
-                f"→ Protection sans couper le potentiel : objectif ramené sous le plus "
-                f"haut récent, stop remonté à +{GAIN_MINI_EUR:g} € net dès que la marge "
-                f"le permet (vérifié à chaque sync).")
+        prix = (prices.get_quote(cfg["ticker"]) or {}).get("price")
+        if sortie_immediate(cfg, prix):
+            suite = (f"→ Cours à moins de {SORTIE_PCT:g} % au-dessus du PRU : "
+                     f"vente au marché (dès que le marché est ouvert).")
+        else:
+            suite = (f"→ Gain à protéger : objectif ramené sous le plus haut récent "
+                     f"(sauf objectif posé avec /tp), stop remonté à "
+                     f"+{GAIN_MINI_EUR:g} € net dès que la marge le permet (vérifié "
+                     f"à chaque sync).")
+        send_fn(f"🔴 RÉANALYSE — {nom} : l'achat ne tient plus\n{j['raison']}\n\n{suite}")
         lignes.append(f"🔴 {nom} — thèse cassée : {j['raison'][:120]}")
         ajuster(nom, (portfolio.get_managed_positions() or {}).get(nom, cfg), send_fn)
     if verbose and lignes:

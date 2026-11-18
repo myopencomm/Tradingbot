@@ -86,6 +86,30 @@ le detail de chaque position (le cycle
 auto reste silencieux s'il n'a rien a
 faire ; /trailing repond toujours).
 ===== PAGE =====
+Fonctions avancees — These cassee
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Chaque jour ouvre a 10h15 (et /reanalyse),
+le bot confronte la these d'achat aux
+faits du jour. Seul un FAIT DATE qui
+touche la societe casse une these (pas
+une surchauffe, pas un veto Jev).
+
+These cassee, et cours a moins de 3 %
+au-dessus du PRU (ou en dessous) :
+→ VENTE AU MARCHE. Il n'y a rien a
+  proteger, le stop vendrait plus bas.
+  Marche ferme : vente a la premiere
+  sync horaire ou il est ouvert.
+  Peut etre une petite perte, c'est voulu.
+
+These cassee avec un vrai gain :
+→ objectif sous le plus haut des 3 mois
+  (jamais un objectif pose avec /tp)
+→ stop a +1 € net des que possible.
+
+REVIEW_EXIT_PCT regle les 3 %
+(0 = protection seule, sans vente).
+===== PAGE =====
 Fonctions avancees — Apres une vente
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Une vente libere un emplacement ET du
