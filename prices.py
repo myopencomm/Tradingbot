@@ -166,7 +166,7 @@ def get_fundamentals(ticker: str) -> dict:
         return {}
 
 
-def get_yf_news(ticker: str, max_items: int = 6) -> list[dict]:
+def _yf_news_only(ticker: str, max_items: int = 6) -> list[dict]:
     """Actualités récentes via yfinance : titre, source, date, résumé.
 
     yfinance a changé de format : chaque article est désormais
@@ -199,6 +199,65 @@ def get_yf_news(ticker: str, max_items: int = 6) -> list[dict]:
     except Exception as e:
         print(f"⚠️ YF news error {ticker}: {e}")
         return []
+
+
+def google_news(query: str, max_items: int = 6, days: int = 14) -> list[dict]:
+    """Actualités via le flux RSS public de Google News (sans clé).
+
+    Source de secours : l'API news de Yahoo répond « YAHOO! FINANCE IS
+    CURRENTLY DOWN » depuis le 03/11/2026 (le reste de yfinance marche) —
+    l'IA et l'alerte news ne voyaient plus aucun article.
+    Renvoie {title, publisher, date, summary, url}.
+    """
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    try:
+        r = requests.get("https://news.google.com/rss/search",
+                         params={"q": f"{query} when:{days}d", "hl": "en-US",
+                                 "gl": "US", "ceid": "US:en"},
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        r.raise_for_status()
+        out = []
+        for it in ET.fromstring(r.content).iter("item"):
+            title = (it.findtext("title") or "").strip()
+            pub = (it.findtext("source") or "").strip()
+            if pub and title.endswith(" - " + pub):
+                title = title[: -len(pub) - 3].strip()
+            if not title:
+                continue
+            try:
+                date = parsedate_to_datetime(it.findtext("pubDate")).strftime("%Y-%m-%d")
+            except Exception:
+                date = ""
+            out.append({"title": title, "publisher": pub, "date": date,
+                        "summary": "", "url": (it.findtext("link") or "").strip()})
+            if len(out) >= max_items:
+                break
+        return out
+    except Exception as e:
+        print(f"⚠️ Google News error {query}: {e}")
+        return []
+
+
+def news_query(ticker: str) -> str:
+    """Requête Google News : nom de la société (Yahoo info) sinon le ticker."""
+    try:
+        name = (yf.Ticker(ticker).info or {}).get("shortName") or ""
+    except Exception:
+        name = ""
+    name = re.sub(r"[,.]|\b(Inc|Corp|Corporation|S\.?A|SE|NV|PLC|Ltd|Holdings?|Group)\b\.?", " ", name)
+    # shortName est souvent tronqué (« BrightSpring Health Services I ») :
+    # on retire les bouts d'un caractère et on garde 3 mots, sans guillemets.
+    name = " ".join([w for w in name.split() if len(w) > 1][:3])
+    return f"{name} stock" if name else ticker.split(".")[0]
+
+
+def get_yf_news(ticker: str, max_items: int = 6) -> list[dict]:
+    """Actualités : Yahoo d'abord, Google News RSS si Yahoo ne rend rien."""
+    out = _yf_news_only(ticker, max_items)
+    if out:
+        return out
+    return google_news(news_query(ticker), max_items)
 
 
 def get_technicals(ticker: str) -> dict:

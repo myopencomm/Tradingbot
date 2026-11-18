@@ -77,12 +77,20 @@ def _parse_news(items: list) -> list[dict]:
 
 
 def fetch_news(ticker: str) -> list[dict]:
+    """Yahoo d'abord ; Google News RSS si Yahoo plante ou ne rend rien
+    (API news Yahoo en panne depuis le 03/11/2026)."""
     try:
         import yfinance as yf
-        return _parse_news(yf.Ticker(ticker).news or [])
+        out = _parse_news(yf.Ticker(ticker).news or [])
     except Exception as e:
         print(f"[news] {ticker} : {e}")
-        return []
+        out = []
+    if out:
+        return out
+    from prices import google_news, news_query
+    return [{"id": a["url"] or a["title"], "title": a["title"], "summary": "",
+             "date": a["date"], "url": a["url"], "provider": a["publisher"]}
+            for a in google_news(news_query(ticker), MAX_HEADLINES)]
 
 
 def fetch_next_earnings(ticker: str) -> date | None:
