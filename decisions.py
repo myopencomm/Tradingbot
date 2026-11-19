@@ -24,6 +24,7 @@ l'échantillon et on durcit la preuve :
 
 Données locales (decisions_journal.json, gitignoré) — jamais publiées.
 """
+import re
 import json
 import math
 import os
@@ -75,7 +76,11 @@ def categorie_motif(reason: str) -> str:
         return "information insuffisante"
     if "analyse insuffisante" in r:
         return "thèse refusée par la porte"
-    if any(k in r for k in ("rsi", "mm200", "volatil", "sl requis", "ratio risque")):
+    # « 2×ATR (10,1%) dépasse 10% » = trop volatil pour le SL maxi : veto
+    # technique. Classé « défaut cité par l'IA », il a marqué BTSG « thèse
+    # cassée » et programmé sa vente au marché (19/11/2026). \batr\b : pas « quatre ».
+    if (any(k in r for k in ("rsi", "mm200", "volatil", "sl requis", "ratio risque"))
+            or re.search(r"\batr\b", r)):
         return "veto quantitatif"
     if "cours indisponible" in r:
         return "sans cours"

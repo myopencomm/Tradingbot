@@ -827,6 +827,11 @@ Une seule commande : `git pull` + installation des nouvelles dépendances + red�
 
 ## Changelog
 
+### 2026-11-19 — Réanalyse : un veto de volatilité (ATR) ne casse plus une thèse
+
+- **Cause** : le refus « 2×ATR (10,1 %) dépasse 10 % » (titre trop volatil pour le SL maxi) tombait dans la catégorie « défaut cité par l'IA ». Pour la réanalyse, c'est un « achat nul » : BTSG marqué « thèse cassée » le matin même où le jugement de fond disait MAINTENIR, et, à +2 % du PRU, vente au marché programmée à l'ouverture
+- **Correctif** : `decisions.categorie_motif` classe toute mention de l'ATR en « veto quantitatif », comme le RSI ou la MM200. Un veto technique dit « pas maintenant », pas « mauvais achat »
+
 ### 2026-11-18 — Réanalyse : une thèse cassée près du PRU est vendue, plus seulement protégée
 - **Pourquoi** : HUM, thèse cassée le 18/11 au matin par un fait daté (règle CRUSH du 16/11 : audits Medicare Advantage durcis, récupérations jusqu'à 2018 — Humana est l'assureur le plus exposé). Le cours était à +0,7 % du PRU : la « protection » ne pouvait rien verrouiller (stop +1 € net trop près du cours), le stop initial est resté à −7 % et a été touché l'après-midi même (−9 % en séance)
 - **Règle** : thèse cassée ET cours sous PRU × (1 + `REVIEW_EXIT_PCT` %) (3 % par défaut, sous le PRU compris) → vente au marché, via le même chemin que les autres sorties (`stale_exit._annuler_protections` qui vérifie le carnet, puis `_vendre_au_marche`). Au-dessus, rien ne change : objectif sous le plus haut récent et stop à +1 € net
