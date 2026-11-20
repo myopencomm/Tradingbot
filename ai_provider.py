@@ -567,6 +567,10 @@ class FallbackProvider(AIProvider):
     def __init__(self, chain: list[str]):
         self.chain = chain            # noms, ex ["anthropic", "gemini"]
         self._instances: dict = {}
+        # Providers qui ont réellement répondu, dans l'ordre des appels. Lu par
+        # validate_candidate : un achat autonome exige que Claude ait jugé
+        # (SWK, 19/11/2026 : scan servi par Gemini, thèse sur un +10 % faux).
+        self.served: list[str] = []
 
     @classmethod
     def _echec_definitif(cls, err: Exception) -> bool:
@@ -622,6 +626,7 @@ class FallbackProvider(AIProvider):
                 continue
             try:
                 result = getattr(self._get(name), method)(*args, **kwargs)
+                self.served.append(name)
                 if last_err is not None and not isinstance(last_err, NotImplementedError):
                     # Bascule constatée SUR CET APPEL (`last_err` n'est posé
                     # que par une vraie exception). Sauter un provider déjà en
@@ -710,6 +715,21 @@ def role_chain(role: str = "decision") -> list[str]:
             continue
         chain.append(p)
     return chain
+
+
+# Providers dont le jugement suffit pour engager de l'argent sans humain.
+CLAUDE_PROVIDERS = ("claude_cli", "anthropic")
+
+
+def served_by(ai) -> list[str]:
+    """Noms des providers qui ont répondu via `ai` (FallbackProvider), ou le
+    provider unique lui-même."""
+    if hasattr(ai, "served"):
+        return list(dict.fromkeys(ai.served))
+    for nom, cls in _PROVIDERS.items():
+        if type(ai) is cls:
+            return [nom]
+    return []
 
 
 def get_provider(role: str = "decision") -> AIProvider:

@@ -116,7 +116,8 @@ def get_pending_opportunities() -> list:
 
 def add_pending_opportunity(ticker: str, entry: float, sl: float, tp: float,
                              reason: str = "", source: str = "briefing",
-                             context: dict | None = None):
+                             context: dict | None = None,
+                             ai_served_by: list | None = None):
     """Stocke une opportunité validée pour que le moteur autonome puisse
     l'exploiter. `context` (thèse, régime, indicateurs) est mémorisé pour la
     boucle d'apprentissage — voir set_entry_context / stats.record_close."""
@@ -144,6 +145,7 @@ def add_pending_opportunity(ticker: str, entry: float, sl: float, tp: float,
         "tp":           round(tp, 4),
         "reason":       reason[:150],
         "source":       source,
+        "ai_served_by": list(ai_served_by or []),
         "validated_at": now.isoformat(),
         "expires_at":   expires.isoformat(),
     })

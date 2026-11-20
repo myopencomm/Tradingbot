@@ -400,6 +400,9 @@ def validate_candidate(ticker: str, *, mode: str = "standard",
     context (pour la boucle d'apprentissage), + infos société/devise.
     """
     ai = ai or get_provider()
+    # Le même provider sert tout un scan : on ne compte que les réponses de
+    # CET appel (vision du graphique + verdict).
+    _served_debut = len(getattr(ai, "served", []))
     ctx = _trading_context()
     today_str = datetime.now(PARIS).strftime("%d/%m/%Y")
     item = item or {}
@@ -727,6 +730,12 @@ VERDICT : ACHAT
     import ticks
     entry, sl_v, tp_v = ticks.round_levels(entry, sl_v, tp_v, cur)
 
+    try:
+        from ai_provider import served_by as _served_by
+        out["ai_served_by"] = (list(dict.fromkeys(ai.served[_served_debut:]))
+                               if hasattr(ai, "served") else _served_by(ai))
+    except Exception:
+        out["ai_served_by"] = []
     out.update({
         "verdict": verdict, "reason": reason, "raw": _validate_tickers(val),
         "entry": entry, "sl": sl_v, "tp": tp_v,
@@ -827,6 +836,7 @@ def _small_gain_pass(ai, candidates: list[dict], cash: float,
                 reason=res.get("thesis", "")[:150],
                 source="court_terme",
                 context=_entry_ctx(tech, pctx, res.get("thesis", ""), "court_terme"),
+                ai_served_by=res.get("ai_served_by"),
             )
         except Exception as e:
             print(f"[gain réduit] {t}: {e}")
@@ -1059,6 +1069,7 @@ ni ligne sur les positions HOLD.{opps_mission}"""
                             reason=res.get("thesis", "")[:150],
                             source="briefing",
                             context=res.get("context"),
+                            ai_served_by=res.get("ai_served_by"),
                         )
                 except Exception as _pe:
                     print(f"[briefing] pending_opp store error {t}: {_pe}")
@@ -2184,6 +2195,7 @@ MAINTENIR / SURVEILLER / VENDRE + raison en 5 mots max."""
                         reason=res.get("thesis", "")[:150],
                         source="scan",
                         context=res.get("context"),
+                        ai_served_by=res.get("ai_served_by"),
                     )
             except Exception as _pe:
                 print(f"[scan] pending_opp store error {t}: {_pe}")

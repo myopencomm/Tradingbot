@@ -169,6 +169,13 @@ def cancel_auto_order_if_rejected(ticker: str, reason: str, send_fn=None) -> Non
 
 # ─── Cycle d'entrée ─────────────────────────────────────────────────────────
 
+def degrade(served: list | None) -> list[str]:
+    """Modèles autres que Claude qui ont jugé une validation ([] = tout
+    Claude, ou provenance inconnue d'une opportunité d'avant le 20/11/2026)."""
+    from ai_provider import CLAUDE_PROVIDERS
+    return [p for p in (served or []) if p not in CLAUDE_PROVIDERS]
+
+
 def _jour() -> str:
     return datetime.now(PARIS).strftime("%Y-%m-%d")
 
@@ -720,6 +727,22 @@ def run_entry_cycle(send_fn) -> None:
                 # MÊME validate_candidate en mode confirm : mêmes règles, mêmes
                 # leçons, même parsing que le scan — plus de veto sur des
                 # critères divergents.
+                # ── Pas d'achat autonome en mode dégradé ─────────────────────
+                # 19/11/2026 : CLI claude à sa limite de 5 h → scan SWK jugé par
+                # Gemini, thèse bâtie sur un « +10 % » faux, achat, puis thèse
+                # cassée le lendemain matin par Claude (+4 % en réalité).
+                # Seul Claude (CLI ou clé API) peut engager de l'argent : si un
+                # autre modèle a jugé, l'opportunité est signalée, pas achetée.
+                non_claude = degrade(opp.get("ai_served_by"))
+                if non_claude:
+                    send_fn(
+                        f"⏸️ {ticker} : validé par {', '.join(non_claude)} (Claude "
+                        f"indisponible) — pas d'achat autonome en mode dégradé.\n"
+                        f"Opportunité seulement signalée. /scan quand Claude est revenu "
+                        f"pour une vraie validation.")
+                    portfolio.clear_pending_opportunity(ticker)
+                    continue
+
                 if opp.get("source") == "court_terme":
                     send_fn(f"⚡ {ticker} : validé à l'instant en gain réduit — passage direct à l'ordre.")
                 else:
@@ -734,6 +757,13 @@ def run_entry_cycle(send_fn) -> None:
                                                            ai=_gp("final"))
                     except Exception as e:
                         send_fn(f"⚠️ {ticker} : contrôle échoué ({e}) — achat annulé par précaution")
+                        portfolio.clear_pending_opportunity(ticker)
+                        continue
+                    non_claude = degrade(res.get("ai_served_by"))
+                    if res.get("verdict") == "ACHAT" and non_claude:
+                        send_fn(f"⏸️ {ticker} : contrôle pré-achat servi par "
+                                f"{', '.join(non_claude)} (Claude indisponible) — achat "
+                                f"autonome annulé.")
                         portfolio.clear_pending_opportunity(ticker)
                         continue
                     if res.get("verdict") != "ACHAT":
