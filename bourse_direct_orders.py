@@ -28,6 +28,11 @@ BD_ACCOUNT  = os.getenv("BD_ACCOUNT", "")
 _CSRF_STATIC = "OWY4NmQwODE4ODRjN2Q2NTlhMmZlYWEwYzU1YWQwMTVhM2JmNGYxYjJiMGI4MjJjZDE1ZDMGYwMGEwOA=="
 
 
+
+# Limite marchande des ordres « au marché » US (BD n'accepte pas le type
+# marché sur ces instruments) : achat à cours × 1.01, vente à cours × 0.99.
+US_MARKET_SLIPPAGE = 1.01
+
 def _get_csrf(page) -> str:
     """
     Tente d'extraire le token CSRF depuis la page BD (meta tag, cookie XSRF, global JS).
@@ -357,6 +362,25 @@ def create_order(page, ticker: str, side: str, qty: int,
     # On n'attend donc plus que BD s'en aperçoive : les prix US sont arrondis
     # ici. Le retry sur 400 reste en place pour les autres places, dont le pas
     # dépend du cours et que BD, lui, signale de façon fiable.
+    # ── Pas d'ordre « au marché » sur les actions US ─────────────────────────
+    # BD le refuse : 400 « Ce type d'ordre n'est pas autorisé pour le type
+    # d'instrument choisi » (vente SWK thèse cassée, 20/11/2026 — protection
+    # déjà annulée, position restée sans stop). On envoie à la place une limite
+    # MARCHANDE : 1 % sous le cours à la vente, 1 % au-dessus à l'achat. Elle
+    # s'exécute immédiatement au meilleur prix du carnet, comme un ordre au
+    # marché, mais avec un plancher.
+    if info["currency"] == "USD" and order_type == "market":
+        import prices
+        cours = (prices.get_quote(ticker) or {}).get("price")
+        if not cours:
+            raise RuntimeError(f"{ticker} : ordre au marché refusé par BD sur les "
+                               f"actions US et cours indisponible pour une limite")
+        limit_price = cours * (US_MARKET_SLIPPAGE if side == "buy"
+                               else 2 - US_MARKET_SLIPPAGE)
+        order_type = "limit"
+        print(f"[BD Orders] {ticker} : « au marché » interdit sur US → limite "
+              f"marchande {limit_price:.2f} (cours {cours})")
+
     if info["currency"] == "USD":
         import ticks
         tick_us = ticks.tick_for(limit_price, "USD")
